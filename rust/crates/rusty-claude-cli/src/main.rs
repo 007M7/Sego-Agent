@@ -39,7 +39,8 @@ use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials, evaluate, format_usd, generate_pkce_pair, generate_state,
+    clear_oauth_credentials, community_learning::CommunityLearning, evaluate, format_usd,
+    generate_pkce_pair, generate_state,
     load_system_prompt,
     parse_oauth_callback_request_target, pricing_for_model, resolve_sandbox_status,
     save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
@@ -220,6 +221,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => print_workflow_review(last_n, output_format)?,
         CliAction::Learn { output_format } => print_workflow_learn(output_format)?,
         CliAction::Doctor { output_format } => print_doctor(output_format)?,
+        CliAction::Telemetry { action, output_format } => print_telemetry(action.as_deref(), output_format)?,
     }
     Ok(())
 }
@@ -279,6 +281,10 @@ enum CliAction {
         output_format: CliOutputFormat,
     },
     Doctor {
+        output_format: CliOutputFormat,
+    },
+    Telemetry {
+        action: Option<String>,
         output_format: CliOutputFormat,
     },
 }
@@ -517,6 +523,13 @@ fn parse_single_word_command_alias(
         "doctor" => Some(Ok(CliAction::Doctor {
             output_format: CliOutputFormat::Text,
         })),
+        "telemetry" => {
+            let action = rest.get(1).map(|s| s.to_string());
+            Some(Ok(CliAction::Telemetry {
+                action,
+                output_format: CliOutputFormat::Text,
+            }))
+        }
         other => bare_slash_command_guidance(other).map(Err),
     }
 }
@@ -1710,6 +1723,7 @@ struct LiveCli {
     session: SessionHandle,
     workflow: WorkflowSnapshot,
     workflow_store: WorkflowStore,
+    community: CommunityLearning,
 }
 
 struct RuntimePluginState {
@@ -2215,6 +2229,8 @@ impl LiveCli {
         workflow.started_at = Some(default_date());
         workflow.record_event(LaneEvent::started(default_date()));
 
+        let community = CommunityLearning::new(&cwd);
+
         let mut cli = Self {
             model,
             allowed_tools,
@@ -2224,6 +2240,7 @@ impl LiveCli {
             session,
             workflow,
             workflow_store: store,
+            community,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -2614,6 +2631,16 @@ impl LiveCli {
             self.workflow_store.load_trends().ok().map(|t| t.average_efficiency),
         );
         let _ = self.workflow_store.update_trends(&report, 0);
+
+        // Community learning: anonymous telemetry (opt-in only)
+        if self.community.is_enabled() {
+            let base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
+            let _ = self.community.collect_report(
+                &self.workflow,
+                &self.model,
+                &base_url,
+            );
+        }
         Ok(())
     }
 
@@ -3792,6 +3819,61 @@ fn print_doctor(
             println!();
             println!("  Run `sego review` for session analysis.");
             println!("  Run `sego learn` for optimization suggestions.");
+        }
+    }
+    Ok(())
+}
+
+fn print_telemetry(
+    action: Option<&str>,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let mut community = CommunityLearning::new(&cwd);
+
+    match action.unwrap_or("status") {
+        "on" | "enable" => {
+            community.enable();
+            match output_format {
+                CliOutputFormat::Text => println!("Community learning telemetry: ENABLED\n\nAnonymous stats (failure types, efficiency scores, recovery rates) will be reported to help improve Sego for everyone.\nNo conversation content, code, API keys, or personal data is ever collected.\n\nRun 'sego telemetry off' to disable."),
+                CliOutputFormat::Json => println!("{}", serde_json::json!({"telemetry": "enabled"})),
+            }
+        }
+        "off" | "disable" => {
+            community.disable();
+            match output_format {
+                CliOutputFormat::Text => println!("Community learning telemetry: DISABLED"),
+                CliOutputFormat::Json => println!("{}", serde_json::json!({"telemetry": "disabled"})),
+            }
+        }
+        "export" => {
+            let pending = community.export_pending();
+            if output_format == CliOutputFormat::Json {
+                println!("{pending}");
+            } else if pending == "[]" {
+                println!("No pending telemetry reports.");
+            } else {
+                println!("Pending reports:\n{pending}");
+            }
+        }
+        _ => {
+            let status = if community.is_enabled() { "enabled" } else { "disabled" };
+            match output_format {
+                CliOutputFormat::Text => {
+                    println!("Community learning telemetry: {status}");
+                    println!();
+                    println!("  sego telemetry on   — Enable anonymous stats sharing");
+                    println!("  sego telemetry off  — Disable");
+                    println!("  sego telemetry export — View pending reports");
+                    println!();
+                    println!("When enabled, Sego shares anonymous statistics (failure types,");
+                    println!("efficiency scores, recovery rates) to improve the community model.");
+                    println!("No conversation content, code, or personal data is ever collected.");
+                }
+                CliOutputFormat::Json => {
+                    println!("{}", serde_json::json!({"telemetry": status}));
+                }
+            }
         }
     }
     Ok(())
