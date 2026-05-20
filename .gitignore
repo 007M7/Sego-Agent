@@ -1,6 +1,5 @@
 # User config
-.claude.json
-.claw.json
+.sego.json
 
 # Rust build artifacts
 rust/target/
@@ -33,6 +32,8 @@ archive/
 **/.claude/settings.local.json
 **/.claw/sessions/
 **/.clawd-todos.json
+**/.sego/sessions/
+**/.sego/settings.local.json
 **/.omc/
 **/.sandbox-home/
 **/.sandbox-tmp/

@@ -1,6 +1,6 @@
 # ROADMAP.md
 
-# Clawable Coding Harness Roadmap
+# Sego Agent Roadmap
 
 ## Goal
 

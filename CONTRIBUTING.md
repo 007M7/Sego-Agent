@@ -1,11 +1,11 @@
-# Contributing to claw
+# Contributing to sego
 
-Thanks for your interest in contributing. claw is an open-source AI coding agent engine — we welcome all contributions.
+Thanks for your interest in contributing. sego is an open-source AI coding agent engine — we welcome all contributions.
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/claw.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/Sego-Agent.git`
 3. Build: `cd rust && cargo build --workspace`
 4. Run tests: `cargo test --workspace`
 5. Make your changes on a feature branch

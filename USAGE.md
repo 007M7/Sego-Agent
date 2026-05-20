@@ -1,13 +1,13 @@
-# Claw Code Usage
+# Sego Agent Usage
 
-This guide covers the current Rust workspace under `rust/` and the `claw` CLI binary.
+This guide covers the current Rust workspace under `rust/` and the `sego` CLI binary.
 
 ## Prerequisites
 
 - Rust toolchain with `cargo`
 - One of:
   - `ANTHROPIC_API_KEY` for direct API access
-  - `claw login` for OAuth-based auth
+  - `sego login` for OAuth-based auth
 - Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
 
 ## Build the workspace
@@ -17,7 +17,7 @@ cd rust
 cargo build --workspace
 ```
 
-The CLI binary is available at `rust/target/debug/claw` after a debug build.
+The CLI binary is available at `rust/target/debug/sego` after a debug build.
 
 ## Quick start
 
@@ -25,38 +25,31 @@ The CLI binary is available at `rust/target/debug/claw` after a debug build.
 
 ```bash
 cd rust
-./target/debug/claw
+./target/debug/sego
 ```
 
 ### One-shot prompt
 
 ```bash
 cd rust
-./target/debug/claw prompt "summarize this repository"
-```
-
-### Shorthand prompt mode
-
-```bash
-cd rust
-./target/debug/claw "explain rust/crates/runtime/src/lib.rs"
+./target/debug/sego "summarize this repository"
 ```
 
 ### JSON output for scripting
 
 ```bash
 cd rust
-./target/debug/claw --output-format json prompt "status"
+./target/debug/sego --output-format json status
 ```
 
 ## Model and permission controls
 
 ```bash
 cd rust
-./target/debug/claw --model sonnet prompt "review this diff"
-./target/debug/claw --permission-mode read-only prompt "summarize Cargo.toml"
-./target/debug/claw --permission-mode workspace-write prompt "update README.md"
-./target/debug/claw --allowedTools read,glob "inspect the runtime crate"
+./target/debug/sego --model sonnet "review this diff"
+./target/debug/sego --permission-mode read-only "summarize Cargo.toml"
+./target/debug/sego --permission-mode workspace-write "update README.md"
+./target/debug/sego --allowedTools read,glob "inspect the runtime crate"
 ```
 
 Supported permission modes:
@@ -67,9 +60,9 @@ Supported permission modes:
 
 Model aliases currently supported by the CLI:
 
-- `opus` → `claude-opus-4-6`
+- `opus` → `claude-opus-4-7`
 - `sonnet` → `claude-sonnet-4-6`
-- `haiku` → `claude-haiku-4-5-20251213`
+- `haiku` → `claude-haiku-4-5`
 
 ## Authentication
 
@@ -83,69 +76,66 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ```bash
 cd rust
-./target/debug/claw login
-./target/debug/claw logout
+./target/debug/sego login
+./target/debug/sego logout
 ```
 
 ## Common operational commands
 
 ```bash
 cd rust
-./target/debug/claw status
-./target/debug/claw sandbox
-./target/debug/claw agents
-./target/debug/claw mcp
-./target/debug/claw skills
-./target/debug/claw system-prompt --cwd .. --date 2026-04-04
+./target/debug/sego status
+./target/debug/sego doctor
+./target/debug/sego review
+./target/debug/sego learn
 ```
 
 ## Workflow review & learning (built-in)
 
-claw automatically records every session as structured Lane Events.
+sego automatically records every session as structured Lane Events.
 Use `review` and `learn` to analyze your AI coding workflows.
 
 ### Review recent sessions
 
 ```bash
 # Review the last session
-./target/debug/claw review
+./target/debug/sego review
 
 # Review last 5 sessions
-./target/debug/claw review --last 5
+./target/debug/sego review --last 5
 
 # JSON output for scripting
-./target/debug/claw review --output-format json
+./target/debug/sego review --output-format json
 ```
 
 ### Learning & optimization
 
 ```bash
 # Get optimization suggestions based on your history
-./target/debug/claw learn
+./target/debug/sego learn
 
 # JSON output for dashboards
-./target/debug/claw learn --output-format json
+./target/debug/sego learn --output-format json
 ```
 
 ### What gets recorded automatically
 
-Every `claw` session records:
+Every `sego` session records:
 - Lane Events: started → ready → running → green/red → finished
 - Failure classification (11 types) and recovery attempts
 - Green Contract level achieved
 - Efficiency scoring
 
-Data is stored in `.claw/workflow/sessions/` under your workspace.
-Run `claw review` anytime to see the analysis.
+Data is stored in `.sego/workflow/sessions/` under your workspace.
 
 ## Session management
 
-REPL turns are persisted under `.claw/sessions/` in the current workspace.
+REPL turns are persisted under `.sego/sessions/` in the current workspace.
 
 ```bash
 cd rust
-./target/debug/claw --resume latest
-./target/debug/claw --resume latest /status /diff
+./target/debug/sego --resume latest
+./target/debug/sego --resume latest /status /diff
 ```
 
 Useful interactive commands include `/help`, `/status`, `/cost`, `/config`, `/session`, `/model`, `/permissions`, and `/export`.
@@ -154,11 +144,11 @@ Useful interactive commands include `/help`, `/status`, `/cost`, `/config`, `/se
 
 Runtime config is loaded in this order, with later entries overriding earlier ones:
 
-1. `~/.claw.json`
-2. `~/.config/claw/settings.json`
-3. `<repo>/.claw.json`
-4. `<repo>/.claw/settings.json`
-5. `<repo>/.claw/settings.local.json`
+1. `~/.sego.json`
+2. `~/.config/sego/settings.json`
+3. `<repo>/.sego.json`
+4. `<repo>/.sego/settings.json`
+5. `<repo>/.sego/settings.local.json`
 
 ## Mock parity harness
 
