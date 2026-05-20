@@ -46,22 +46,33 @@ Input task → Execute → Record lane events → Output result
 
 ## Quick Start
 
+### Download & run (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+set ANTHROPIC_API_KEY=sk-your-key
+set ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+sego
+```
+
+### Download & run (Linux/macOS)
+
 ```bash
-# 1. Clone & build
-git clone https://github.com/YOUR_USERNAME/sego.git
-cd sego/rust
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+export ANTHROPIC_API_KEY="sk-your-key"
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+sego
+```
 
-# 2. Set your API key (any Anthropic-compatible endpoint works)
-export ANTHROPIC_API_KEY="your-api-key"
-# Optional: use a proxy for domestic Chinese LLMs
-export ANTHROPIC_BASE_URL="https://your-proxy.com/v1"
+### Or build from source
 
-# 3. Run
+```bash
+git clone https://github.com/007M7/Sego-Agent.git
+cd Sego-Agent/rust && cargo build --release
 ./target/release/sego
 ```
 
-That's it. One binary. No Node.js. No Python. No Docker.
+That's it. **One binary. No Node.js. No Python. No Docker.**
 
 ---
 
@@ -378,27 +389,42 @@ sego is not trying to be "another Claude Code alternative." It's the first AI co
 
 ## Installation
 
+### One-click (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+```
+
+### One-click (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+```
+
+### Download binary directly
+
+Download the latest `sego.exe` (Windows) or `sego-linux` from [GitHub Releases](https://github.com/007M7/Sego-Agent/releases).
+
 ### From source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/sego.git
-cd sego/rust
+git clone https://github.com/007M7/Sego-Agent.git
+cd Sego-Agent/rust
 cargo build --release
 ./target/release/sego --help
 ```
 
 ### Requirements
 
-- Rust toolchain 1.80+
-- One of: `ANTHROPIC_API_KEY` (direct API) or `sego login` (OAuth)
+- **Windows/Linux/macOS** — single binary, no runtime dependencies
+- **API key** — any Anthropic-compatible endpoint works
+- Rust toolchain 1.80+ (source build only)
 
 ### Verification
 
 ```bash
-cd rust
-cargo test --workspace           # Full test suite
-cargo fmt --all --check          # Format check
-cargo clippy --workspace -- -D warnings  # Lint check
+sego doctor                      # System diagnostics
+cargo test --workspace           # Full test suite (source build)
 ```
 
 ---
