@@ -1,0 +1,38 @@
+# User config
+.claude.json
+.claw.json
+
+# Rust build artifacts
+rust/target/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Archive / legacy
+archive/
+.omx/
+.clawd-agents/
+
+# Session data (user-specific)
+**/.claude/sessions/
+**/.claude/settings.local.json
+**/.claw/sessions/
+**/.clawd-todos.json
+**/.omc/
+**/.sandbox-home/
+**/.sandbox-tmp/
