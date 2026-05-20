@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Build release
+        run: cargo build --release
+        working-directory: rust
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sego-windows
+          path: rust/target/release/sego.exe
+
+  build-linux:
+    name: Build Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Build release
+        run: cargo build --release
+        working-directory: rust
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sego-linux
+          path: rust/target/release/sego
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: sego-windows
+          path: artifacts
+      - uses: actions/download-artifact@v5
+        with:
+          name: sego-linux
+          path: artifacts
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/sego.exe
+            artifacts/sego
+          name: Sego Agent ${{ github.ref_name }}
+          body: |
+            ## Sego Agent ${{ github.ref_name }}
+
+            ### Download
+            - **Windows:** `sego.exe`
+            - **Linux:** `sego`
+
+            ### Quick Start
+            ```bash
+            set ANTHROPIC_API_KEY=sk-your-key
+            set ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+            sego
+            ```
+
+            ### Build from source
+            ```bash
+            git clone https://github.com/007M7/Sego-Agent.git
+            cd Sego-Agent/rust && cargo build --release
+            ```
+          draft: false
+          prerelease: false
