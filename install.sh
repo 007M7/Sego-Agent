@@ -14,14 +14,14 @@ echo ""
 mkdir -p "$INSTALL_DIR"
 
 # Download latest release
-RELEASE_URL="https://github.com/$REPO/releases/latest/download/$BINARY-$OS"
+RELEASE_URL="https://github.com/$REPO/releases/latest/download/$BINARY"
 echo "Downloading $BINARY..."
 if curl -fsSL "$RELEASE_URL" -o "$INSTALL_DIR/$BINARY"; then
     chmod +x "$INSTALL_DIR/$BINARY"
     echo "Installed to $INSTALL_DIR/$BINARY"
 else
     # Fallback: build from source
-    echo "No prebuilt binary for $OS. Building from source..."
+    echo "No prebuilt binary. Building from source..."
     echo "This requires Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
     SRC_DIR=$(mktemp -d)
     git clone "https://github.com/$REPO.git" "$SRC_DIR"
