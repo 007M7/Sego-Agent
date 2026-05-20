@@ -473,6 +473,29 @@ sego logout   # Clear stored credentials
 <repo>/.sego/settings.local.json  # Local overrides (gitignored)
 ```
 
+### Community learning telemetry
+
+Sego can anonymously share aggregate statistics to help improve the community model. **Off by default — you must opt in.**
+
+```bash
+sego telemetry              # Check status
+sego telemetry on           # Enable anonymous sharing
+sego telemetry off          # Disable
+sego telemetry export       # View pending data before sending
+```
+
+**What is shared (only when enabled):**
+
+| Shared (anonymous) | Never shared |
+|--------------------|--------------|
+| Random device UUID | Conversation content |
+| Efficiency scores | Code or file paths |
+| Failure type stats | API keys or tokens |
+| Recovery success rates | Personal identifiers |
+| Model family name | Anything identifying you |
+
+All data helps improve recovery recipes, efficiency benchmarks, and API compatibility for the entire community.
+
 ---
 
 ## Documentation Map
