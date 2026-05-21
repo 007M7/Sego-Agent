@@ -1,0 +1,55 @@
+#!/bin/sh
+# ============================================================================
+# Sego Agent — Pre-Commit Hook
+# ============================================================================
+# Runs format check + clippy on staged Rust files before commit.
+# Install: copy to .git/hooks/pre-commit (or run scripts/install-hooks.sh)
+# Skip with: git commit --no-verify
+# ============================================================================
+
+set -e
+
+# Only run if Rust files are staged
+STAGED_RUST=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.rs$' || true)
+
+if [ -z "$STAGED_RUST" ]; then
+    exit 0
+fi
+
+echo "🦞 Sego Agent — Pre-Commit Checks"
+echo "============================================"
+
+# Navigate to rust workspace
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+RUST_DIR="$WORKSPACE_ROOT/rust"
+
+if [ ! -f "$RUST_DIR/Cargo.toml" ]; then
+    echo "⚠️  Rust workspace not found at $RUST_DIR, skipping pre-commit."
+    exit 0
+fi
+
+cd "$RUST_DIR"
+
+# Step 1: Format staged files
+echo "━ Step 1/2: cargo fmt --check"
+if cargo fmt --all --check; then
+    echo "✅ Format OK ($(echo "$STAGED_RUST" | wc -l) Rust files)"
+else
+    echo "❌ Format failed. Run: cargo fmt --all"
+    echo "   Then stage the changes with: git add -u"
+    exit 1
+fi
+
+# Step 2: Clippy on the whole workspace
+echo "━ Step 2/2: cargo clippy --workspace --all-targets -- -D warnings"
+if cargo clippy --workspace --all-targets -- -D warnings; then
+    echo "✅ Clippy OK"
+else
+    echo "❌ Clippy failed. Fix warnings above before committing."
+    exit 1
+fi
+
+echo "============================================"
+echo "✅ Pre-commit checks passed!"
+echo "============================================"

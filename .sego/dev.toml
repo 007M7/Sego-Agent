@@ -1,0 +1,169 @@
+# ============================================================================
+# Sego Agent — Developer Mode Configuration
+# ============================================================================
+# This file enables Developer Mode when `sego` is run with
+# `SEGO_DEV_MODE=1` or when `.sego/dev.toml` is present in the workspace root.
+#
+# Developer Mode provides:
+#   - Extra diagnostics and verbose logging
+#   - Tool call tracing (input/output snapshots)
+#   - Real-time lane event streaming to stderr
+#   - Debug-level policy engine inspection
+#   - Green Contract bypass for development branches
+#   - Extended CLI completions for crate/module names
+# ============================================================================
+
+[dev]
+# Set true to enable developer-specific behaviors.
+# When false, all dev sections below are ignored.
+enabled = true
+
+# ============================================================================
+# Logging & Diagnostics
+# ============================================================================
+[dev.logging]
+# Extra verbose output during tool execution
+verbose_tools = true
+
+# Dump full tool input/output JSON for debugging
+trace_tool_io = true
+
+# Log lane events as they fire (stderr)
+trace_lane_events = true
+
+# Include stack traces in error messages
+show_stack_traces = true
+
+# Log policy engine evaluation decisions
+trace_policy_engine = true
+
+# Log compaction decisions with token estimates
+trace_compaction = true
+
+# Log each context-window preflight check
+trace_context_preflight = true
+
+[dev.diagnostics]
+# Run full workspace diagnostics before each turn
+pre_turn_diagnostics = true
+
+# Validate config layer merge after every load
+validate_config_merge = true
+
+# Check for orphaned modules at startup
+audit_orphaned_modules = true
+
+# Run stale-branch detection eagerly
+eager_stale_branch_check = true
+
+# ============================================================================
+# Tool Development
+# ============================================================================
+[dev.tools]
+# Allow all tools without permission prompts
+skip_permissions = true
+
+# Auto-confirm all tool calls (skip interactive prompts)
+auto_confirm = true
+
+# Record tool execution timing stats
+profile_tools = true
+
+# Maximum display length for tool output in dev mode (bytes)
+max_tool_output_display = 65536
+
+# ============================================================================
+# Rust Workspace
+# ============================================================================
+[dev.rust]
+# Default build target for dev builds
+build_profile = "dev"  # "dev" or "release"
+
+# Extra tests to run during workspace checks
+run_doc_tests = true
+
+# Run benchmarks alongside tests
+run_benchmarks = false
+
+# Extra clippy lints beyond workspace defaults
+extra_clippy_lints = ["clippy::cargo", "clippy::nursery"]
+
+# Warn on large files (>N lines)
+large_file_warn_lines = 1000
+
+# ============================================================================
+# Python Port Extras
+# ============================================================================
+[dev.python]
+# Run Python parity audit on startup
+run_parity_audit = true
+
+# Validate reference data snapshots against archive
+validate_snapshots = true
+
+# Run type checking with mypy (if available)
+run_type_checking = false
+
+# ============================================================================
+# Git Integration
+# ============================================================================
+[dev.git]
+# Auto-create a dev branch when starting
+auto_branch = false
+
+# Branch prefix for dev work
+dev_branch_prefix = "dev/"
+
+# Warn when branch is behind main by N commits
+stale_warn_commits_behind = 5
+
+# ============================================================================
+# AI Agent Hints (for agent-driven development)
+# ============================================================================
+[dev.agents]
+# Project description for agent context
+project_description = "Sego Agent — AI coding agent that learns from every run. Rust-native, self-evolving CLI tool."
+
+# Key modules to focus on during development
+focus_modules = [
+    "rust/crates/runtime/",       # Core loop, sessions, permissions
+    "rust/crates/rusty-claude-cli/", # CLI entrypoint
+    "rust/crates/api/",           # Anthropic-compatible client
+    "rust/crates/commands/",      # Slash command registry
+    "rust/crates/tools/",         # 40+ built-in tools
+]
+
+# Test commands for quick validation
+quick_test_commands = [
+    "cargo test -p rusty-claude-cli",
+    "cargo test --workspace -- --test-threads=1",
+]
+
+# Build commands
+build_commands = [
+    "cargo build",
+    "cargo build --release",
+    "cargo fmt --all --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+]
+
+# Known failures to ignore during development
+known_test_failures = [
+    "manager_discovery_report_keeps_healthy_servers_when_one_server_fails", # flaky timing
+]
+
+# ============================================================================
+# Agent-Specific Preferences
+# ============================================================================
+[dev.preferences]
+# Prefer small, reviewable commits
+small_commits = true
+
+# Run full workspace tests before suggesting a commit
+require_workspace_tests_before_commit = false
+
+# Auto-generate CHANGELOG entries for changes
+auto_changelog = true
+
+# Target PR style
+pr_style = "descriptive"  # "minimal" or "descriptive"
