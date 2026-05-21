@@ -24,6 +24,10 @@ Thumbs.db
 
 # Archive / legacy
 archive/
+
+# Port sessions / work logs
+.port_sessions/
+.sego/work_logs/
 .omx/
 .clawd-agents/
 

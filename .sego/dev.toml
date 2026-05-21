@@ -153,6 +153,25 @@ known_test_failures = [
 ]
 
 # ============================================================================
+# Progress UI
+# ============================================================================
+[dev.progress_ui]
+# Enable compact single-line progress bar (true) or full phase display (false)
+compact = true
+
+# Bar width in characters
+bar_width = 20
+
+# Show elapsed time per phase
+show_elapsed = true
+
+# Color mode: "auto" | "always" | "never"
+color_mode = "auto"
+
+# Log directory for work logs (relative to workspace root)
+work_log_dir = ".sego/work_logs"
+
+# ============================================================================
 # Agent-Specific Preferences
 # ============================================================================
 [dev.preferences]
