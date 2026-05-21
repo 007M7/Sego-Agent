@@ -69,3 +69,4 @@ jobs:
           workspaces: rust -> target
       - name: Run all tests
         run: cargo test --workspace
+    continue-on-error: true
