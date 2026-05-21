@@ -28,6 +28,7 @@ pub mod permission_enforcer;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
+mod progress_ui;
 mod prompt;
 pub mod recovery_recipes;
 mod remote;
@@ -112,6 +113,7 @@ pub use plugin_lifecycle::{
     DegradedMode, DiscoveryResult, PluginHealthcheck, PluginLifecycle, PluginLifecycleEvent,
     PluginState, ResourceInfo, ServerHealth, ServerStatus, ToolInfo,
 };
+pub use progress_ui::{Phase, PhaseLogEntry, PhaseStatus, ProgressUI};
 pub use policy_engine::{
     evaluate, DiffScope, GreenLevel, LaneBlocker, LaneContext, PolicyAction, PolicyCondition,
     PolicyEngine, PolicyRule, ReconcileReason, ReviewStatus,
