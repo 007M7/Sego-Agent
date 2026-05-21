@@ -14,9 +14,7 @@ pub fn normalize_name_for_mcp(name: &str) -> String {
         .collect::<String>();
 
     if name.starts_with(CLAUDEAI_SERVER_PREFIX) {
-        normalized = collapse_underscores(&normalized)
-            .trim_matches('_')
-            .to_string();
+        normalized = collapse_underscores(&normalized).trim_matches('_').to_string();
     }
 
     normalized
@@ -29,19 +27,12 @@ pub fn mcp_tool_prefix(server_name: &str) -> String {
 
 #[must_use]
 pub fn mcp_tool_name(server_name: &str, tool_name: &str) -> String {
-    format!(
-        "{}{}",
-        mcp_tool_prefix(server_name),
-        normalize_name_for_mcp(tool_name)
-    )
+    format!("{}{}", mcp_tool_prefix(server_name), normalize_name_for_mcp(tool_name))
 }
 
 #[must_use]
 pub fn unwrap_ccr_proxy_url(url: &str) -> String {
-    if !CCR_PROXY_PATH_MARKERS
-        .iter()
-        .any(|marker| url.contains(marker))
-    {
+    if !CCR_PROXY_PATH_MARKERS.iter().any(|marker| url.contains(marker)) {
         return url.to_string();
     }
 
@@ -129,10 +120,7 @@ fn render_command_signature(command: &[String]) -> String {
 }
 
 fn render_env_signature(map: &std::collections::BTreeMap<String, String>) -> String {
-    map.iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(";")
+    map.iter().map(|(key, value)| format!("{key}={value}")).collect::<Vec<_>>().join(";")
 }
 
 fn render_oauth_signature(oauth: Option<&crate::config::McpOAuthConfig>) -> String {
@@ -140,9 +128,7 @@ fn render_oauth_signature(oauth: Option<&crate::config::McpOAuthConfig>) -> Stri
         format!(
             "{}|{}|{}|{}",
             oauth.client_id.as_deref().unwrap_or(""),
-            oauth
-                .callback_port
-                .map_or_else(String::new, |port| port.to_string()),
+            oauth.callback_port.map_or_else(String::new, |port| port.to_string()),
             oauth.auth_server_metadata_url.as_deref().unwrap_or(""),
             oauth.xaa.map_or_else(String::new, |flag| flag.to_string())
         )
@@ -250,20 +236,14 @@ mod tests {
             env: BTreeMap::from([("TOKEN".to_string(), "secret".to_string())]),
             tool_call_timeout_ms: None,
         });
-        assert_eq!(
-            mcp_server_signature(&stdio),
-            Some("stdio:[uvx|mcp-server]".to_string())
-        );
+        assert_eq!(mcp_server_signature(&stdio), Some("stdio:[uvx|mcp-server]".to_string()));
 
         let remote = McpServerConfig::Ws(McpWebSocketServerConfig {
             url: "https://api.anthropic.com/v2/ccr-sessions/1?mcp_url=wss%3A%2F%2Fvendor.example%2Fmcp".to_string(),
             headers: BTreeMap::new(),
             headers_helper: None,
         });
-        assert_eq!(
-            mcp_server_signature(&remote),
-            Some("url:wss://vendor.example/mcp".to_string())
-        );
+        assert_eq!(mcp_server_signature(&remote), Some("url:wss://vendor.example/mcp".to_string()));
     }
 
     #[test]
@@ -274,18 +254,9 @@ mod tests {
             headers_helper: Some("helper.sh".to_string()),
             oauth: None,
         });
-        let user = ScopedMcpServerConfig {
-            scope: ConfigSource::User,
-            config: base_config.clone(),
-        };
-        let local = ScopedMcpServerConfig {
-            scope: ConfigSource::Local,
-            config: base_config,
-        };
-        assert_eq!(
-            scoped_mcp_config_hash(&user),
-            scoped_mcp_config_hash(&local)
-        );
+        let user = ScopedMcpServerConfig { scope: ConfigSource::User, config: base_config.clone() };
+        let local = ScopedMcpServerConfig { scope: ConfigSource::Local, config: base_config };
+        assert_eq!(scoped_mcp_config_hash(&user), scoped_mcp_config_hash(&local));
 
         let changed = ScopedMcpServerConfig {
             scope: ConfigSource::Local,
@@ -296,9 +267,6 @@ mod tests {
                 oauth: None,
             }),
         };
-        assert_ne!(
-            scoped_mcp_config_hash(&user),
-            scoped_mcp_config_hash(&changed)
-        );
+        assert_ne!(scoped_mcp_config_hash(&user), scoped_mcp_config_hash(&changed));
     }
 }

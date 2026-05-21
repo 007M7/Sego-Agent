@@ -10,9 +10,9 @@ mod store;
 pub use report::{EfficiencyTrend, SessionReport, SessionSummary};
 pub use store::{WorkflowStore, WorkflowStoreError};
 
-use crate::lane_events::{LaneEvent, LaneEventName, LaneEventStatus, LaneFailureClass};
-use crate::recovery_recipes::{RecoveryEvent, RecoveryResult};
 use crate::green_contract::GreenLevel;
+use crate::lane_events::{LaneEvent, LaneEventName};
+use crate::recovery_recipes::{RecoveryEvent, RecoveryResult};
 
 /// Aggregated statistics for one lane event type.
 #[derive(Debug, Clone, Default)]
@@ -89,11 +89,7 @@ impl WorkflowSnapshot {
     /// Record a recovery event.
     pub fn record_recovery(&mut self, event: &RecoveryEvent) {
         match event {
-            RecoveryEvent::RecoveryAttempted {
-                scenario,
-                result,
-                ..
-            } => {
+            RecoveryEvent::RecoveryAttempted { scenario, result, .. } => {
                 self.recovery_stats.attempts += 1;
                 let scenario_name = scenario.to_string();
                 if !self.recovery_stats.scenarios_seen.contains(&scenario_name) {
@@ -124,7 +120,8 @@ impl WorkflowSnapshot {
         let recovery_bonus = f64::from(self.recovery_stats.successes) * 3.0;
         let escalation_penalty = f64::from(self.recovery_stats.escalations) * 10.0;
 
-        let score = (base - failure_penalty + recovery_bonus - escalation_penalty).clamp(0.0, 100.0);
+        let score =
+            (base - failure_penalty + recovery_bonus - escalation_penalty).clamp(0.0, 100.0);
         self.efficiency_score = Some(score);
         score
     }

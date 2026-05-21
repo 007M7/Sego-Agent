@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+#[cfg(not(windows))]
 use std::path::Path;
 use std::process::Command;
 
@@ -33,11 +34,7 @@ pub struct HookRunResult {
 impl HookRunResult {
     #[must_use]
     pub fn allow(messages: Vec<String>) -> Self {
-        Self {
-            denied: false,
-            failed: false,
-            messages,
-        }
+        Self { denied: false, failed: false, messages }
     }
 
     #[must_use]
@@ -153,19 +150,11 @@ impl HookRunner {
                     messages.push(message.unwrap_or_else(|| {
                         format!("{} hook denied tool `{tool_name}`", event.as_str())
                     }));
-                    return HookRunResult {
-                        denied: true,
-                        failed: false,
-                        messages,
-                    };
+                    return HookRunResult { denied: true, failed: false, messages };
                 }
                 HookCommandOutcome::Failed { message } => {
                     messages.push(message);
-                    return HookRunResult {
-                        denied: false,
-                        failed: true,
-                        messages,
-                    };
+                    return HookRunResult { denied: false, failed: true, messages };
                 }
             }
         }
@@ -428,10 +417,7 @@ mod tests {
         // then
         assert_eq!(
             runner.run_pre_tool_use("Read", r#"{"path":"README.md"}"#),
-            HookRunResult::allow(vec![
-                "plugin pre one".to_string(),
-                "plugin pre two".to_string(),
-            ])
+            HookRunResult::allow(vec!["plugin pre one".to_string(), "plugin pre two".to_string(),])
         );
         assert_eq!(
             runner.run_post_tool_use("Read", r#"{"path":"README.md"}"#, "ok", false),
@@ -487,13 +473,7 @@ mod tests {
 
         // then
         assert!(result.is_failed());
-        assert!(result
-            .messages()
-            .iter()
-            .any(|message| message.contains("broken plugin hook")));
-        assert!(!result
-            .messages()
-            .iter()
-            .any(|message| message == "later plugin hook"));
+        assert!(result.messages().iter().any(|message| message.contains("broken plugin hook")));
+        assert!(!result.messages().iter().any(|message| message == "later plugin hook"));
     }
 }

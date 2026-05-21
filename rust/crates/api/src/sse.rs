@@ -51,10 +51,7 @@ impl SseParser {
             })?;
 
         let (position, separator_len) = separator;
-        let frame = self
-            .buffer
-            .drain(..position + separator_len)
-            .collect::<Vec<_>>();
+        let frame = self.buffer.drain(..position + separator_len).collect::<Vec<_>>();
         let frame_len = frame.len().saturating_sub(separator_len);
         Some(String::from_utf8_lossy(&frame[..frame_len]).into_owned())
     }
@@ -95,9 +92,7 @@ pub fn parse_frame(frame: &str) -> Result<Option<StreamEvent>, ApiError> {
         return Ok(None);
     }
 
-    serde_json::from_str::<StreamEvent>(&payload)
-        .map(Some)
-        .map_err(ApiError::from)
+    serde_json::from_str::<StreamEvent>(&payload).map(Some).map_err(ApiError::from)
 }
 
 #[cfg(test)]
@@ -115,14 +110,10 @@ mod tests {
         let event = parse_frame(frame).expect("frame should parse");
         assert_eq!(
             event,
-            Some(StreamEvent::ContentBlockStart(
-                crate::types::ContentBlockStartEvent {
-                    index: 0,
-                    content_block: OutputContentBlock::Text {
-                        text: "Hi".to_string(),
-                    },
-                },
-            ))
+            Some(StreamEvent::ContentBlockStart(crate::types::ContentBlockStartEvent {
+                index: 0,
+                content_block: OutputContentBlock::Text { text: "Hi".to_string() },
+            },))
         );
     }
 
@@ -132,22 +123,15 @@ mod tests {
         let first = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel";
         let second = b"lo\"}}\n\n";
 
-        assert!(parser
-            .push(first)
-            .expect("first chunk should buffer")
-            .is_empty());
+        assert!(parser.push(first).expect("first chunk should buffer").is_empty());
         let events = parser.push(second).expect("second chunk should parse");
 
         assert_eq!(
             events,
-            vec![StreamEvent::ContentBlockDelta(
-                crate::types::ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::TextDelta {
-                        text: "Hello".to_string(),
-                    },
-                }
-            )]
+            vec![StreamEvent::ContentBlockDelta(crate::types::ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::TextDelta { text: "Hello".to_string() },
+            })]
         );
     }
 
@@ -165,9 +149,7 @@ mod tests {
             "data: [DONE]\n\n"
         );
 
-        let events = parser
-            .push(payload.as_bytes())
-            .expect("parser should succeed");
+        let events = parser.push(payload.as_bytes()).expect("parser should succeed");
         assert_eq!(
             events,
             vec![
@@ -206,14 +188,10 @@ mod tests {
         let event = parse_frame(frame).expect("frame should parse");
         assert_eq!(
             event,
-            Some(StreamEvent::ContentBlockDelta(
-                crate::types::ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::TextDelta {
-                        text: "Hello".to_string(),
-                    },
-                }
-            ))
+            Some(StreamEvent::ContentBlockDelta(crate::types::ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::TextDelta { text: "Hello".to_string() },
+            }))
         );
     }
 
@@ -227,15 +205,13 @@ mod tests {
         let event = parse_frame(frame).expect("frame should parse");
         assert_eq!(
             event,
-            Some(StreamEvent::ContentBlockStart(
-                crate::types::ContentBlockStartEvent {
-                    index: 0,
-                    content_block: OutputContentBlock::Thinking {
-                        thinking: String::new(),
-                        signature: None,
-                    },
+            Some(StreamEvent::ContentBlockStart(crate::types::ContentBlockStartEvent {
+                index: 0,
+                content_block: OutputContentBlock::Thinking {
+                    thinking: String::new(),
+                    signature: None,
                 },
-            ))
+            },))
         );
     }
 
@@ -255,25 +231,17 @@ mod tests {
 
         assert_eq!(
             thinking_event,
-            Some(StreamEvent::ContentBlockDelta(
-                crate::types::ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::ThinkingDelta {
-                        thinking: "step 1".to_string(),
-                    },
-                }
-            ))
+            Some(StreamEvent::ContentBlockDelta(crate::types::ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::ThinkingDelta { thinking: "step 1".to_string() },
+            }))
         );
         assert_eq!(
             signature_event,
-            Some(StreamEvent::ContentBlockDelta(
-                crate::types::ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::SignatureDelta {
-                        signature: "sig_123".to_string(),
-                    },
-                }
-            ))
+            Some(StreamEvent::ContentBlockDelta(crate::types::ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::SignatureDelta { signature: "sig_123".to_string() },
+            }))
         );
     }
 }

@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-
 use crate::session::{Session, SessionError};
 
 pub const PRIMARY_SESSION_EXTENSION: &str = "jsonl";
@@ -113,25 +112,16 @@ pub fn resolve_session_reference_for(
     let base_dir = base_dir.as_ref();
     if is_session_reference_alias(reference) {
         let latest = latest_managed_session_for(base_dir)?;
-        return Ok(SessionHandle {
-            id: latest.id,
-            path: latest.path,
-        });
+        return Ok(SessionHandle { id: latest.id, path: latest.path });
     }
 
     let direct = PathBuf::from(reference);
-    let candidate = if direct.is_absolute() {
-        direct.clone()
-    } else {
-        base_dir.join(&direct)
-    };
+    let candidate = if direct.is_absolute() { direct.clone() } else { base_dir.join(&direct) };
     let looks_like_path = direct.extension().is_some() || direct.components().count() > 1;
     let path = if candidate.exists() {
         candidate
     } else if looks_like_path {
-        return Err(SessionControlError::Format(
-            format_missing_session_reference(reference),
-        ));
+        return Err(SessionControlError::Format(format_missing_session_reference(reference)));
     } else {
         resolve_managed_session_path_for(base_dir, reference)?
     };
@@ -157,18 +147,14 @@ pub fn resolve_managed_session_path_for(
             return Ok(path);
         }
     }
-    Err(SessionControlError::Format(
-        format_missing_session_reference(session_id),
-    ))
+    Err(SessionControlError::Format(format_missing_session_reference(session_id)))
 }
 
 #[must_use]
 pub fn is_managed_session_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|extension| {
-            extension == PRIMARY_SESSION_EXTENSION || extension == LEGACY_SESSION_EXTENSION
-        })
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|extension| {
+        extension == PRIMARY_SESSION_EXTENSION || extension == LEGACY_SESSION_EXTENSION
+    })
 }
 
 pub fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, SessionControlError> {
@@ -195,20 +181,11 @@ pub fn list_managed_sessions_for(
         let (id, message_count, parent_session_id, branch_name) =
             match Session::load_from_path(&path) {
                 Ok(session) => {
-                    let parent_session_id = session
-                        .fork
-                        .as_ref()
-                        .map(|fork| fork.parent_session_id.clone());
-                    let branch_name = session
-                        .fork
-                        .as_ref()
-                        .and_then(|fork| fork.branch_name.clone());
-                    (
-                        session.session_id,
-                        session.messages.len(),
-                        parent_session_id,
-                        branch_name,
-                    )
+                    let parent_session_id =
+                        session.fork.as_ref().map(|fork| fork.parent_session_id.clone());
+                    let branch_name =
+                        session.fork.as_ref().and_then(|fork| fork.branch_name.clone());
+                    (session.session_id, session.messages.len(), parent_session_id, branch_name)
                 }
                 Err(_) => (
                     path.file_stem()
@@ -262,10 +239,7 @@ pub fn load_managed_session_for(
     let handle = resolve_session_reference_for(base_dir, reference)?;
     let session = Session::load_from_path(&handle.path)?;
     Ok(LoadedManagedSession {
-        handle: SessionHandle {
-            id: session.session_id.clone(),
-            path: handle.path,
-        },
+        handle: SessionHandle { id: session.session_id.clone(), path: handle.path },
         session,
     })
 }
@@ -285,25 +259,15 @@ pub fn fork_managed_session_for(
     let parent_session_id = session.session_id.clone();
     let forked = session.fork(branch_name);
     let handle = create_managed_session_handle_for(base_dir, &forked.session_id)?;
-    let branch_name = forked
-        .fork
-        .as_ref()
-        .and_then(|fork| fork.branch_name.clone());
+    let branch_name = forked.fork.as_ref().and_then(|fork| fork.branch_name.clone());
     let forked = forked.with_persistence_path(handle.path.clone());
     forked.save_to_path(&handle.path)?;
-    Ok(ForkedManagedSession {
-        parent_session_id,
-        handle,
-        session: forked,
-        branch_name,
-    })
+    Ok(ForkedManagedSession { parent_session_id, handle, session: forked, branch_name })
 }
 
 #[must_use]
 pub fn is_session_reference_alias(reference: &str) -> bool {
-    SESSION_REFERENCE_ALIASES
-        .iter()
-        .any(|alias| reference.eq_ignore_ascii_case(alias))
+    SESSION_REFERENCE_ALIASES.iter().any(|alias| reference.eq_ignore_ascii_case(alias))
 }
 
 fn session_id_from_path(path: &Path) -> Option<String> {
@@ -350,15 +314,11 @@ mod tests {
 
     fn persist_session(root: &Path, text: &str) -> Session {
         let mut session = Session::new();
-        session
-            .push_user_text(text)
-            .expect("session message should save");
+        session.push_user_text(text).expect("session message should save");
         let handle = create_managed_session_handle_for(root, &session.session_id)
             .expect("managed session handle should build");
         let session = session.with_persistence_path(handle.path.clone());
-        session
-            .save_to_path(&handle.path)
-            .expect("session should persist");
+        session.save_to_path(&handle.path).expect("session should persist");
         session
     }
 
@@ -379,10 +339,7 @@ mod tests {
         summaries: &'a [ManagedSessionSummary],
         id: &str,
     ) -> &'a ManagedSessionSummary {
-        summaries
-            .iter()
-            .find(|summary| summary.id == id)
-            .expect("session summary should exist")
+        summaries.iter().find(|summary| summary.id == id).expect("session summary should exist")
     }
 
     #[test]
@@ -445,15 +402,9 @@ mod tests {
         // then
         assert_eq!(forked.parent_session_id, source.session_id);
         assert_eq!(forked.branch_name.as_deref(), Some("incident-review"));
-        assert_eq!(
-            summary.parent_session_id.as_deref(),
-            Some(source.session_id.as_str())
-        );
+        assert_eq!(summary.parent_session_id.as_deref(), Some(source.session_id.as_str()));
         assert_eq!(summary.branch_name.as_deref(), Some("incident-review"));
-        assert_eq!(
-            forked.session.persistence_path(),
-            Some(forked.handle.path.as_path())
-        );
+        assert_eq!(forked.session.persistence_path(), Some(forked.handle.path.as_path()));
         fs::remove_dir_all(root).expect("temp dir should clean up");
     }
 }

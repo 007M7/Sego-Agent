@@ -124,10 +124,7 @@ impl OpenAiCompatClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse, ApiError> {
-        let request = MessageRequest {
-            stream: false,
-            ..request.clone()
-        };
+        let request = MessageRequest { stream: false, ..request.clone() };
         let response = self.send_with_retry(&request).await?;
         let request_id = request_id_from_headers(response.headers());
         let payload = response.json::<ChatCompletionResponse>().await?;
@@ -142,9 +139,7 @@ impl OpenAiCompatClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageStream, ApiError> {
-        let response = self
-            .send_with_retry(&request.clone().with_streaming())
-            .await?;
+        let response = self.send_with_retry(&request.clone().with_streaming()).await?;
         Ok(MessageStream {
             request_id: request_id_from_headers(response.headers()),
             response,
@@ -180,10 +175,7 @@ impl OpenAiCompatClient {
             tokio::time::sleep(self.backoff_for_attempt(attempts)?).await;
         };
 
-        Err(ApiError::RetriesExhausted {
-            attempts,
-            last_error: Box::new(last_error),
-        })
+        Err(ApiError::RetriesExhausted { attempts, last_error: Box::new(last_error) })
     }
 
     async fn send_raw_request(
@@ -203,10 +195,7 @@ impl OpenAiCompatClient {
 
     fn backoff_for_attempt(&self, attempt: u32) -> Result<Duration, ApiError> {
         let Some(multiplier) = 1_u32.checked_shl(attempt.saturating_sub(1)) else {
-            return Err(ApiError::BackoffOverflow {
-                attempt,
-                base_delay: self.initial_backoff,
-            });
+            return Err(ApiError::BackoffOverflow { attempt, base_delay: self.initial_backoff });
         };
         Ok(self
             .initial_backoff
@@ -367,9 +356,7 @@ impl StreamState {
                     self.text_started = true;
                     events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
                         index: 0,
-                        content_block: OutputContentBlock::Text {
-                            text: String::new(),
-                        },
+                        content_block: OutputContentBlock::Text { text: String::new() },
                     }));
                 }
                 events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
@@ -428,9 +415,7 @@ impl StreamState {
         let mut events = Vec::new();
         if self.text_started && !self.text_finished {
             self.text_finished = true;
-            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
-                index: 0,
-            }));
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }));
         }
 
         for state in self.tool_calls.values_mut() {
@@ -455,9 +440,7 @@ impl StreamState {
             events.push(StreamEvent::MessageDelta(MessageDeltaEvent {
                 delta: MessageDelta {
                     stop_reason: Some(
-                        self.stop_reason
-                            .clone()
-                            .unwrap_or_else(|| "end_turn".to_string()),
+                        self.stop_reason.clone().unwrap_or_else(|| "end_turn".to_string()),
                     ),
                     stop_sequence: None,
                 },
@@ -508,17 +491,10 @@ impl ToolCallState {
         let Some(name) = self.name.clone() else {
             return Ok(None);
         };
-        let id = self
-            .id
-            .clone()
-            .unwrap_or_else(|| format!("tool_call_{}", self.openai_index));
+        let id = self.id.clone().unwrap_or_else(|| format!("tool_call_{}", self.openai_index));
         Ok(Some(ContentBlockStartEvent {
             index: self.block_index(),
-            content_block: OutputContentBlock::ToolUse {
-                id,
-                name,
-                input: json!({}),
-            },
+            content_block: OutputContentBlock::ToolUse { id, name, input: json!({}) },
         }))
     }
 
@@ -530,9 +506,7 @@ impl ToolCallState {
         self.emitted_len = self.arguments.len();
         Some(ContentBlockDeltaEvent {
             index: self.block_index(),
-            delta: ContentBlockDelta::InputJsonDelta {
-                partial_json: delta,
-            },
+            delta: ContentBlockDelta::InputJsonDelta { partial_json: delta },
         })
     }
 }
@@ -711,11 +685,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                     "role": "user",
                     "content": text,
                 })),
-                InputContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error,
-                } => Some(json!({
+                InputContentBlock::ToolResult { tool_use_id, content, is_error } => Some(json!({
                     "role": "tool",
                     "tool_call_id": tool_use_id,
                     "content": flatten_tool_result_content(content),
@@ -774,9 +744,7 @@ fn normalize_response(
         .choices
         .into_iter()
         .next()
-        .ok_or(ApiError::InvalidSseFrame(
-            "chat completion response missing choices",
-        ))?;
+        .ok_or(ApiError::InvalidSseFrame("chat completion response missing choices"))?;
     let mut content = Vec::new();
     if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
         content.push(OutputContentBlock::Text { text });
@@ -795,21 +763,13 @@ fn normalize_response(
         role: choice.message.role,
         content,
         model: response.model.if_empty_then(model.to_string()),
-        stop_reason: choice
-            .finish_reason
-            .map(|value| normalize_finish_reason(&value)),
+        stop_reason: choice.finish_reason.map(|value| normalize_finish_reason(&value)),
         stop_sequence: None,
         usage: Usage {
-            input_tokens: response
-                .usage
-                .as_ref()
-                .map_or(0, |usage| usage.prompt_tokens),
+            input_tokens: response.usage.as_ref().map_or(0, |usage| usage.prompt_tokens),
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
-            output_tokens: response
-                .usage
-                .as_ref()
-                .map_or(0, |usage| usage.completion_tokens),
+            output_tokens: response.usage.as_ref().map_or(0, |usage| usage.completion_tokens),
         },
         request_id: None,
     })
@@ -825,10 +785,7 @@ fn next_sse_frame(buffer: &mut Vec<u8>) -> Option<String> {
         .position(|window| window == b"\n\n")
         .map(|position| (position, 2))
         .or_else(|| {
-            buffer
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .map(|position| (position, 4))
+            buffer.windows(4).position(|window| window == b"\r\n\r\n").map(|position| (position, 4))
         })?;
 
     let (position, separator_len) = separator;
@@ -859,9 +816,7 @@ fn parse_sse_frame(frame: &str) -> Result<Option<ChatCompletionChunk>, ApiError>
     if payload == "[DONE]" {
         return Ok(None);
     }
-    serde_json::from_str(&payload)
-        .map(Some)
-        .map_err(ApiError::from)
+    serde_json::from_str(&payload).map(Some).map_err(ApiError::from)
 }
 
 fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
@@ -874,10 +829,7 @@ fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
 
 #[must_use]
 pub fn has_api_key(key: &str) -> bool {
-    read_env_non_empty(key)
-        .ok()
-        .and_then(std::convert::identity)
-        .is_some()
+    read_env_non_empty(key).ok().and_then(std::convert::identity).is_some()
 }
 
 #[must_use]
@@ -914,12 +866,8 @@ async fn expect_success(response: reqwest::Response) -> Result<reqwest::Response
 
     Err(ApiError::Api {
         status,
-        error_type: parsed_error
-            .as_ref()
-            .and_then(|error| error.error.error_type.clone()),
-        message: parsed_error
-            .as_ref()
-            .and_then(|error| error.error.message.clone()),
+        error_type: parsed_error.as_ref().and_then(|error| error.error.error_type.clone()),
+        message: parsed_error.as_ref().and_then(|error| error.error.message.clone()),
         body,
         retryable,
     })
@@ -975,9 +923,7 @@ mod tests {
                 messages: vec![InputMessage {
                     role: "user".to_string(),
                     content: vec![
-                        InputContentBlock::Text {
-                            text: "hello".to_string(),
-                        },
+                        InputContentBlock::Text { text: "hello".to_string() },
                         InputContentBlock::ToolResult {
                             tool_use_id: "tool_1".to_string(),
                             content: vec![ToolResultContentBlock::Json {
@@ -1046,19 +992,14 @@ mod tests {
     fn tool_choice_translation_supports_required_function() {
         assert_eq!(openai_tool_choice(&ToolChoice::Any), json!("required"));
         assert_eq!(
-            openai_tool_choice(&ToolChoice::Tool {
-                name: "weather".to_string(),
-            }),
+            openai_tool_choice(&ToolChoice::Tool { name: "weather".to_string() }),
             json!({"type": "function", "function": {"name": "weather"}})
         );
     }
 
     #[test]
     fn parses_tool_arguments_fallback() {
-        assert_eq!(
-            parse_tool_arguments("{\"city\":\"Paris\"}"),
-            json!({"city": "Paris"})
-        );
+        assert_eq!(parse_tool_arguments("{\"city\":\"Paris\"}"), json!({"city": "Paris"}));
         assert_eq!(parse_tool_arguments("not-json"), json!({"raw": "not-json"}));
     }
 
@@ -1068,13 +1009,7 @@ mod tests {
         std::env::remove_var("XAI_API_KEY");
         let error = OpenAiCompatClient::from_env(OpenAiCompatConfig::xai())
             .expect_err("missing key should error");
-        assert!(matches!(
-            error,
-            ApiError::MissingCredentials {
-                provider: "xAI",
-                ..
-            }
-        ));
+        assert!(matches!(error, ApiError::MissingCredentials { provider: "xAI", .. }));
     }
 
     #[test]
@@ -1095,9 +1030,7 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock")
+        LOCK.get_or_init(|| Mutex::new(())).lock().expect("env lock")
     }
 
     #[test]

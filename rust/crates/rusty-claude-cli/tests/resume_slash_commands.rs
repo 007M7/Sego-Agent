@@ -20,12 +20,8 @@ fn resumed_binary_accepts_slash_commands_with_arguments() {
     let export_path = temp_dir.join("notes.txt");
 
     let mut session = Session::new();
-    session
-        .push_user_text("ship the slash command harness")
-        .expect("session write should succeed");
-    session
-        .save_to_path(&session_path)
-        .expect("session should persist");
+    session.push_user_text("ship the slash command harness").expect("session write should succeed");
+    session.save_to_path(&session_path).expect("session should persist");
 
     // when
     let output = run_claw(
@@ -86,16 +82,8 @@ fn status_command_applies_cli_flags_end_to_end() {
     fs::create_dir_all(&temp_dir).expect("temp dir should exist");
 
     // when
-    let output = run_claw(
-        &temp_dir,
-        &[
-            "--model",
-            "sonnet",
-            "--permission-mode",
-            "read-only",
-            "status",
-        ],
-    );
+    let output =
+        run_claw(&temp_dir, &["--model", "sonnet", "--permission-mode", "read-only", "status"]);
 
     // then
     assert!(
@@ -128,21 +116,13 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
 
     fs::write(config_home.join("settings.json"), r#"{"model":"haiku"}"#)
         .expect("user config should write");
-    fs::write(
-        project_dir.join(".claw").join("settings.local.json"),
-        r#"{"model":"opus"}"#,
-    )
-    .expect("local config should write");
+    fs::write(project_dir.join(".claw").join("settings.local.json"), r#"{"model":"opus"}"#)
+        .expect("local config should write");
 
     // when
     let output = run_claw_with_env(
         &project_dir,
-        &[
-            "--resume",
-            session_path.to_str().expect("utf8 path"),
-            "/config",
-            "model",
-        ],
+        &["--resume", session_path.to_str().expect("utf8 path"), "/config", "model"],
         &[("CLAW_CONFIG_HOME", config_home.to_str().expect("utf8 path"))],
     );
 
@@ -157,18 +137,9 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("Config"));
     assert!(stdout.contains("Loaded files      2"));
+    assert!(stdout.contains(config_home.join("settings.json").to_str().expect("utf8 path")));
     assert!(stdout.contains(
-        config_home
-            .join("settings.json")
-            .to_str()
-            .expect("utf8 path")
-    ));
-    assert!(stdout.contains(
-        project_dir
-            .join(".claw")
-            .join("settings.local.json")
-            .to_str()
-            .expect("utf8 path")
+        project_dir.join(".claw").join("settings.local.json").to_str().expect("utf8 path")
     ));
     assert!(stdout.contains("Merged section: model"));
     assert!(stdout.contains("opus"));
@@ -186,23 +157,13 @@ fn resume_latest_restores_the_most_recent_managed_session() {
     let newer_path = sessions_dir.join("session-newer.jsonl");
 
     let mut older = Session::new().with_persistence_path(&older_path);
-    older
-        .push_user_text("older session")
-        .expect("older session write should succeed");
-    older
-        .save_to_path(&older_path)
-        .expect("older session should persist");
+    older.push_user_text("older session").expect("older session write should succeed");
+    older.save_to_path(&older_path).expect("older session should persist");
 
     let mut newer = Session::new().with_persistence_path(&newer_path);
-    newer
-        .push_user_text("newer session")
-        .expect("newer session write should succeed");
-    newer
-        .push_user_text("resume me")
-        .expect("newer session write should succeed");
-    newer
-        .save_to_path(&newer_path)
-        .expect("newer session should persist");
+    newer.push_user_text("newer session").expect("newer session write should succeed");
+    newer.push_user_text("resume me").expect("newer session write should succeed");
+    newer.save_to_path(&newer_path).expect("newer session should persist");
 
     // when
     let output = run_claw(&project_dir, &["--resume", "latest", "/status"]);
@@ -240,8 +201,5 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         .expect("clock should be after epoch")
         .as_millis();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "claw-{label}-{}-{millis}-{counter}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("claw-{label}-{}-{millis}-{counter}", std::process::id()))
 }

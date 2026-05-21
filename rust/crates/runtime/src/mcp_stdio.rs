@@ -48,12 +48,7 @@ pub struct JsonRpcRequest<T = JsonValue> {
 impl<T> JsonRpcRequest<T> {
     #[must_use]
     pub fn new(id: JsonRpcId, method: impl Into<String>, params: Option<T>) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            method: method.into(),
-            params,
-        }
+        Self { jsonrpc: "2.0".to_string(), id, method: method.into(), params }
     }
 }
 
@@ -253,68 +248,31 @@ pub struct McpToolDiscoveryReport {
 #[derive(Debug)]
 pub enum McpServerManagerError {
     Io(io::Error),
-    Transport {
-        server_name: String,
-        method: &'static str,
-        source: io::Error,
-    },
-    JsonRpc {
-        server_name: String,
-        method: &'static str,
-        error: JsonRpcError,
-    },
-    InvalidResponse {
-        server_name: String,
-        method: &'static str,
-        details: String,
-    },
-    Timeout {
-        server_name: String,
-        method: &'static str,
-        timeout_ms: u64,
-    },
-    UnknownTool {
-        qualified_name: String,
-    },
-    UnknownServer {
-        server_name: String,
-    },
+    Transport { server_name: String, method: &'static str, source: io::Error },
+    JsonRpc { server_name: String, method: &'static str, error: JsonRpcError },
+    InvalidResponse { server_name: String, method: &'static str, details: String },
+    Timeout { server_name: String, method: &'static str, timeout_ms: u64 },
+    UnknownTool { qualified_name: String },
+    UnknownServer { server_name: String },
 }
 
 impl std::fmt::Display for McpServerManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "{error}"),
-            Self::Transport {
-                server_name,
-                method,
-                source,
-            } => write!(
-                f,
-                "MCP server `{server_name}` transport failed during {method}: {source}"
-            ),
-            Self::JsonRpc {
-                server_name,
-                method,
-                error,
-            } => write!(
+            Self::Transport { server_name, method, source } => {
+                write!(f, "MCP server `{server_name}` transport failed during {method}: {source}")
+            }
+            Self::JsonRpc { server_name, method, error } => write!(
                 f,
                 "MCP server `{server_name}` returned JSON-RPC error for {method}: {} ({})",
                 error.message, error.code
             ),
-            Self::InvalidResponse {
-                server_name,
-                method,
-                details,
-            } => write!(
+            Self::InvalidResponse { server_name, method, details } => write!(
                 f,
                 "MCP server `{server_name}` returned invalid response for {method}: {details}"
             ),
-            Self::Timeout {
-                server_name,
-                method,
-                timeout_ms,
-            } => write!(
+            Self::Timeout { server_name, method, timeout_ms } => write!(
                 f,
                 "MCP server `{server_name}` timed out after {timeout_ms} ms while handling {method}"
             ),
@@ -381,46 +339,29 @@ impl McpServerManagerError {
     fn error_context(&self) -> BTreeMap<String, String> {
         match self {
             Self::Io(error) => BTreeMap::from([("kind".to_string(), error.kind().to_string())]),
-            Self::Transport {
-                server_name,
-                method,
-                source,
-            } => BTreeMap::from([
+            Self::Transport { server_name, method, source } => BTreeMap::from([
                 ("server".to_string(), server_name.clone()),
                 ("method".to_string(), (*method).to_string()),
                 ("io_kind".to_string(), source.kind().to_string()),
             ]),
-            Self::JsonRpc {
-                server_name,
-                method,
-                error,
-            } => BTreeMap::from([
+            Self::JsonRpc { server_name, method, error } => BTreeMap::from([
                 ("server".to_string(), server_name.clone()),
                 ("method".to_string(), (*method).to_string()),
                 ("jsonrpc_code".to_string(), error.code.to_string()),
             ]),
-            Self::InvalidResponse {
-                server_name,
-                method,
-                details,
-            } => BTreeMap::from([
+            Self::InvalidResponse { server_name, method, details } => BTreeMap::from([
                 ("server".to_string(), server_name.clone()),
                 ("method".to_string(), (*method).to_string()),
                 ("details".to_string(), details.clone()),
             ]),
-            Self::Timeout {
-                server_name,
-                method,
-                timeout_ms,
-            } => BTreeMap::from([
+            Self::Timeout { server_name, method, timeout_ms } => BTreeMap::from([
                 ("server".to_string(), server_name.clone()),
                 ("method".to_string(), (*method).to_string()),
                 ("timeout_ms".to_string(), timeout_ms.to_string()),
             ]),
-            Self::UnknownTool { qualified_name } => BTreeMap::from([(
-                "qualified_tool".to_string(),
-                qualified_name.clone(),
-            )]),
+            Self::UnknownTool { qualified_name } => {
+                BTreeMap::from([("qualified_tool".to_string(), qualified_name.clone())])
+            }
             Self::UnknownServer { server_name } => {
                 BTreeMap::from([("server".to_string(), server_name.clone())])
             }
@@ -467,11 +408,7 @@ struct ManagedMcpServer {
 
 impl ManagedMcpServer {
     fn new(bootstrap: McpClientBootstrap) -> Self {
-        Self {
-            bootstrap,
-            process: None,
-            initialized: false,
-        }
+        Self { bootstrap, process: None, initialized: false }
     }
 }
 
@@ -593,21 +530,14 @@ impl McpServerManager {
                     failure.recoverable,
                 ),
             })
-            .chain(
-                self.unsupported_servers
-                    .iter()
-                    .map(unsupported_server_failed_server),
-            )
+            .chain(self.unsupported_servers.iter().map(unsupported_server_failed_server))
             .collect::<Vec<_>>();
         let degraded_startup = (!working_servers.is_empty() && !degraded_failed_servers.is_empty())
             .then(|| {
                 McpDegradedReport::new(
                     working_servers,
                     degraded_failed_servers,
-                    discovered_tools
-                        .iter()
-                        .map(|tool| tool.qualified_name.clone())
-                        .collect(),
+                    discovered_tools.iter().map(|tool| tool.qualified_name.clone()).collect(),
                     Vec::new(),
                 )
             });
@@ -625,43 +555,33 @@ impl McpServerManager {
         qualified_tool_name: &str,
         arguments: Option<JsonValue>,
     ) -> Result<JsonRpcResponse<McpToolCallResult>, McpServerManagerError> {
-        let route = self
-            .tool_index
-            .get(qualified_tool_name)
-            .cloned()
-            .ok_or_else(|| McpServerManagerError::UnknownTool {
-                qualified_name: qualified_tool_name.to_string(),
-            })?;
+        let route = self.tool_index.get(qualified_tool_name).cloned().ok_or_else(|| {
+            McpServerManagerError::UnknownTool { qualified_name: qualified_tool_name.to_string() }
+        })?;
 
         let timeout_ms = self.tool_call_timeout_ms(&route.server_name)?;
 
         self.ensure_server_ready(&route.server_name).await?;
         let request_id = self.take_request_id();
-        let response =
-            {
-                let server = self.server_mut(&route.server_name)?;
-                let process = server.process.as_mut().ok_or_else(|| {
-                    McpServerManagerError::InvalidResponse {
-                        server_name: route.server_name.clone(),
-                        method: "tools/call",
-                        details: "server process missing after initialization".to_string(),
-                    }
+        let response = {
+            let server = self.server_mut(&route.server_name)?;
+            let process =
+                server.process.as_mut().ok_or_else(|| McpServerManagerError::InvalidResponse {
+                    server_name: route.server_name.clone(),
+                    method: "tools/call",
+                    details: "server process missing after initialization".to_string(),
                 })?;
-                Self::run_process_request(
-                    &route.server_name,
-                    "tools/call",
-                    timeout_ms,
-                    process.call_tool(
-                        request_id,
-                        McpToolCallParams {
-                            name: route.raw_name,
-                            arguments,
-                            meta: None,
-                        },
-                    ),
-                )
-                .await
-            };
+            Self::run_process_request(
+                &route.server_name,
+                "tools/call",
+                timeout_ms,
+                process.call_tool(
+                    request_id,
+                    McpToolCallParams { name: route.raw_name, arguments, meta: None },
+                ),
+            )
+            .await
+        };
 
         if let Err(error) = &response {
             if Self::should_reset_server(error) {
@@ -733,19 +653,16 @@ impl McpServerManager {
     }
 
     fn clear_routes_for_server(&mut self, server_name: &str) {
-        self.tool_index
-            .retain(|_, route| route.server_name != server_name);
+        self.tool_index.retain(|_, route| route.server_name != server_name);
     }
 
     fn server_mut(
         &mut self,
         server_name: &str,
     ) -> Result<&mut ManagedMcpServer, McpServerManagerError> {
-        self.servers
-            .get_mut(server_name)
-            .ok_or_else(|| McpServerManagerError::UnknownServer {
-                server_name: server_name.to_string(),
-            })
+        self.servers.get_mut(server_name).ok_or_else(|| McpServerManagerError::UnknownServer {
+            server_name: server_name.to_string(),
+        })
     }
 
     fn take_request_id(&mut self) -> JsonRpcId {
@@ -755,12 +672,9 @@ impl McpServerManager {
     }
 
     fn tool_call_timeout_ms(&self, server_name: &str) -> Result<u64, McpServerManagerError> {
-        let server =
-            self.servers
-                .get(server_name)
-                .ok_or_else(|| McpServerManagerError::UnknownServer {
-                    server_name: server_name.to_string(),
-                })?;
+        let server = self.servers.get(server_name).ok_or_else(|| {
+            McpServerManagerError::UnknownServer { server_name: server_name.to_string() }
+        })?;
         match &server.bootstrap.transport {
             McpClientTransport::Stdio(transport) => Ok(transport.resolved_tool_call_timeout_ms()),
             other => Err(McpServerManagerError::InvalidResponse {
@@ -827,9 +741,7 @@ impl McpServerManager {
                     MCP_LIST_TOOLS_TIMEOUT_MS,
                     process.list_tools(
                         request_id,
-                        Some(McpListToolsParams {
-                            cursor: cursor.clone(),
-                        }),
+                        Some(McpListToolsParams { cursor: cursor.clone() }),
                     ),
                 )
                 .await?
@@ -843,13 +755,11 @@ impl McpServerManager {
                 });
             }
 
-            let result = response
-                .result
-                .ok_or_else(|| McpServerManagerError::InvalidResponse {
-                    server_name: server_name.to_string(),
-                    method: "tools/list",
-                    details: "missing result payload".to_string(),
-                })?;
+            let result = response.result.ok_or_else(|| McpServerManagerError::InvalidResponse {
+                server_name: server_name.to_string(),
+                method: "tools/list",
+                details: "missing result payload".to_string(),
+            })?;
 
             for tool in result.tools {
                 let qualified_name = mcp_tool_name(server_name, &tool.name);
@@ -895,9 +805,7 @@ impl McpServerManager {
                     MCP_LIST_TOOLS_TIMEOUT_MS,
                     process.list_resources(
                         request_id,
-                        Some(McpListResourcesParams {
-                            cursor: cursor.clone(),
-                        }),
+                        Some(McpListResourcesParams { cursor: cursor.clone() }),
                     ),
                 )
                 .await?
@@ -911,13 +819,11 @@ impl McpServerManager {
                 });
             }
 
-            let result = response
-                .result
-                .ok_or_else(|| McpServerManagerError::InvalidResponse {
-                    server_name: server_name.to_string(),
-                    method: "resources/list",
-                    details: "missing result payload".to_string(),
-                })?;
+            let result = response.result.ok_or_else(|| McpServerManagerError::InvalidResponse {
+                server_name: server_name.to_string(),
+                method: "resources/list",
+                details: "missing result payload".to_string(),
+            })?;
 
             resources.extend(result.resources);
 
@@ -927,10 +833,7 @@ impl McpServerManager {
             }
         }
 
-        Ok(McpListResourcesResult {
-            resources,
-            next_cursor: None,
-        })
+        Ok(McpListResourcesResult { resources, next_cursor: None })
     }
 
     async fn read_resource_once(
@@ -941,29 +844,22 @@ impl McpServerManager {
         self.ensure_server_ready(server_name).await?;
 
         let request_id = self.take_request_id();
-        let response =
-            {
-                let server = self.server_mut(server_name)?;
-                let process = server.process.as_mut().ok_or_else(|| {
-                    McpServerManagerError::InvalidResponse {
-                        server_name: server_name.to_string(),
-                        method: "resources/read",
-                        details: "server process missing after initialization".to_string(),
-                    }
+        let response = {
+            let server = self.server_mut(server_name)?;
+            let process =
+                server.process.as_mut().ok_or_else(|| McpServerManagerError::InvalidResponse {
+                    server_name: server_name.to_string(),
+                    method: "resources/read",
+                    details: "server process missing after initialization".to_string(),
                 })?;
-                Self::run_process_request(
-                    server_name,
-                    "resources/read",
-                    MCP_LIST_TOOLS_TIMEOUT_MS,
-                    process.read_resource(
-                        request_id,
-                        McpReadResourceParams {
-                            uri: uri.to_string(),
-                        },
-                    ),
-                )
-                .await?
-            };
+            Self::run_process_request(
+                server_name,
+                "resources/read",
+                MCP_LIST_TOOLS_TIMEOUT_MS,
+                process.read_resource(request_id, McpReadResourceParams { uri: uri.to_string() }),
+            )
+            .await?
+        };
 
         if let Some(error) = response.error {
             return Err(McpServerManagerError::JsonRpc {
@@ -973,13 +869,11 @@ impl McpServerManager {
             });
         }
 
-        response
-            .result
-            .ok_or_else(|| McpServerManagerError::InvalidResponse {
-                server_name: server_name.to_string(),
-                method: "resources/read",
-                details: "missing result payload".to_string(),
-            })
+        response.result.ok_or_else(|| McpServerManagerError::InvalidResponse {
+            server_name: server_name.to_string(),
+            method: "resources/read",
+            details: "missing result payload".to_string(),
+        })
     }
 
     async fn reset_server(&mut self, server_name: &str) -> Result<(), McpServerManagerError> {
@@ -1053,13 +947,12 @@ impl McpServerManager {
 
         let mut attempts = 0;
         loop {
-            let needs_spawn = self
-                .servers
-                .get(server_name)
-                .map(|server| server.process.is_none())
-                .ok_or_else(|| McpServerManagerError::UnknownServer {
-                    server_name: server_name.to_string(),
-                })?;
+            let needs_spawn =
+                self.servers.get(server_name).map(|server| server.process.is_none()).ok_or_else(
+                    || McpServerManagerError::UnknownServer {
+                        server_name: server_name.to_string(),
+                    },
+                )?;
 
             if needs_spawn {
                 let server = self.server_mut(server_name)?;
@@ -1067,13 +960,12 @@ impl McpServerManager {
                 server.initialized = false;
             }
 
-            let needs_initialize = self
-                .servers
-                .get(server_name)
-                .map(|server| !server.initialized)
-                .ok_or_else(|| McpServerManagerError::UnknownServer {
-                    server_name: server_name.to_string(),
-                })?;
+            let needs_initialize =
+                self.servers.get(server_name).map(|server| !server.initialized).ok_or_else(
+                    || McpServerManagerError::UnknownServer {
+                        server_name: server_name.to_string(),
+                    },
+                )?;
 
             if !needs_initialize {
                 return Ok(());
@@ -1165,11 +1057,7 @@ impl McpStdioProcess {
             .take()
             .ok_or_else(|| io::Error::other("stdio MCP process missing stdout pipe"))?;
 
-        Ok(Self {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
-        })
+        Ok(Self { child, stdin, stdout: BufReader::new(stdout) })
     }
 
     pub async fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -1425,11 +1313,10 @@ mod tests {
     use crate::mcp_client::McpClientBootstrap;
 
     use super::{
-        spawn_mcp_stdio_process, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-        McpInitializeClientInfo, McpInitializeParams, McpInitializeResult, McpInitializeServerInfo,
-        McpListToolsResult, McpReadResourceParams, McpReadResourceResult, McpServerManager,
-        McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
-        unsupported_server_failed_server,
+        spawn_mcp_stdio_process, unsupported_server_failed_server, JsonRpcId, JsonRpcRequest,
+        JsonRpcResponse, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
+        McpInitializeServerInfo, McpListToolsResult, McpReadResourceParams, McpReadResourceResult,
+        McpServerManager, McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
     };
     use crate::McpLifecyclePhase;
 
@@ -1794,18 +1681,10 @@ mod tests {
 
     fn cleanup_script(script_path: &Path) {
         if let Err(error) = fs::remove_file(script_path) {
-            assert_eq!(
-                error.kind(),
-                std::io::ErrorKind::NotFound,
-                "cleanup script: {error}"
-            );
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "cleanup script: {error}");
         }
         if let Err(error) = fs::remove_dir_all(script_path.parent().expect("script parent")) {
-            assert_eq!(
-                error.kind(),
-                std::io::ErrorKind::NotFound,
-                "cleanup dir: {error}"
-            );
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "cleanup dir: {error}");
         }
     }
 
@@ -1825,10 +1704,7 @@ mod tests {
     ) -> ScopedMcpServerConfig {
         let mut env = BTreeMap::from([
             ("MCP_SERVER_LABEL".to_string(), label.to_string()),
-            (
-                "MCP_LOG_PATH".to_string(),
-                log_path.to_string_lossy().into_owned(),
-            ),
+            ("MCP_LOG_PATH".to_string(), log_path.to_string_lossy().into_owned()),
         ]);
         env.extend(extra_env);
         ScopedMcpServerConfig {
@@ -1844,10 +1720,7 @@ mod tests {
 
     #[test]
     fn spawns_stdio_process_and_round_trips_io() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_echo_script();
             let bootstrap = sample_bootstrap(&script_path);
@@ -1856,10 +1729,7 @@ mod tests {
             let ready = process.read_line().await.expect("read ready");
             assert_eq!(ready, "READY:secret-value\n");
 
-            process
-                .write_line("ping from client")
-                .await
-                .expect("write line");
+            process.write_line("ping from client").await.expect("write line");
 
             let echoed = process.read_line().await.expect("read echo");
             assert_eq!(echoed, "ECHO:ping from client\n");
@@ -1886,10 +1756,7 @@ mod tests {
 
     #[test]
     fn round_trips_initialize_request_and_response_over_stdio_frames() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_jsonrpc_script();
             let transport = script_transport(&script_path);
@@ -1933,10 +1800,7 @@ mod tests {
 
     #[test]
     fn write_jsonrpc_request_emits_content_length_frame() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_jsonrpc_script();
             let transport = script_transport(&script_path);
@@ -1967,10 +1831,7 @@ mod tests {
 
     #[test]
     fn given_lowercase_content_length_when_initialize_then_response_parses() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_jsonrpc_script();
             let transport = script_transport_with_env(
@@ -2007,10 +1868,7 @@ mod tests {
 
     #[test]
     fn given_mismatched_response_id_when_initialize_then_invalid_data_is_returned() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_jsonrpc_script();
             let transport = script_transport_with_env(
@@ -2046,10 +1904,7 @@ mod tests {
 
     #[test]
     fn direct_spawn_uses_transport_env() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_echo_script();
             let transport = crate::mcp_client::McpStdioTransport {
@@ -2070,19 +1925,13 @@ mod tests {
 
     #[test]
     fn lists_tools_calls_tool_and_reads_resources_over_jsonrpc() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_mcp_server_script();
             let transport = script_transport(&script_path);
             let mut process = McpStdioProcess::spawn(&transport).expect("spawn fake mcp server");
 
-            let tools = process
-                .list_tools(JsonRpcId::Number(2), None)
-                .await
-                .expect("list tools");
+            let tools = process.list_tools(JsonRpcId::Number(2), None).await.expect("list tools");
             assert_eq!(tools.error, None);
             assert_eq!(tools.id, JsonRpcId::Number(2));
             assert_eq!(
@@ -2117,35 +1966,22 @@ mod tests {
             assert_eq!(call.error, None);
             let call_result = call.result.expect("tool result");
             assert_eq!(call_result.is_error, Some(false));
-            assert_eq!(
-                call_result.structured_content,
-                Some(json!({"echoed": "hello"}))
-            );
+            assert_eq!(call_result.structured_content, Some(json!({"echoed": "hello"})));
             assert_eq!(call_result.content.len(), 1);
             assert_eq!(call_result.content[0].kind, "text");
-            assert_eq!(
-                call_result.content[0].data.get("text"),
-                Some(&json!("echo:hello"))
-            );
+            assert_eq!(call_result.content[0].data.get("text"), Some(&json!("echo:hello")));
 
-            let resources = process
-                .list_resources(JsonRpcId::Number(3), None)
-                .await
-                .expect("list resources");
+            let resources =
+                process.list_resources(JsonRpcId::Number(3), None).await.expect("list resources");
             let resources_result = resources.result.expect("resources result");
             assert_eq!(resources_result.resources.len(), 1);
             assert_eq!(resources_result.resources[0].uri, "file://guide.txt");
-            assert_eq!(
-                resources_result.resources[0].mime_type.as_deref(),
-                Some("text/plain")
-            );
+            assert_eq!(resources_result.resources[0].mime_type.as_deref(), Some("text/plain"));
 
             let read = process
                 .read_resource(
                     JsonRpcId::Number(4),
-                    McpReadResourceParams {
-                        uri: "file://guide.txt".to_string(),
-                    },
+                    McpReadResourceParams { uri: "file://guide.txt".to_string() },
                 )
                 .await
                 .expect("read resource");
@@ -2170,10 +2006,7 @@ mod tests {
 
     #[test]
     fn surfaces_jsonrpc_errors_from_tool_calls() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_mcp_server_script();
             let transport = script_transport(&script_path);
@@ -2182,11 +2015,7 @@ mod tests {
             let response = process
                 .call_tool(
                     JsonRpcId::Number(9),
-                    McpToolCallParams {
-                        name: "fail".to_string(),
-                        arguments: None,
-                        meta: None,
-                    },
+                    McpToolCallParams { name: "fail".to_string(), arguments: None, meta: None },
                 )
                 .await
                 .expect("call tool with error response");
@@ -2194,10 +2023,7 @@ mod tests {
             assert_eq!(response.id, JsonRpcId::Number(9));
             assert!(response.result.is_none());
             assert_eq!(response.error.as_ref().map(|e| e.code), Some(-32001));
-            assert_eq!(
-                response.error.as_ref().map(|e| e.message.as_str()),
-                Some("tool failed")
-            );
+            assert_eq!(response.error.as_ref().map(|e| e.message.as_str()), Some("tool failed"));
 
             process.terminate().await.expect("terminate child");
             let _ = process.wait().await.expect("wait after kill");
@@ -2207,10 +2033,7 @@ mod tests {
 
     #[test]
     fn manager_discovers_tools_from_stdio_config() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2237,24 +2060,15 @@ mod tests {
 
     #[test]
     fn manager_routes_tool_calls_to_correct_server() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
             let alpha_log = root.join("alpha.log");
             let beta_log = root.join("beta.log");
             let servers = BTreeMap::from([
-                (
-                    "alpha".to_string(),
-                    manager_server_config(&script_path, "alpha", &alpha_log),
-                ),
-                (
-                    "beta".to_string(),
-                    manager_server_config(&script_path, "beta", &beta_log),
-                ),
+                ("alpha".to_string(), manager_server_config(&script_path, "alpha", &alpha_log)),
+                ("beta".to_string(), manager_server_config(&script_path, "beta", &beta_log)),
             ]);
             let mut manager = McpServerManager::from_servers(&servers);
 
@@ -2262,17 +2076,11 @@ mod tests {
             assert_eq!(tools.len(), 2);
 
             let alpha = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "hello"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "hello"})))
                 .await
                 .expect("call alpha tool");
             let beta = manager
-                .call_tool(
-                    &mcp_tool_name("beta", "echo"),
-                    Some(json!({"text": "world"})),
-                )
+                .call_tool(&mcp_tool_name("beta", "echo"), Some(json!({"text": "world"})))
                 .await
                 .expect("call beta tool");
 
@@ -2299,10 +2107,7 @@ mod tests {
 
     #[test]
     fn manager_times_out_slow_tool_calls() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2326,19 +2131,12 @@ mod tests {
 
             manager.discover_tools().await.expect("discover tools");
             let error = manager
-                .call_tool(
-                    &mcp_tool_name("slow", "echo"),
-                    Some(json!({"text": "slow"})),
-                )
+                .call_tool(&mcp_tool_name("slow", "echo"), Some(json!({"text": "slow"})))
                 .await
                 .expect_err("slow tool call should time out");
 
             match error {
-                McpServerManagerError::Timeout {
-                    server_name,
-                    method,
-                    timeout_ms,
-                } => {
+                McpServerManagerError::Timeout { server_name, method, timeout_ms } => {
                     assert_eq!(server_name, "slow");
                     assert_eq!(method, "tools/call");
                     assert_eq!(timeout_ms, 25);
@@ -2354,10 +2152,7 @@ mod tests {
 
     #[test]
     fn manager_surfaces_parse_errors_from_tool_calls() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_mcp_server_script();
             let servers = BTreeMap::from([(
@@ -2379,19 +2174,12 @@ mod tests {
 
             manager.discover_tools().await.expect("discover tools");
             let error = manager
-                .call_tool(
-                    &mcp_tool_name("broken", "echo"),
-                    Some(json!({"text": "invalid-json"})),
-                )
+                .call_tool(&mcp_tool_name("broken", "echo"), Some(json!({"text": "invalid-json"})))
                 .await
                 .expect_err("invalid json should fail");
 
             match error {
-                McpServerManagerError::InvalidResponse {
-                    server_name,
-                    method,
-                    details,
-                } => {
+                McpServerManagerError::InvalidResponse { server_name, method, details } => {
                     assert_eq!(server_name, "broken");
                     assert_eq!(method, "tools/call");
                     assert!(
@@ -2409,10 +2197,7 @@ mod tests {
     #[test]
     fn given_child_exits_after_discovery_when_calling_twice_then_second_call_succeeds_after_reset()
     {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2430,19 +2215,12 @@ mod tests {
 
             manager.discover_tools().await.expect("discover tools");
             let first_error = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "reconnect"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "reconnect"})))
                 .await
                 .expect_err("first call should fail after transport drops");
 
             match first_error {
-                McpServerManagerError::Transport {
-                    server_name,
-                    method,
-                    source,
-                } => {
+                McpServerManagerError::Transport { server_name, method, source } => {
                     assert_eq!(server_name, "alpha");
                     assert_eq!(method, "tools/call");
                     assert_eq!(source.kind(), ErrorKind::UnexpectedEof);
@@ -2451,10 +2229,7 @@ mod tests {
             }
 
             let response = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "reconnect"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "reconnect"})))
                 .await
                 .expect("second tool call should succeed after reset");
 
@@ -2479,10 +2254,7 @@ mod tests {
 
     #[test]
     fn given_initialize_hangs_once_when_discover_tools_then_manager_retries_and_succeeds() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2495,10 +2267,7 @@ mod tests {
                     "alpha",
                     &log_path,
                     BTreeMap::from([
-                        (
-                            "MCP_FAIL_ONCE_MODE".to_string(),
-                            "initialize_hang".to_string(),
-                        ),
+                        ("MCP_FAIL_ONCE_MODE".to_string(), "initialize_hang".to_string()),
                         (
                             "MCP_FAIL_ONCE_MARKER".to_string(),
                             marker_path.to_string_lossy().into_owned(),
@@ -2508,10 +2277,7 @@ mod tests {
             )]);
             let mut manager = McpServerManager::from_servers(&servers);
 
-            let tools = manager
-                .discover_tools()
-                .await
-                .expect("discover tools after retry");
+            let tools = manager.discover_tools().await.expect("discover tools after retry");
 
             assert_eq!(tools.len(), 1);
             assert_eq!(tools[0].qualified_name, mcp_tool_name("alpha", "echo"));
@@ -2529,10 +2295,7 @@ mod tests {
     #[test]
     fn given_tool_call_disconnects_once_when_calling_twice_then_manager_resets_and_next_call_succeeds(
     ) {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2545,10 +2308,7 @@ mod tests {
                     "alpha",
                     &log_path,
                     BTreeMap::from([
-                        (
-                            "MCP_FAIL_ONCE_MODE".to_string(),
-                            "tool_call_disconnect".to_string(),
-                        ),
+                        ("MCP_FAIL_ONCE_MODE".to_string(), "tool_call_disconnect".to_string()),
                         (
                             "MCP_FAIL_ONCE_MARKER".to_string(),
                             marker_path.to_string_lossy().into_owned(),
@@ -2560,19 +2320,12 @@ mod tests {
 
             manager.discover_tools().await.expect("discover tools");
             let first_error = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "first"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "first"})))
                 .await
                 .expect_err("first tool call should fail when transport drops");
 
             match first_error {
-                McpServerManagerError::Transport {
-                    server_name,
-                    method,
-                    source,
-                } => {
+                McpServerManagerError::Transport { server_name, method, source } => {
                     assert_eq!(server_name, "alpha");
                     assert_eq!(method, "tools/call");
                     assert_eq!(source.kind(), ErrorKind::UnexpectedEof);
@@ -2581,10 +2334,7 @@ mod tests {
             }
 
             let response = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "second"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "second"})))
                 .await
                 .expect("second tool call should succeed after reset");
 
@@ -2616,10 +2366,7 @@ mod tests {
 
     #[test]
     fn manager_lists_and_reads_resources_from_stdio_servers() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2630,22 +2377,14 @@ mod tests {
             )]);
             let mut manager = McpServerManager::from_servers(&servers);
 
-            let listed = manager
-                .list_resources("alpha")
-                .await
-                .expect("list resources");
+            let listed = manager.list_resources("alpha").await.expect("list resources");
             assert_eq!(listed.resources.len(), 1);
             assert_eq!(listed.resources[0].uri, "file://guide.txt");
 
-            let read = manager
-                .read_resource("alpha", "file://guide.txt")
-                .await
-                .expect("read resource");
+            let read =
+                manager.read_resource("alpha", "file://guide.txt").await.expect("read resource");
             assert_eq!(read.contents.len(), 1);
-            assert_eq!(
-                read.contents[0].text.as_deref(),
-                Some("contents for file://guide.txt")
-            );
+            assert_eq!(read.contents[0].text.as_deref(), Some("contents for file://guide.txt"));
 
             manager.shutdown().await.expect("shutdown");
             cleanup_script(&script_path);
@@ -2655,19 +2394,13 @@ mod tests {
     #[test]
     #[ignore = "flaky: intermittent timing issues in CI, see ROADMAP P2.15"]
     fn manager_discovery_report_keeps_healthy_servers_when_one_server_fails() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
             let alpha_log = root.join("alpha.log");
             let servers = BTreeMap::from([
-                (
-                    "alpha".to_string(),
-                    manager_server_config(&script_path, "alpha", &alpha_log),
-                ),
+                ("alpha".to_string(), manager_server_config(&script_path, "alpha", &alpha_log)),
                 (
                     "broken".to_string(),
                     ScopedMcpServerConfig {
@@ -2686,16 +2419,10 @@ mod tests {
             let report = manager.discover_tools_best_effort().await;
 
             assert_eq!(report.tools.len(), 1);
-            assert_eq!(
-                report.tools[0].qualified_name,
-                mcp_tool_name("alpha", "echo")
-            );
+            assert_eq!(report.tools[0].qualified_name, mcp_tool_name("alpha", "echo"));
             assert_eq!(report.failed_servers.len(), 1);
             assert_eq!(report.failed_servers[0].server_name, "broken");
-            assert_eq!(
-                report.failed_servers[0].phase,
-                McpLifecyclePhase::InitializeHandshake
-            );
+            assert_eq!(report.failed_servers[0].phase, McpLifecyclePhase::InitializeHandshake);
             assert!(!report.failed_servers[0].recoverable);
             assert_eq!(
                 report.failed_servers[0].context.get("method").map(String::as_str),
@@ -2709,14 +2436,8 @@ mod tests {
             assert_eq!(degraded.working_servers, vec!["alpha".to_string()]);
             assert_eq!(degraded.failed_servers.len(), 1);
             assert_eq!(degraded.failed_servers[0].server_name, "broken");
-            assert_eq!(
-                degraded.failed_servers[0].phase,
-                McpLifecyclePhase::InitializeHandshake
-            );
-            assert_eq!(
-                degraded.available_tools,
-                vec![mcp_tool_name("alpha", "echo")]
-            );
+            assert_eq!(degraded.failed_servers[0].phase, McpLifecyclePhase::InitializeHandshake);
+            assert_eq!(degraded.available_tools, vec![mcp_tool_name("alpha", "echo")]);
             assert!(degraded.missing_tools.is_empty());
 
             let response = manager
@@ -2789,10 +2510,7 @@ mod tests {
 
     #[test]
     fn manager_shutdown_terminates_spawned_children_and_is_idempotent() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2813,10 +2531,7 @@ mod tests {
 
     #[test]
     fn manager_reuses_spawned_server_between_discovery_and_call() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2829,10 +2544,7 @@ mod tests {
 
             manager.discover_tools().await.expect("discover tools");
             let response = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "echo"),
-                    Some(json!({"text": "reuse"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "reuse"})))
                 .await
                 .expect("call tool");
 
@@ -2859,10 +2571,7 @@ mod tests {
 
     #[test]
     fn manager_reports_unknown_qualified_tool_name() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
             let script_path = write_manager_mcp_server_script();
             let root = script_path.parent().expect("script parent");
@@ -2874,10 +2583,7 @@ mod tests {
             let mut manager = McpServerManager::from_servers(&servers);
 
             let error = manager
-                .call_tool(
-                    &mcp_tool_name("alpha", "missing"),
-                    Some(json!({"text": "nope"})),
-                )
+                .call_tool(&mcp_tool_name("alpha", "missing"), Some(json!({"text": "nope"})))
                 .await
                 .expect_err("unknown qualified tool should fail");
 

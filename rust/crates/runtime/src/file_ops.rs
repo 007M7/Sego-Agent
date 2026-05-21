@@ -184,28 +184,20 @@ pub fn read_file(
     if metadata.len() > MAX_READ_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "file is too large ({} bytes, max {} bytes)",
-                metadata.len(),
-                MAX_READ_SIZE
-            ),
+            format!("file is too large ({} bytes, max {} bytes)", metadata.len(), MAX_READ_SIZE),
         ));
     }
 
     // Detect binary files
     if is_binary_file(&absolute_path)? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "file appears to be binary",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "file appears to be binary"));
     }
 
     let content = fs::read_to_string(&absolute_path)?;
     let lines: Vec<&str> = content.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
-    let end_index = limit.map_or(lines.len(), |limit| {
-        start_index.saturating_add(limit).min(lines.len())
-    });
+    let end_index =
+        limit.map_or(lines.len(), |limit| start_index.saturating_add(limit).min(lines.len()));
     let selected = lines[start_index..end_index].join("\n");
 
     Ok(ReadFileOutput {
@@ -225,11 +217,7 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     if content.len() > MAX_WRITE_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "content is too large ({} bytes, max {} bytes)",
-                content.len(),
-                MAX_WRITE_SIZE
-            ),
+            format!("content is too large ({} bytes, max {} bytes)", content.len(), MAX_WRITE_SIZE),
         ));
     }
 
@@ -241,11 +229,7 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     fs::write(&absolute_path, content)?;
 
     Ok(WriteFileOutput {
-        kind: if original_file.is_some() {
-            String::from("update")
-        } else {
-            String::from("create")
-        },
+        kind: if original_file.is_some() { String::from("update") } else { String::from("create") },
         file_path: absolute_path.to_string_lossy().into_owned(),
         content: content.to_owned(),
         structured_patch: make_patch(original_file.as_deref().unwrap_or(""), content),
@@ -270,10 +254,7 @@ pub fn edit_file(
         ));
     }
     if !original_file.contains(old_string) {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "old_string not found in file",
-        ));
+        return Err(io::Error::new(io::ErrorKind::NotFound, "old_string not found in file"));
     }
 
     let updated = if replace_all {
@@ -298,10 +279,7 @@ pub fn edit_file(
 /// Expands a glob pattern and returns matching filenames.
 pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOutput> {
     let started = Instant::now();
-    let base_dir = path
-        .map(normalize_path)
-        .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+    let base_dir = path.map(normalize_path).transpose()?.unwrap_or(std::env::current_dir()?);
     let search_pattern = if Path::new(pattern).is_absolute() {
         pattern.to_owned()
     } else {
@@ -318,10 +296,7 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
     }
 
     matches.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .map(Reverse)
+        fs::metadata(path).and_then(|metadata| metadata.modified()).ok().map(Reverse)
     });
 
     let truncated = matches.len() > 100;
@@ -341,12 +316,8 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
 
 /// Runs a regex search over workspace files with optional context lines.
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
-    let base_path = input
-        .path
-        .as_deref()
-        .map(normalize_path)
-        .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+    let base_path =
+        input.path.as_deref().map(normalize_path).transpose()?.unwrap_or(std::env::current_dir()?);
 
     let regex = RegexBuilder::new(&input.pattern)
         .case_insensitive(input.case_insensitive.unwrap_or(false))
@@ -361,10 +332,8 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         .transpose()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let file_type = input.file_type.as_deref();
-    let output_mode = input
-        .output_mode
-        .clone()
-        .unwrap_or_else(|| String::from("files_with_matches"));
+    let output_mode =
+        input.output_mode.clone().unwrap_or_else(|| String::from("files_with_matches"));
     let context = input.context.or(input.context_short).unwrap_or(0);
 
     let mut filenames = Vec::new();
@@ -500,11 +469,7 @@ fn apply_limit<T>(
 
     let truncated = items.len() > explicit_limit;
     items.truncate(explicit_limit);
-    (
-        items,
-        truncated.then_some(explicit_limit),
-        (offset_value > 0).then_some(offset_value),
-    )
+    (items, truncated.then_some(explicit_limit), (offset_value > 0).then_some(offset_value))
 }
 
 fn make_patch(original: &str, updated: &str) -> Vec<StructuredPatchHunk> {
@@ -546,9 +511,7 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
     }
 
     if let Some(parent) = candidate.parent() {
-        let canonical_parent = parent
-            .canonicalize()
-            .unwrap_or_else(|_| parent.to_path_buf());
+        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
         if let Some(name) = candidate.file_name() {
             return Ok(canonical_parent.join(name));
         }
@@ -566,9 +529,8 @@ pub fn read_file_in_workspace(
     workspace_root: &Path,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let canonical_root = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root =
+        workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
     read_file(path, offset, limit)
 }
@@ -581,9 +543,8 @@ pub fn write_file_in_workspace(
     workspace_root: &Path,
 ) -> io::Result<WriteFileOutput> {
     let absolute_path = normalize_path_allow_missing(path)?;
-    let canonical_root = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root =
+        workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
     write_file(path, content)
 }
@@ -598,9 +559,8 @@ pub fn edit_file_in_workspace(
     workspace_root: &Path,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let canonical_root = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root =
+        workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
     edit_file(path, old_string, new_string, replace_all)
 }
@@ -613,9 +573,8 @@ pub fn is_symlink_escape(path: &Path, workspace_root: &Path) -> io::Result<bool>
         return Ok(false);
     }
     let resolved = path.canonicalize()?;
-    let canonical_root = workspace_root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root =
+        workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     Ok(!resolved.starts_with(&canonical_root))
 }
 
@@ -730,11 +689,8 @@ mod tests {
         let dir = temp_path("search-dir");
         std::fs::create_dir_all(&dir).expect("directory should be created");
         let file = dir.join("demo.rs");
-        write_file(
-            file.to_string_lossy().as_ref(),
-            "fn main() {\n println!(\"hello\");\n}\n",
-        )
-        .expect("file write should succeed");
+        write_file(file.to_string_lossy().as_ref(), "fn main() {\n println!(\"hello\");\n}\n")
+            .expect("file write should succeed");
 
         let globbed = glob_search("**/*.rs", Some(dir.to_string_lossy().as_ref()))
             .expect("glob should succeed");

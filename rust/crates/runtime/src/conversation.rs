@@ -29,15 +29,8 @@ pub struct ApiRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssistantEvent {
     TextDelta(String),
-    ToolUse {
-        id: String,
-        name: String,
-        input: String,
-    },
-    Thinking {
-        thinking: String,
-        signature: Option<String>,
-    },
+    ToolUse { id: String, name: String, input: String },
+    Thinking { thinking: String, signature: Option<String> },
     Usage(TokenUsage),
     PromptCache(PromptCacheEvent),
     MessageStop,
@@ -72,9 +65,7 @@ pub struct ToolError {
 impl ToolError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+        Self { message: message.into() }
     }
 }
 
@@ -95,9 +86,7 @@ pub struct RuntimeError {
 impl RuntimeError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+        Self { message: message.into() }
     }
 }
 
@@ -527,10 +516,7 @@ where
 
         let result = compact_session(
             &self.session,
-            CompactionConfig {
-                max_estimated_tokens: 0,
-                ..CompactionConfig::default()
-            },
+            CompactionConfig { max_estimated_tokens: 0, ..CompactionConfig::default() },
         );
 
         if result.removed_message_count == 0 {
@@ -538,9 +524,7 @@ where
         }
 
         self.session = result.compacted_session;
-        Some(AutoCompactionEvent {
-            removed_message_count: result.removed_message_count,
-        })
+        Some(AutoCompactionEvent { removed_message_count: result.removed_message_count })
     }
 
     fn record_turn_started(&self, user_input: &str) {
@@ -549,10 +533,7 @@ where
         };
 
         let mut attributes = Map::new();
-        attributes.insert(
-            "user_input".to_string(),
-            Value::String(user_input.to_string()),
-        );
+        attributes.insert("user_input".to_string(), Value::String(user_input.to_string()));
         session_tracer.record("turn_started", attributes);
     }
 
@@ -586,10 +567,7 @@ where
 
         let mut attributes = Map::new();
         attributes.insert("iteration".to_string(), Value::from(iteration as u64));
-        attributes.insert(
-            "tool_name".to_string(),
-            Value::String(tool_name.to_string()),
-        );
+        attributes.insert("tool_name".to_string(), Value::String(tool_name.to_string()));
         session_tracer.record("tool_execution_started", attributes);
     }
 
@@ -598,11 +576,8 @@ where
             return;
         };
 
-        let Some(ContentBlock::ToolResult {
-            tool_name,
-            is_error,
-            ..
-        }) = result_message.blocks.first()
+        let Some(ContentBlock::ToolResult { tool_name, is_error, .. }) =
+            result_message.blocks.first()
         else {
             return;
         };
@@ -620,18 +595,13 @@ where
         };
 
         let mut attributes = Map::new();
-        attributes.insert(
-            "iterations".to_string(),
-            Value::from(summary.iterations as u64),
-        );
+        attributes.insert("iterations".to_string(), Value::from(summary.iterations as u64));
         attributes.insert(
             "assistant_messages".to_string(),
             Value::from(summary.assistant_messages.len() as u64),
         );
-        attributes.insert(
-            "tool_results".to_string(),
-            Value::from(summary.tool_results.len() as u64),
-        );
+        attributes
+            .insert("tool_results".to_string(), Value::from(summary.tool_results.len() as u64));
         attributes.insert(
             "prompt_cache_events".to_string(),
             Value::from(summary.prompt_cache_events.len() as u64),
@@ -655,9 +625,7 @@ where
 #[must_use]
 pub fn auto_compaction_threshold_from_env() -> u32 {
     parse_auto_compaction_threshold(
-        std::env::var(AUTO_COMPACTION_THRESHOLD_ENV_VAR)
-            .ok()
-            .as_deref(),
+        std::env::var(AUTO_COMPACTION_THRESHOLD_ENV_VAR).ok().as_deref(),
     )
 }
 
@@ -671,14 +639,7 @@ fn parse_auto_compaction_threshold(value: Option<&str>) -> u32 {
 
 fn build_assistant_message(
     events: Vec<AssistantEvent>,
-) -> Result<
-    (
-        ConversationMessage,
-        Option<TokenUsage>,
-        Vec<PromptCacheEvent>,
-    ),
-    RuntimeError,
-> {
+) -> Result<(ConversationMessage, Option<TokenUsage>, Vec<PromptCacheEvent>), RuntimeError> {
     let mut text = String::new();
     let mut blocks = Vec::new();
     let mut prompt_cache_events = Vec::new();
@@ -707,26 +668,18 @@ fn build_assistant_message(
     flush_text_block(&mut text, &mut blocks);
 
     if !finished {
-        return Err(RuntimeError::new(
-            "assistant stream ended without a message stop event",
-        ));
+        return Err(RuntimeError::new("assistant stream ended without a message stop event"));
     }
     if blocks.is_empty() {
         return Err(RuntimeError::new("assistant stream produced no content"));
     }
 
-    Ok((
-        ConversationMessage::assistant_with_usage(blocks, usage),
-        usage,
-        prompt_cache_events,
-    ))
+    Ok((ConversationMessage::assistant_with_usage(blocks, usage), usage, prompt_cache_events))
 }
 
 fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
     if !text.is_empty() {
-        blocks.push(ContentBlock::Text {
-            text: std::mem::take(text),
-        });
+        blocks.push(ContentBlock::Text { text: std::mem::take(text) });
     }
 }
 
@@ -747,11 +700,7 @@ fn merge_hook_feedback(messages: &[String], output: String, is_error: bool) -> S
     if !output.trim().is_empty() {
         sections.push(output);
     }
-    let label = if is_error {
-        "Hook feedback (error)"
-    } else {
-        "Hook feedback"
-    };
+    let label = if is_error { "Hook feedback (error)" } else { "Hook feedback" };
     sections.push(format!("{label}:\n{}", messages.join("\n")));
     sections.join("\n\n")
 }
@@ -842,10 +791,8 @@ mod tests {
                     ])
                 }
                 2 => {
-                    let last_message = request
-                        .messages
-                        .last()
-                        .expect("tool result should be present");
+                    let last_message =
+                        request.messages.last().expect("tool result should be present");
                     assert_eq!(last_message.role, MessageRole::Tool);
                     Ok(vec![
                         AssistantEvent::TextDelta("The answer is 4.".to_string()),
@@ -921,16 +868,10 @@ mod tests {
         assert_eq!(runtime.session().messages.len(), 4);
         assert_eq!(summary.usage.output_tokens, 10);
         assert_eq!(summary.auto_compaction, None);
-        assert!(matches!(
-            runtime.session().messages[1].blocks[1],
-            ContentBlock::ToolUse { .. }
-        ));
+        assert!(matches!(runtime.session().messages[1].blocks[1], ContentBlock::ToolUse { .. }));
         assert!(matches!(
             runtime.session().messages[2].blocks[0],
-            ContentBlock::ToolResult {
-                is_error: false,
-                ..
-            }
+            ContentBlock::ToolResult { is_error: false, .. }
         ));
     }
 
@@ -972,20 +913,14 @@ mod tests {
         struct RejectPrompter;
         impl PermissionPrompter for RejectPrompter {
             fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
-                PermissionPromptDecision::Deny {
-                    reason: "not now".to_string(),
-                }
+                PermissionPromptDecision::Deny { reason: "not now".to_string() }
             }
         }
 
         struct SingleCallApiClient;
         impl ApiClient for SingleCallApiClient {
             fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                if request
-                    .messages
-                    .iter()
-                    .any(|message| message.role == MessageRole::Tool)
-                {
+                if request.messages.iter().any(|message| message.role == MessageRole::Tool) {
                     return Ok(vec![
                         AssistantEvent::TextDelta("I could not use the tool.".to_string()),
                         AssistantEvent::MessageStop,
@@ -1026,11 +961,7 @@ mod tests {
         struct SingleCallApiClient;
         impl ApiClient for SingleCallApiClient {
             fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                if request
-                    .messages
-                    .iter()
-                    .any(|message| message.role == MessageRole::Tool)
-                {
+                if request.messages.iter().any(|message| message.role == MessageRole::Tool) {
                     return Ok(vec![
                         AssistantEvent::TextDelta("blocked".to_string()),
                         AssistantEvent::MessageStop,
@@ -1050,9 +981,8 @@ mod tests {
         let mut runtime = ConversationRuntime::new_with_features(
             Session::new(),
             SingleCallApiClient,
-            StaticToolExecutor::new().register("blocked", |_input| {
-                panic!("tool should not execute when hook denies")
-            }),
+            StaticToolExecutor::new()
+                .register("blocked", |_input| panic!("tool should not execute when hook denies")),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
             &RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
@@ -1067,16 +997,11 @@ mod tests {
             .expect("conversation should continue after hook denial");
 
         assert_eq!(summary.tool_results.len(), 1);
-        let ContentBlock::ToolResult {
-            is_error, output, ..
-        } = &summary.tool_results[0].blocks[0]
+        let ContentBlock::ToolResult { is_error, output, .. } = &summary.tool_results[0].blocks[0]
         else {
             panic!("expected tool result block");
         };
-        assert!(
-            *is_error,
-            "hook denial should produce an error result: {output}"
-        );
+        assert!(*is_error, "hook denial should produce an error result: {output}");
         assert!(
             output.contains("denied tool") || output.contains("blocked by hook"),
             "unexpected hook denial output: {output:?}"
@@ -1088,11 +1013,7 @@ mod tests {
         struct SingleCallApiClient;
         impl ApiClient for SingleCallApiClient {
             fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                if request
-                    .messages
-                    .iter()
-                    .any(|message| message.role == MessageRole::Tool)
-                {
+                if request.messages.iter().any(|message| message.role == MessageRole::Tool) {
                     return Ok(vec![
                         AssistantEvent::TextDelta("failed".to_string()),
                         AssistantEvent::MessageStop,
@@ -1113,9 +1034,8 @@ mod tests {
         let mut runtime = ConversationRuntime::new_with_features(
             Session::new(),
             SingleCallApiClient,
-            StaticToolExecutor::new().register("blocked", |_input| {
-                panic!("tool should not execute when hook fails")
-            }),
+            StaticToolExecutor::new()
+                .register("blocked", |_input| panic!("tool should not execute when hook fails")),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
             &RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
@@ -1132,16 +1052,11 @@ mod tests {
 
         // then
         assert_eq!(summary.tool_results.len(), 1);
-        let ContentBlock::ToolResult {
-            is_error, output, ..
-        } = &summary.tool_results[0].blocks[0]
+        let ContentBlock::ToolResult { is_error, output, .. } = &summary.tool_results[0].blocks[0]
         else {
             panic!("expected tool result block");
         };
-        assert!(
-            *is_error,
-            "hook failure should produce an error result: {output}"
-        );
+        assert!(*is_error, "hook failure should produce an error result: {output}");
         assert!(
             output.contains("exited with status 1") || output.contains("broken hook"),
             "unexpected hook failure output: {output:?}"
@@ -1194,25 +1109,15 @@ mod tests {
             )),
         );
 
-        let summary = runtime
-            .run_turn("use add", None)
-            .expect("tool loop succeeds");
+        let summary = runtime.run_turn("use add", None).expect("tool loop succeeds");
 
         assert_eq!(summary.tool_results.len(), 1);
-        let ContentBlock::ToolResult {
-            is_error, output, ..
-        } = &summary.tool_results[0].blocks[0]
+        let ContentBlock::ToolResult { is_error, output, .. } = &summary.tool_results[0].blocks[0]
         else {
             panic!("expected tool result block");
         };
-        assert!(
-            !*is_error,
-            "post hook should preserve non-error result: {output:?}"
-        );
-        assert!(
-            output.contains('4'),
-            "tool output missing value: {output:?}"
-        );
+        assert!(!*is_error, "post hook should preserve non-error result: {output:?}");
+        assert!(output.contains('4'), "tool output missing value: {output:?}");
         assert!(
             output.contains("pre hook ran"),
             "tool output missing pre hook feedback: {output:?}"
@@ -1272,26 +1177,16 @@ mod tests {
         );
 
         // when
-        let summary = runtime
-            .run_turn("use fail", None)
-            .expect("tool loop succeeds");
+        let summary = runtime.run_turn("use fail", None).expect("tool loop succeeds");
 
         // then
         assert_eq!(summary.tool_results.len(), 1);
-        let ContentBlock::ToolResult {
-            is_error, output, ..
-        } = &summary.tool_results[0].blocks[0]
+        let ContentBlock::ToolResult { is_error, output, .. } = &summary.tool_results[0].blocks[0]
         else {
             panic!("expected tool result block");
         };
-        assert!(
-            *is_error,
-            "failure hook path should preserve error result: {output:?}"
-        );
-        assert!(
-            output.contains("tool exploded"),
-            "tool output missing failure reason: {output:?}"
-        );
+        assert!(*is_error, "failure hook path should preserve error result: {output:?}");
+        assert!(output.contains("tool exploded"), "tool output missing failure reason: {output:?}");
         assert!(
             output.contains("failure hook ran"),
             "tool output missing failure hook feedback: {output:?}"
@@ -1310,27 +1205,20 @@ mod tests {
                 &mut self,
                 _request: ApiRequest,
             ) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                Ok(vec![
-                    AssistantEvent::TextDelta("done".to_string()),
-                    AssistantEvent::MessageStop,
-                ])
+                Ok(vec![AssistantEvent::TextDelta("done".to_string()), AssistantEvent::MessageStop])
             }
         }
 
         let mut session = Session::new();
-        session
-            .messages
-            .push(crate::session::ConversationMessage::assistant_with_usage(
-                vec![ContentBlock::Text {
-                    text: "earlier".to_string(),
-                }],
-                Some(TokenUsage {
-                    input_tokens: 11,
-                    output_tokens: 7,
-                    cache_creation_input_tokens: 2,
-                    cache_read_input_tokens: 1,
-                }),
-            ));
+        session.messages.push(crate::session::ConversationMessage::assistant_with_usage(
+            vec![ContentBlock::Text { text: "earlier".to_string() }],
+            Some(TokenUsage {
+                input_tokens: 11,
+                output_tokens: 7,
+                cache_creation_input_tokens: 2,
+                cache_read_input_tokens: 1,
+            }),
+        ));
 
         let runtime = ConversationRuntime::new(
             session,
@@ -1352,10 +1240,7 @@ mod tests {
                 &mut self,
                 _request: ApiRequest,
             ) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                Ok(vec![
-                    AssistantEvent::TextDelta("done".to_string()),
-                    AssistantEvent::MessageStop,
-                ])
+                Ok(vec![AssistantEvent::TextDelta("done".to_string()), AssistantEvent::MessageStop])
             }
         }
 
@@ -1370,19 +1255,11 @@ mod tests {
         runtime.run_turn("b", None).expect("turn b");
         runtime.run_turn("c", None).expect("turn c");
 
-        let result = runtime.compact(CompactionConfig {
-            preserve_recent_messages: 2,
-            max_estimated_tokens: 1,
-        });
+        let result = runtime
+            .compact(CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 });
         assert!(result.summary.contains("Conversation summary"));
-        assert_eq!(
-            result.compacted_session.messages[0].role,
-            MessageRole::System
-        );
-        assert_eq!(
-            result.compacted_session.session_id,
-            runtime.session().session_id
-        );
+        assert_eq!(result.compacted_session.messages[0].role, MessageRole::System);
+        assert_eq!(result.compacted_session.session_id, runtime.session().session_id);
         assert!(result.compacted_session.compaction.is_some());
     }
 
@@ -1394,10 +1271,7 @@ mod tests {
                 &mut self,
                 _request: ApiRequest,
             ) -> Result<Vec<AssistantEvent>, RuntimeError> {
-                Ok(vec![
-                    AssistantEvent::TextDelta("done".to_string()),
-                    AssistantEvent::MessageStop,
-                ])
+                Ok(vec![AssistantEvent::TextDelta("done".to_string()), AssistantEvent::MessageStop])
             }
         }
 
@@ -1411,9 +1285,7 @@ mod tests {
             vec!["system".to_string()],
         );
 
-        runtime
-            .run_turn("persist this turn", None)
-            .expect("turn should succeed");
+        runtime.run_turn("persist this turn", None).expect("turn should succeed");
 
         let restored = Session::load_from_path(&path).expect("persisted session should reload");
         fs::remove_file(&path).expect("temp session file should be removable");
@@ -1427,9 +1299,7 @@ mod tests {
     #[test]
     fn forks_runtime_session_without_mutating_original() {
         let mut session = Session::new();
-        session
-            .push_user_text("branch me")
-            .expect("message should append");
+        session.push_user_text("branch me").expect("message should append");
 
         let runtime = ConversationRuntime::new(
             session.clone(),
@@ -1513,16 +1383,9 @@ mod tests {
         )
         .with_auto_compaction_input_tokens_threshold(100_000);
 
-        let summary = runtime
-            .run_turn("trigger", None)
-            .expect("turn should succeed");
+        let summary = runtime.run_turn("trigger", None).expect("turn should succeed");
 
-        assert_eq!(
-            summary.auto_compaction,
-            Some(AutoCompactionEvent {
-                removed_message_count: 2,
-            })
-        );
+        assert_eq!(summary.auto_compaction, Some(AutoCompactionEvent { removed_message_count: 2 }));
         assert_eq!(runtime.session().messages[0].role, MessageRole::System);
     }
 
@@ -1556,9 +1419,7 @@ mod tests {
         )
         .with_auto_compaction_input_tokens_threshold(100_000);
 
-        let summary = runtime
-            .run_turn("trigger", None)
-            .expect("turn should succeed");
+        let summary = runtime.run_turn("trigger", None).expect("turn should succeed");
         assert_eq!(summary.auto_compaction, None);
         assert_eq!(runtime.session().messages.len(), 2);
     }
@@ -1590,9 +1451,7 @@ mod tests {
             .expect_err("assistant messages should require a stop event");
 
         // then
-        assert!(error
-            .to_string()
-            .contains("assistant stream ended without a message stop event"));
+        assert!(error.to_string().contains("assistant stream ended without a message stop event"));
     }
 
     #[test]
@@ -1605,9 +1464,7 @@ mod tests {
             build_assistant_message(events).expect_err("assistant messages should require content");
 
         // then
-        assert!(error
-            .to_string()
-            .contains("assistant stream produced no content"));
+        assert!(error.to_string().contains("assistant stream produced no content"));
     }
 
     #[test]
@@ -1616,9 +1473,7 @@ mod tests {
         let mut executor = StaticToolExecutor::new();
 
         // when
-        let error = executor
-            .execute("missing", "{}")
-            .expect_err("unregistered tools should fail");
+        let error = executor.execute("missing", "{}").expect_err("unregistered tools should fail");
 
         // then
         assert_eq!(error.to_string(), "unknown tool: missing");
@@ -1688,9 +1543,7 @@ mod tests {
         );
 
         // when
-        let error = runtime
-            .run_turn("hello", None)
-            .expect_err("API failures should propagate");
+        let error = runtime.run_turn("hello", None).expect_err("API failures should propagate");
 
         // then
         assert_eq!(error.to_string(), "upstream failed");

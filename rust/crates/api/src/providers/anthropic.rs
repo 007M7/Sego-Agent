@@ -30,10 +30,7 @@ pub enum AuthSource {
     None,
     ApiKey(String),
     BearerToken(String),
-    ApiKeyAndBearer {
-        api_key: String,
-        bearer_token: String,
-    },
+    ApiKeyAndBearer { api_key: String, bearer_token: String },
 }
 
 impl AuthSource {
@@ -41,10 +38,9 @@ impl AuthSource {
         let api_key = read_env_non_empty("ANTHROPIC_API_KEY")?;
         let auth_token = read_env_non_empty("ANTHROPIC_AUTH_TOKEN")?;
         match (api_key, auth_token) {
-            (Some(api_key), Some(bearer_token)) => Ok(Self::ApiKeyAndBearer {
-                api_key,
-                bearer_token,
-            }),
+            (Some(api_key), Some(bearer_token)) => {
+                Ok(Self::ApiKeyAndBearer { api_key, bearer_token })
+            }
             (Some(api_key), None) => Ok(Self::ApiKey(api_key)),
             (None, Some(bearer_token)) => Ok(Self::BearerToken(bearer_token)),
             (None, None) => Err(ApiError::missing_credentials(
@@ -65,11 +61,9 @@ impl AuthSource {
     #[must_use]
     pub fn bearer_token(&self) -> Option<&str> {
         match self {
-            Self::BearerToken(token)
-            | Self::ApiKeyAndBearer {
-                bearer_token: token,
-                ..
-            } => Some(token),
+            Self::BearerToken(token) | Self::ApiKeyAndBearer { bearer_token: token, .. } => {
+                Some(token)
+            }
             Self::None | Self::ApiKey(_) => None,
         }
     }
@@ -173,10 +167,7 @@ impl AnthropicClient {
             auth_token.filter(|token| !token.is_empty()),
         ) {
             (Some(api_key), Some(bearer_token)) => {
-                self.auth = AuthSource::ApiKeyAndBearer {
-                    api_key,
-                    bearer_token,
-                };
+                self.auth = AuthSource::ApiKeyAndBearer { api_key, bearer_token };
             }
             (Some(api_key), None) => {
                 self.auth = AuthSource::ApiKey(api_key);
@@ -283,10 +274,7 @@ impl AnthropicClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse, ApiError> {
-        let request = MessageRequest {
-            stream: false,
-            ..request.clone()
-        };
+        let request = MessageRequest { stream: false, ..request.clone() };
 
         if let Some(prompt_cache) = &self.prompt_cache {
             if let Some(response) = prompt_cache.lookup_completion(&request) {
@@ -296,10 +284,7 @@ impl AnthropicClient {
 
         let response = self.send_with_retry(&request).await?;
         let request_id = request_id_from_headers(response.headers());
-        let mut response = response
-            .json::<MessageResponse>()
-            .await
-            .map_err(ApiError::from)?;
+        let mut response = response.json::<MessageResponse>().await.map_err(ApiError::from)?;
         if response.request_id.is_none() {
             response.request_id = request_id;
         }
@@ -313,19 +298,13 @@ impl AnthropicClient {
                 AnalyticsEvent::new("api", "message_usage")
                     .with_property(
                         "request_id",
-                        response
-                            .request_id
-                            .clone()
-                            .map_or(Value::Null, Value::String),
+                        response.request_id.clone().map_or(Value::Null, Value::String),
                     )
                     .with_property("total_tokens", Value::from(response.total_tokens()))
                     .with_property(
                         "estimated_cost_usd",
                         Value::String(format_usd(
-                            response
-                                .usage
-                                .estimated_cost_usd(&response.model)
-                                .total_cost_usd(),
+                            response.usage.estimated_cost_usd(&response.model).total_cost_usd(),
                         )),
                     ),
             );
@@ -337,9 +316,7 @@ impl AnthropicClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageStream, ApiError> {
-        let response = self
-            .send_with_retry(&request.clone().with_streaming())
-            .await?;
+        let response = self.send_with_retry(&request.clone().with_streaming()).await?;
         Ok(MessageStream {
             request_id: request_id_from_headers(response.headers()),
             response,
@@ -368,10 +345,7 @@ impl AnthropicClient {
             .await
             .map_err(ApiError::from)?;
         let response = expect_success(response).await?;
-        response
-            .json::<OAuthTokenSet>()
-            .await
-            .map_err(ApiError::from)
+        response.json::<OAuthTokenSet>().await.map_err(ApiError::from)
     }
 
     pub async fn refresh_oauth_token(
@@ -388,10 +362,7 @@ impl AnthropicClient {
             .await
             .map_err(ApiError::from)?;
         let response = expect_success(response).await?;
-        response
-            .json::<OAuthTokenSet>()
-            .await
-            .map_err(ApiError::from)
+        response.json::<OAuthTokenSet>().await.map_err(ApiError::from)
     }
 
     async fn send_with_retry(
@@ -463,10 +434,8 @@ impl AnthropicClient {
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
         let request_url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
-        let request_builder = self
-            .http
-            .post(&request_url)
-            .header("content-type", "application/json");
+        let request_builder =
+            self.http.post(&request_url).header("content-type", "application/json");
         let mut request_builder = self.auth.apply(request_builder);
         for (header_name, header_value) in self.request_profile.header_pairs() {
             request_builder = request_builder.header(header_name, header_value);
@@ -491,18 +460,13 @@ impl AnthropicClient {
     }
 
     fn store_last_prompt_cache_record(&self, record: PromptCacheRecord) {
-        *self
-            .last_prompt_cache_record
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record);
+        *self.last_prompt_cache_record.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(record);
     }
 
     fn backoff_for_attempt(&self, attempt: u32) -> Result<Duration, ApiError> {
         let Some(multiplier) = 1_u32.checked_shl(attempt.saturating_sub(1)) else {
-            return Err(ApiError::BackoffOverflow {
-                attempt,
-                base_delay: self.initial_backoff,
-            });
+            return Err(ApiError::BackoffOverflow { attempt, base_delay: self.initial_backoff });
         };
         Ok(self
             .initial_backoff
@@ -515,10 +479,7 @@ impl AuthSource {
     pub fn from_env_or_saved() -> Result<Self, ApiError> {
         if let Some(api_key) = read_env_non_empty("ANTHROPIC_API_KEY")? {
             return match read_env_non_empty("ANTHROPIC_AUTH_TOKEN")? {
-                Some(bearer_token) => Ok(Self::ApiKeyAndBearer {
-                    api_key,
-                    bearer_token,
-                }),
+                Some(bearer_token) => Ok(Self::ApiKeyAndBearer { api_key, bearer_token }),
                 None => Ok(Self::ApiKey(api_key)),
             };
         }
@@ -548,9 +509,7 @@ impl AuthSource {
 
 #[must_use]
 pub fn oauth_token_is_expired(token_set: &OAuthTokenSet) -> bool {
-    token_set
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now_unix_timestamp())
+    token_set.expires_at.is_some_and(|expires_at| expires_at <= now_unix_timestamp())
 }
 
 pub fn resolve_saved_oauth_token(config: &OAuthConfig) -> Result<Option<OAuthTokenSet>, ApiError> {
@@ -572,10 +531,7 @@ where
 {
     if let Some(api_key) = read_env_non_empty("ANTHROPIC_API_KEY")? {
         return match read_env_non_empty("ANTHROPIC_AUTH_TOKEN")? {
-            Some(bearer_token) => Ok(AuthSource::ApiKeyAndBearer {
-                api_key,
-                bearer_token,
-            }),
+            Some(bearer_token) => Ok(AuthSource::ApiKeyAndBearer { api_key, bearer_token }),
             None => Ok(AuthSource::ApiKey(api_key)),
         };
     }
@@ -601,9 +557,7 @@ where
             "saved OAuth token is expired; runtime OAuth config is missing".to_string(),
         ));
     };
-    Ok(AuthSource::from(resolve_saved_oauth_token_set(
-        &config, token_set,
-    )?))
+    Ok(AuthSource::from(resolve_saved_oauth_token_set(&config, token_set)?))
 }
 
 fn resolve_saved_oauth_token_set(
@@ -649,9 +603,7 @@ fn client_runtime_block_on<F, T>(future: F) -> Result<T, ApiError>
 where
     F: std::future::Future<Output = Result<T, ApiError>>,
 {
-    tokio::runtime::Runtime::new()
-        .map_err(ApiError::from)?
-        .block_on(future)
+    tokio::runtime::Runtime::new().map_err(ApiError::from)?.block_on(future)
 }
 
 fn load_saved_oauth_token() -> Result<Option<OAuthTokenSet>, ApiError> {
@@ -665,9 +617,7 @@ fn load_saved_oauth_token() -> Result<Option<OAuthTokenSet>, ApiError> {
 }
 
 fn now_unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs())
 }
 
 fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
@@ -681,20 +631,14 @@ fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
 #[cfg(test)]
 fn read_api_key() -> Result<String, ApiError> {
     let auth = AuthSource::from_env_or_saved()?;
-    auth.api_key()
-        .or_else(|| auth.bearer_token())
-        .map(ToOwned::to_owned)
-        .ok_or(ApiError::missing_credentials(
-            "Anthropic",
-            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
-        ))
+    auth.api_key().or_else(|| auth.bearer_token()).map(ToOwned::to_owned).ok_or(
+        ApiError::missing_credentials("Anthropic", &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]),
+    )
 }
 
 #[cfg(test)]
 fn read_auth_token() -> Option<String> {
-    read_env_non_empty("ANTHROPIC_AUTH_TOKEN")
-        .ok()
-        .and_then(std::convert::identity)
+    read_env_non_empty("ANTHROPIC_AUTH_TOKEN").ok().and_then(std::convert::identity)
 }
 
 #[must_use]
@@ -811,12 +755,8 @@ async fn expect_success(response: reqwest::Response) -> Result<reqwest::Response
 
     Err(ApiError::Api {
         status,
-        error_type: parsed_error
-            .as_ref()
-            .map(|error| error.error.error_type.clone()),
-        message: parsed_error
-            .as_ref()
-            .map(|error| error.error.message.clone()),
+        error_type: parsed_error.as_ref().map(|error| error.error.error_type.clone()),
+        message: parsed_error.as_ref().map(|error| error.error.message.clone()),
         body,
         retryable,
     })
@@ -866,10 +806,7 @@ mod tests {
         std::env::temp_dir().join(format!(
             "api-oauth-test-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos()
         ))
     }
 
@@ -904,9 +841,7 @@ mod tests {
                 response_body.len(),
                 response_body
             );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response");
+            stream.write_all(response.as_bytes()).expect("write response");
         });
         format!("http://{address}/oauth/token")
     }
@@ -918,10 +853,7 @@ mod tests {
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("CLAW_CONFIG_HOME");
         let error = super::read_api_key().expect_err("missing key should error");
-        assert!(matches!(
-            error,
-            crate::error::ApiError::MissingCredentials { .. }
-        ));
+        assert!(matches!(error, crate::error::ApiError::MissingCredentials { .. }));
     }
 
     #[test]
@@ -930,10 +862,7 @@ mod tests {
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let error = super::read_api_key().expect_err("empty key should error");
-        assert!(matches!(
-            error,
-            crate::error::ApiError::MissingCredentials { .. }
-        ));
+        assert!(matches!(error, crate::error::ApiError::MissingCredentials { .. }));
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     }
 
@@ -942,10 +871,7 @@ mod tests {
         let _guard = env_lock();
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
         std::env::set_var("ANTHROPIC_API_KEY", "legacy-key");
-        assert_eq!(
-            super::read_api_key().expect("api key should load"),
-            "legacy-key"
-        );
+        assert_eq!(super::read_api_key().expect("api key should load"), "legacy-key");
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
@@ -1164,38 +1090,22 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(25),
         );
-        assert_eq!(
-            client.backoff_for_attempt(1).expect("attempt 1"),
-            Duration::from_millis(10)
-        );
-        assert_eq!(
-            client.backoff_for_attempt(2).expect("attempt 2"),
-            Duration::from_millis(20)
-        );
-        assert_eq!(
-            client.backoff_for_attempt(3).expect("attempt 3"),
-            Duration::from_millis(25)
-        );
+        assert_eq!(client.backoff_for_attempt(1).expect("attempt 1"), Duration::from_millis(10));
+        assert_eq!(client.backoff_for_attempt(2).expect("attempt 2"), Duration::from_millis(20));
+        assert_eq!(client.backoff_for_attempt(3).expect("attempt 3"), Duration::from_millis(25));
     }
 
     #[test]
     fn retryable_statuses_are_detected() {
-        assert!(super::is_retryable_status(
-            reqwest::StatusCode::TOO_MANY_REQUESTS
-        ));
-        assert!(super::is_retryable_status(
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR
-        ));
-        assert!(!super::is_retryable_status(
-            reqwest::StatusCode::UNAUTHORIZED
-        ));
+        assert!(super::is_retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(super::is_retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(!super::is_retryable_status(reqwest::StatusCode::UNAUTHORIZED));
     }
 
     #[test]
     fn tool_delta_variant_round_trips() {
-        let delta = ContentBlockDelta::InputJsonDelta {
-            partial_json: "{\"city\":\"Paris\"}".to_string(),
-        };
+        let delta =
+            ContentBlockDelta::InputJsonDelta { partial_json: "{\"city\":\"Paris\"}".to_string() };
         let encoded = serde_json::to_string(&delta).expect("delta should serialize");
         let decoded: ContentBlockDelta =
             serde_json::from_str(&encoded).expect("delta should deserialize");
@@ -1206,20 +1116,11 @@ mod tests {
     fn request_id_uses_primary_or_fallback_header() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(REQUEST_ID_HEADER, "req_primary".parse().expect("header"));
-        assert_eq!(
-            super::request_id_from_headers(&headers).as_deref(),
-            Some("req_primary")
-        );
+        assert_eq!(super::request_id_from_headers(&headers).as_deref(), Some("req_primary"));
 
         headers.clear();
-        headers.insert(
-            ALT_REQUEST_ID_HEADER,
-            "req_fallback".parse().expect("header"),
-        );
-        assert_eq!(
-            super::request_id_from_headers(&headers).as_deref(),
-            Some("req_fallback")
-        );
+        headers.insert(ALT_REQUEST_ID_HEADER, "req_fallback".parse().expect("header"));
+        assert_eq!(super::request_id_from_headers(&headers).as_deref(), Some("req_fallback"));
     }
 
     #[test]
@@ -1233,10 +1134,7 @@ mod tests {
             .build()
             .expect("request build");
         let headers = request.headers();
-        assert_eq!(
-            headers.get("x-api-key").and_then(|v| v.to_str().ok()),
-            Some("test-key")
-        );
+        assert_eq!(headers.get("x-api-key").and_then(|v| v.to_str().ok()), Some("test-key"));
         assert_eq!(
             headers.get("authorization").and_then(|v| v.to_str().ok()),
             Some("Bearer proxy-token")

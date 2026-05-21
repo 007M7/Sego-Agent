@@ -68,10 +68,7 @@ impl Display for ApiError {
                 env_vars.join(" or ")
             ),
             Self::ExpiredOAuthToken => {
-                write!(
-                    f,
-                    "saved OAuth token is expired and no refresh token is available"
-                )
+                write!(f, "saved OAuth token is expired and no refresh token is available")
             }
             Self::Auth(message) => write!(f, "auth error: {message}"),
             Self::InvalidApiKeyEnv(error) => {
@@ -80,27 +77,17 @@ impl Display for ApiError {
             Self::Http(error) => write!(f, "http error: {error}"),
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Json(error) => write!(f, "json error: {error}"),
-            Self::Api {
-                status,
-                error_type,
-                message,
-                body,
-                ..
-            } => match (error_type, message) {
+            Self::Api { status, error_type, message, body, .. } => match (error_type, message) {
                 (Some(error_type), Some(message)) => {
                     write!(f, "api returned {status} ({error_type}): {message}")
                 }
                 _ => write!(f, "api returned {status}: {body}"),
             },
-            Self::RetriesExhausted {
-                attempts,
-                last_error,
-            } => write!(f, "api failed after {attempts} attempts: {last_error}"),
+            Self::RetriesExhausted { attempts, last_error } => {
+                write!(f, "api failed after {attempts} attempts: {last_error}")
+            }
             Self::InvalidSseFrame(message) => write!(f, "invalid sse frame: {message}"),
-            Self::BackoffOverflow {
-                attempt,
-                base_delay,
-            } => write!(
+            Self::BackoffOverflow { attempt, base_delay } => write!(
                 f,
                 "retry backoff overflowed on attempt {attempt} with base delay {base_delay:?}"
             ),

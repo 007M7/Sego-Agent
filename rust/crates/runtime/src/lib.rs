@@ -8,8 +8,8 @@ mod bash;
 pub mod bash_validation;
 mod bootstrap;
 pub mod branch_lock;
-mod compact;
 pub mod community_learning;
+mod compact;
 mod config;
 mod conversation;
 mod file_ops;
@@ -113,14 +113,14 @@ pub use plugin_lifecycle::{
     DegradedMode, DiscoveryResult, PluginHealthcheck, PluginLifecycle, PluginLifecycleEvent,
     PluginState, ResourceInfo, ServerHealth, ServerStatus, ToolInfo,
 };
-pub use progress_ui::{Phase, PhaseLogEntry, PhaseStatus, ProgressUI};
 pub use policy_engine::{
     evaluate, DiffScope, GreenLevel, LaneBlocker, LaneContext, PolicyAction, PolicyCondition,
     PolicyEngine, PolicyRule, ReconcileReason, ReviewStatus,
 };
+pub use progress_ui::{Phase, PhaseLogEntry, PhaseStatus, ProgressUI};
 pub use prompt::{
-    load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,
-    SystemPromptBuilder, frontier_model_name, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    frontier_model_name, load_system_prompt, prepend_bullets, ContextFile, ProjectContext,
+    PromptBuildError, SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use recovery_recipes::{
     attempt_recovery, recipe_for, EscalationPolicy, FailureScenario, RecoveryContext,

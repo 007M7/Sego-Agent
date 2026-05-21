@@ -17,7 +17,6 @@ use runtime::{
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
-    TaskPacket,
     task_registry::TaskRegistry,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
@@ -25,7 +24,7 @@ use runtime::{
     BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
     McpDegradedReport, MessageRole, PermissionMode, PermissionPolicy, PromptCacheEvent,
-    RuntimeError, Session, ToolError, ToolExecutor,
+    RuntimeError, Session, TaskPacket, ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -122,37 +121,25 @@ pub struct RuntimeToolDefinition {
 impl GlobalToolRegistry {
     #[must_use]
     pub fn builtin() -> Self {
-        Self {
-            plugin_tools: Vec::new(),
-            runtime_tools: Vec::new(),
-            enforcer: None,
-        }
+        Self { plugin_tools: Vec::new(), runtime_tools: Vec::new(), enforcer: None }
     }
 
     pub fn with_plugin_tools(plugin_tools: Vec<PluginTool>) -> Result<Self, String> {
-        let builtin_names = mvp_tool_specs()
-            .into_iter()
-            .map(|spec| spec.name.to_string())
-            .collect::<BTreeSet<_>>();
+        let builtin_names =
+            mvp_tool_specs().into_iter().map(|spec| spec.name.to_string()).collect::<BTreeSet<_>>();
         let mut seen_plugin_names = BTreeSet::new();
 
         for tool in &plugin_tools {
             let name = tool.definition().name.clone();
             if builtin_names.contains(&name) {
-                return Err(format!(
-                    "plugin tool `{name}` conflicts with a built-in tool name"
-                ));
+                return Err(format!("plugin tool `{name}` conflicts with a built-in tool name"));
             }
             if !seen_plugin_names.insert(name.clone()) {
                 return Err(format!("duplicate plugin tool name `{name}`"));
             }
         }
 
-        Ok(Self {
-            plugin_tools,
-            runtime_tools: Vec::new(),
-            enforcer: None,
-        })
+        Ok(Self { plugin_tools, runtime_tools: Vec::new(), enforcer: None })
     }
 
     pub fn with_runtime_tools(
@@ -162,11 +149,7 @@ impl GlobalToolRegistry {
         let mut seen_names = mvp_tool_specs()
             .into_iter()
             .map(|spec| spec.name.to_string())
-            .chain(
-                self.plugin_tools
-                    .iter()
-                    .map(|tool| tool.definition().name.clone()),
-            )
+            .chain(self.plugin_tools.iter().map(|tool| tool.definition().name.clone()))
             .collect::<BTreeSet<_>>();
 
         for tool in &runtime_tools {
@@ -200,11 +183,7 @@ impl GlobalToolRegistry {
         let canonical_names = builtin_specs
             .iter()
             .map(|spec| spec.name.to_string())
-            .chain(
-                self.plugin_tools
-                    .iter()
-                    .map(|tool| tool.definition().name.clone()),
-            )
+            .chain(self.plugin_tools.iter().map(|tool| tool.definition().name.clone()))
             .chain(self.runtime_tools.iter().map(|tool| tool.name.clone()))
             .collect::<Vec<_>>();
         let mut name_map = canonical_names
@@ -348,12 +327,10 @@ impl GlobalToolRegistry {
     }
 
     fn searchable_tool_specs(&self) -> Vec<SearchableToolSpec> {
-        let builtin = deferred_tool_specs()
-            .into_iter()
-            .map(|spec| SearchableToolSpec {
-                name: spec.name.to_string(),
-                description: spec.description.to_string(),
-            });
+        let builtin = deferred_tool_specs().into_iter().map(|spec| SearchableToolSpec {
+            name: spec.name.to_string(),
+            description: spec.description.to_string(),
+        });
         let runtime = self.runtime_tools.iter().map(|tool| SearchableToolSpec {
             name: tool.name.clone(),
             description: tool.description.clone().unwrap_or_default(),
@@ -1282,10 +1259,7 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 
     // Read user response from stdin
     let mut response = String::new();
-    stdin
-        .lock()
-        .read_line(&mut response)
-        .map_err(|e| e.to_string())?;
+    stdin.lock().read_line(&mut response).map_err(|e| e.to_string())?;
     let response = response.trim().to_string();
 
     // If options were provided, resolve the numeric choice
@@ -1327,9 +1301,7 @@ fn run_task_create(input: TaskCreateInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_task_packet(input: TaskPacket) -> Result<String, String> {
     let registry = global_task_registry();
-    let task = registry
-        .create_from_packet(input)
-        .map_err(|error| error.to_string())?;
+    let task = registry.create_from_packet(input).map_err(|error| error.to_string())?;
 
     to_pretty_json(json!({
         "task_id": task.task_id,
@@ -1436,10 +1408,9 @@ fn run_worker_create(input: WorkerCreateInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_worker_get(input: WorkerIdInput) -> Result<String, String> {
-    global_worker_registry().get(&input.worker_id).map_or_else(
-        || Err(format!("worker not found: {}", input.worker_id)),
-        to_pretty_json,
-    )
+    global_worker_registry()
+        .get(&input.worker_id)
+        .map_or_else(|| Err(format!("worker not found: {}", input.worker_id)), to_pretty_json)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1692,11 +1663,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
             let status = response.status().as_u16();
             let body = response.text().unwrap_or_default();
             let truncated_body = if body.len() > 8192 {
-                format!(
-                    "{}\n\n[response truncated — {} bytes total]",
-                    &body[..8192],
-                    body.len()
-                )
+                format!("{}\n\n[response truncated — {} bytes total]", &body[..8192], body.len())
             } else {
                 body
             };
@@ -1767,10 +1734,7 @@ fn workspace_test_branch_preflight(command: &str) -> Option<BashCommandOutput> {
     let freshness = check_freshness(&branch, &main_ref);
     match freshness {
         BranchFreshness::Fresh => None,
-        BranchFreshness::Stale {
-            commits_behind,
-            missing_fixes,
-        } => Some(branch_divergence_output(
+        BranchFreshness::Stale { commits_behind, missing_fixes } => Some(branch_divergence_output(
             command,
             &branch,
             &main_ref,
@@ -1778,18 +1742,16 @@ fn workspace_test_branch_preflight(command: &str) -> Option<BashCommandOutput> {
             None,
             &missing_fixes,
         )),
-        BranchFreshness::Diverged {
-            ahead,
-            behind,
-            missing_fixes,
-        } => Some(branch_divergence_output(
-            command,
-            &branch,
-            &main_ref,
-            behind,
-            Some(ahead),
-            &missing_fixes,
-        )),
+        BranchFreshness::Diverged { ahead, behind, missing_fixes } => {
+            Some(branch_divergence_output(
+                command,
+                &branch,
+                &main_ref,
+                behind,
+                Some(ahead),
+                &missing_fixes,
+            ))
+        }
     }
 }
 
@@ -1806,11 +1768,7 @@ fn is_workspace_test_command(command: &str) -> bool {
 }
 
 fn normalize_shell_command(command: &str) -> String {
-    command
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
+    command.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
 }
 
 fn resolve_main_ref(branch: &str) -> Option<String> {
@@ -1878,27 +1836,25 @@ fn branch_divergence_output(
         dangerously_disable_sandbox: None,
         return_code_interpretation: Some("preflight_blocked:branch_divergence".to_string()),
         no_output_expected: Some(false),
-        structured_content: Some(vec![
-            serde_json::to_value(
-                LaneEvent::new(
-                    LaneEventName::BranchStaleAgainstMain,
-                    LaneEventStatus::Blocked,
-                    iso8601_now(),
-                )
-                    .with_failure_class(LaneFailureClass::BranchDivergence)
-                    .with_detail(stderr.clone())
-                    .with_data(json!({
-                        "branch": branch,
-                        "mainRef": main_ref,
-                        "commitsBehind": commits_behind,
-                        "commitsAhead": commits_ahead,
-                        "missingCommits": missing_fixes,
-                        "blockedCommand": command,
-                        "recommendedAction": format!("merge or rebase {main_ref} before workspace tests")
-                    })),
+        structured_content: Some(vec![serde_json::to_value(
+            LaneEvent::new(
+                LaneEventName::BranchStaleAgainstMain,
+                LaneEventStatus::Blocked,
+                iso8601_now(),
             )
-            .expect("lane event should serialize"),
-        ]),
+            .with_failure_class(LaneFailureClass::BranchDivergence)
+            .with_detail(stderr.clone())
+            .with_data(json!({
+                "branch": branch,
+                "mainRef": main_ref,
+                "commitsBehind": commits_behind,
+                "commitsAhead": commits_ahead,
+                "missingCommits": missing_fixes,
+                "blockedCommand": command,
+                "recommendedAction": format!("merge or rebase {main_ref} before workspace tests")
+            })),
+        )
+        .expect("lane event should serialize")]),
         persisted_output_path: None,
         persisted_output_size: None,
         sandbox_status: None,
@@ -2494,10 +2450,7 @@ struct ReplOutput {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum WebSearchResultItem {
-    SearchResult {
-        tool_use_id: String,
-        content: Vec<SearchHit>,
-    },
+    SearchResult { tool_use_id: String, content: Vec<SearchHit> },
     Commentary(String),
 }
 
@@ -2511,10 +2464,7 @@ fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
     let started = Instant::now();
     let client = build_http_client()?;
     let request_url = normalize_fetch_url(&input.url)?;
-    let response = client
-        .get(request_url.clone())
-        .send()
-        .map_err(|error| error.to_string())?;
+    let response = client.get(request_url.clone()).send().map_err(|error| error.to_string())?;
 
     let status = response.status();
     let final_url = response.url().to_string();
@@ -2545,10 +2495,7 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
     let started = Instant::now();
     let client = build_http_client()?;
     let search_url = build_search_url(&input.query)?;
-    let response = client
-        .get(search_url)
-        .send()
-        .map_err(|error| error.to_string())?;
+    let response = client.get(search_url).send().map_err(|error| error.to_string())?;
 
     let final_url = response.url().clone();
     let html = response.text().map_err(|error| error.to_string())?;
@@ -2651,10 +2598,8 @@ fn summarize_web_fetch(
     let compact = collapse_whitespace(content);
 
     let detail = if lower_prompt.contains("title") {
-        extract_title(content, raw_body, content_type).map_or_else(
-            || preview_text(&compact, 600),
-            |title| format!("Title: {title}"),
-        )
+        extract_title(content, raw_body, content_type)
+            .map_or_else(|| preview_text(&compact, 600), |title| format!("Title: {title}"))
     } else if lower_prompt.contains("summary") || lower_prompt.contains("summarize") {
         preview_text(&compact, 900)
     } else {
@@ -2767,10 +2712,7 @@ fn extract_search_hits(html: &str) -> Vec<SearchHit> {
         };
         let title = html_to_text(&after_tag[..end_anchor_idx]);
         if let Some(decoded_url) = decode_duckduckgo_redirect(&url) {
-            hits.push(SearchHit {
-                title: title.trim().to_string(),
-                url: decoded_url,
-            });
+            hits.push(SearchHit { title: title.trim().to_string(), url: decoded_url });
         }
         remaining = &after_tag[end_anchor_idx + 4..];
     }
@@ -2809,10 +2751,7 @@ fn extract_search_hits_from_generic_links(html: &str) -> Vec<SearchHit> {
         }
         let decoded_url = decode_duckduckgo_redirect(&url).unwrap_or(url);
         if decoded_url.starts_with("http://") || decoded_url.starts_with("https://") {
-            hits.push(SearchHit {
-                title: title.trim().to_string(),
-                url: decoded_url,
-            });
+            hits.push(SearchHit { title: title.trim().to_string(), url: decoded_url });
         }
         remaining = &after_tag[end_anchor_idx + 4..];
     }
@@ -2878,11 +2817,7 @@ fn normalize_domain_filter(domain: &str) -> String {
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
         .unwrap_or_else(|| trimmed.to_string());
-    candidate
-        .trim()
-        .trim_start_matches('.')
-        .trim_end_matches('/')
-        .to_ascii_lowercase()
+    candidate.trim().trim_start_matches('.').trim_end_matches('/').to_ascii_lowercase()
 }
 
 fn dedupe_hits(hits: &mut Vec<SearchHit>) {
@@ -2902,15 +2837,8 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
         Vec::new()
     };
 
-    let all_done = input
-        .todos
-        .iter()
-        .all(|todo| matches!(todo.status, TodoStatus::Completed));
-    let persisted = if all_done {
-        Vec::new()
-    } else {
-        input.todos.clone()
-    };
+    let all_done = input.todos.iter().all(|todo| matches!(todo.status, TodoStatus::Completed));
+    let persisted = if all_done { Vec::new() } else { input.todos.clone() };
 
     if let Some(parent) = store_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -2923,17 +2851,10 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
 
     let verification_nudge_needed = (all_done
         && input.todos.len() >= 3
-        && !input
-            .todos
-            .iter()
-            .any(|todo| todo.content.to_lowercase().contains("verif")))
+        && !input.todos.iter().any(|todo| todo.content.to_lowercase().contains("verif")))
     .then_some(true);
 
-    Ok(TodoWriteOutput {
-        old_todos,
-        new_todos: input.todos,
-        verification_nudge_needed,
-    })
+    Ok(TodoWriteOutput { old_todos, new_todos: input.todos, verification_nudge_needed })
 }
 
 fn execute_skill(input: SkillInput) -> Result<SkillOutput, String> {
@@ -3002,11 +2923,7 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
                 if !path.exists() {
                     continue;
                 }
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(requested)
-                {
+                if entry.file_name().to_string_lossy().eq_ignore_ascii_case(requested) {
                     return Ok(path);
                 }
             }
@@ -3132,9 +3049,7 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
 
 fn run_agent_job(job: &AgentJob) -> Result<(), String> {
     let mut runtime = build_agent_runtime(job)?.with_max_iterations(DEFAULT_AGENT_MAX_ITERATIONS);
-    let summary = runtime
-        .run_turn(job.prompt.clone(), None)
-        .map_err(|error| error.to_string())?;
+    let summary = runtime.run_turn(job.prompt.clone(), None).map_err(|error| error.to_string())?;
     let final_text = final_assistant_text(&summary);
     persist_agent_terminal_state(&job.manifest, "completed", Some(final_text.as_str()), None)
 }
@@ -3142,11 +3057,7 @@ fn run_agent_job(job: &AgentJob) -> Result<(), String> {
 fn build_agent_runtime(
     job: &AgentJob,
 ) -> Result<ConversationRuntime<ProviderRuntimeClient, SubagentToolExecutor>, String> {
-    let model = job
-        .manifest
-        .model
-        .clone()
-        .unwrap_or_else(|| DEFAULT_AGENT_MODEL.to_string());
+    let model = job.manifest.model.clone().unwrap_or_else(|| DEFAULT_AGENT_MODEL.to_string());
     let allowed_tools = job.allowed_tools.clone();
     let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
     let permission_policy = agent_permission_policy();
@@ -3266,10 +3177,11 @@ fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String> {
 }
 
 fn agent_permission_policy() -> PermissionPolicy {
-    mvp_tool_specs().into_iter().fold(
-        PermissionPolicy::new(PermissionMode::DangerFullAccess),
-        |policy, spec| policy.with_tool_requirement(spec.name, spec.required_permission),
-    )
+    mvp_tool_specs()
+        .into_iter()
+        .fold(PermissionPolicy::new(PermissionMode::DangerFullAccess), |policy, spec| {
+            policy.with_tool_requirement(spec.name, spec.required_permission)
+        })
 }
 
 fn write_agent_manifest(manifest: &AgentOutput) -> Result<(), String> {
@@ -3297,20 +3209,14 @@ fn persist_agent_terminal_state(
     next_manifest.current_blocker = blocker.clone();
     next_manifest.error = error;
     if let Some(blocker) = blocker {
-        next_manifest.lane_events.push(
-            LaneEvent::blocked(iso8601_now(), &blocker),
-        );
-        next_manifest.lane_events.push(
-            LaneEvent::failed(iso8601_now(), &blocker),
-        );
+        next_manifest.lane_events.push(LaneEvent::blocked(iso8601_now(), &blocker));
+        next_manifest.lane_events.push(LaneEvent::failed(iso8601_now(), &blocker));
     } else {
         next_manifest.current_blocker = None;
         let compressed_detail = result
             .filter(|value| !value.trim().is_empty())
             .map(|value| compress_summary_text(value.trim()));
-        next_manifest
-            .lane_events
-            .push(LaneEvent::finished(iso8601_now(), compressed_detail));
+        next_manifest.lane_events.push(LaneEvent::finished(iso8601_now(), compressed_detail));
     }
     write_agent_manifest(&next_manifest)
 }
@@ -3318,12 +3224,9 @@ fn persist_agent_terminal_state(
 fn append_agent_output(path: &str, suffix: &str) -> Result<(), String> {
     use std::io::Write as _;
 
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    file.write_all(suffix.as_bytes())
-        .map_err(|error| error.to_string())
+    let mut file =
+        std::fs::OpenOptions::new().append(true).open(path).map_err(|error| error.to_string())?;
+    file.write_all(suffix.as_bytes()).map_err(|error| error.to_string())
 }
 
 fn format_agent_terminal_output(
@@ -3353,10 +3256,7 @@ fn format_agent_terminal_output(
 
 fn classify_lane_blocker(error: &str) -> LaneEventBlocker {
     let detail = error.trim().to_string();
-    LaneEventBlocker {
-        failure_class: classify_lane_failure(error),
-        detail,
-    }
+    LaneEventBlocker { failure_class: classify_lane_failure(error), detail }
 }
 
 fn classify_lane_failure(error: &str) -> LaneFailureClass {
@@ -3448,15 +3348,20 @@ impl ApiClient for ProviderRuntimeClient {
             let mut pending_thinking: BTreeMap<u32, (String, Option<String>)> = BTreeMap::new();
             let mut saw_stop = false;
 
-            while let Some(event) = stream
-                .next_event()
-                .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?
+            while let Some(event) =
+                stream.next_event().await.map_err(|error| RuntimeError::new(error.to_string()))?
             {
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
                         for block in start.message.content {
-                            push_output_block(block, 0, &mut events, &mut pending_tools, &mut pending_thinking, true);
+                            push_output_block(
+                                block,
+                                0,
+                                &mut events,
+                                &mut pending_tools,
+                                &mut pending_thinking,
+                                true,
+                            );
                         }
                     }
                     ApiStreamEvent::ContentBlockStart(start) => {
@@ -3520,19 +3425,13 @@ impl ApiClient for ProviderRuntimeClient {
                 events.push(AssistantEvent::MessageStop);
             }
 
-            if events
-                .iter()
-                .any(|event| matches!(event, AssistantEvent::MessageStop))
-            {
+            if events.iter().any(|event| matches!(event, AssistantEvent::MessageStop)) {
                 return Ok(events);
             }
 
             let response = self
                 .client
-                .send_message(&MessageRequest {
-                    stream: false,
-                    ..message_request.clone()
-                })
+                .send_message(&MessageRequest { stream: false, ..message_request.clone() })
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
             let mut events = response_to_events(response);
@@ -3549,10 +3448,7 @@ struct SubagentToolExecutor {
 
 impl SubagentToolExecutor {
     fn new(allowed_tools: BTreeSet<String>) -> Self {
-        Self {
-            allowed_tools,
-            enforcer: None,
-        }
+        Self { allowed_tools, enforcer: None }
     }
 
     fn with_enforcer(mut self, enforcer: PermissionEnforcer) -> Self {
@@ -3584,7 +3480,8 @@ fn tool_specs_for_allowed_tools(allowed_tools: Option<&BTreeSet<String>>) -> Vec
 
 fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
     let mut result = Vec::new();
-    let mut pending_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending_tool_use_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let mut i = 0;
 
     while i < messages.len() {
@@ -3599,14 +3496,12 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
             .iter()
             .filter_map(|block| match block {
                 ContentBlock::Text { text } => Some(InputContentBlock::Text { text: text.clone() }),
-                ContentBlock::ToolUse { id, name, input } => {
-                    Some(InputContentBlock::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: serde_json::from_str(input)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
-                    })
-                }
+                ContentBlock::ToolUse { id, name, input } => Some(InputContentBlock::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: serde_json::from_str(input)
+                        .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+                }),
                 ContentBlock::ToolResult { tool_use_id, output, is_error, .. } => {
                     if role != "assistant" && !pending_tool_use_ids.contains(tool_use_id) {
                         return None;
@@ -3628,8 +3523,12 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
 
         if role == "assistant" {
             pending_tool_use_ids = message
-                .blocks.iter()
-                .filter_map(|b| match b { ContentBlock::ToolUse { id, .. } => Some(id.clone()), _ => None })
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
                 .collect();
 
             if !pending_tool_use_ids.is_empty() {
@@ -3639,18 +3538,25 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                     let next = &messages[j];
                     if next.blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
                         for block in &next.blocks {
-                            if let ContentBlock::ToolResult { tool_use_id, output, is_error, .. } = block {
+                            if let ContentBlock::ToolResult {
+                                tool_use_id, output, is_error, ..
+                            } = block
+                            {
                                 if pending_tool_use_ids.contains(tool_use_id) {
                                     tool_results.push(InputContentBlock::ToolResult {
                                         tool_use_id: tool_use_id.clone(),
-                                        content: vec![ToolResultContentBlock::Text { text: output.clone() }],
+                                        content: vec![ToolResultContentBlock::Text {
+                                            text: output.clone(),
+                                        }],
                                         is_error: *is_error,
                                     });
                                 }
                             }
                         }
                         j += 1;
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
 
                 if !content.is_empty() {
@@ -3711,7 +3617,14 @@ fn response_to_events(response: MessageResponse) -> Vec<AssistantEvent> {
 
     for (index, block) in response.content.into_iter().enumerate() {
         let index = u32::try_from(index).expect("response block index overflow");
-        push_output_block(block, index, &mut events, &mut pending_tools, &mut pending_thinking, false);
+        push_output_block(
+            block,
+            index,
+            &mut events,
+            &mut pending_tools,
+            &mut pending_thinking,
+            false,
+        );
         if let Some((id, name, input)) = pending_tools.remove(&index) {
             events.push(AssistantEvent::ToolUse { id, name, input });
         }
@@ -3822,10 +3735,7 @@ fn search_tool_specs(query: &str, max_results: usize, specs: &[SearchableToolSpe
             let name = spec.name.to_lowercase();
             let canonical_name = canonical_tool_token(&spec.name);
             let normalized_description = normalize_tool_search_query(&spec.description);
-            let haystack = format!(
-                "{name} {} {canonical_name}",
-                spec.description.to_lowercase()
-            );
+            let haystack = format!("{name} {} {canonical_name}", spec.description.to_lowercase());
             let normalized_haystack = format!("{canonical_name} {normalized_description}");
             if required.iter().any(|term| !haystack.contains(term)) {
                 return None;
@@ -3859,11 +3769,7 @@ fn search_tool_specs(query: &str, max_results: usize, specs: &[SearchableToolSpe
         .collect::<Vec<_>>();
 
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    scored
-        .into_iter()
-        .map(|(_, name)| name)
-        .take(max_results)
-        .collect()
+    scored.into_iter().map(|(_, name)| name).take(max_results).collect()
 }
 
 fn normalize_tool_search_query(query: &str) -> String {
@@ -3910,13 +3816,7 @@ fn make_agent_id() -> String {
 fn slugify_agent_name(description: &str) -> String {
     let mut out = description
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '-' })
         .collect::<String>();
     while out.contains("--") {
         out = out.replace("--", "-");
@@ -3955,9 +3855,7 @@ fn iso8601_now() -> String {
 fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput, String> {
     let path = std::path::PathBuf::from(&input.notebook_path);
     if path.extension().and_then(|ext| ext.to_str()) != Some("ipynb") {
-        return Err(String::from(
-            "File must be a Jupyter notebook (.ipynb file).",
-        ));
+        return Err(String::from("File must be a Jupyter notebook (.ipynb file)."));
     }
 
     let original_file = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
@@ -3978,11 +3876,7 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
     let edit_mode = input.edit_mode.unwrap_or(NotebookEditMode::Replace);
     let target_index = match input.cell_id.as_deref() {
         Some(cell_id) => Some(resolve_cell_index(cells, Some(cell_id), edit_mode)?),
-        None if matches!(
-            edit_mode,
-            NotebookEditMode::Replace | NotebookEditMode::Delete
-        ) =>
-        {
+        None if matches!(edit_mode, NotebookEditMode::Replace | NotebookEditMode::Delete) => {
             Some(resolve_cell_index(cells, None, edit_mode)?)
         }
         None => None,
@@ -4017,19 +3911,14 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
             let idx = target_index
                 .ok_or_else(|| String::from("delete mode requires a target cell index"))?;
             let removed = cells.remove(idx);
-            removed
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .map(ToString::to_string)
+            removed.get("id").and_then(serde_json::Value::as_str).map(ToString::to_string)
         }
         NotebookEditMode::Replace => {
             let resolved_cell_type = resolved_cell_type
                 .ok_or_else(|| String::from("replace mode requires a cell type"))?;
             let idx = target_index
                 .ok_or_else(|| String::from("replace mode requires a target cell index"))?;
-            let cell = cells
-                .get_mut(idx)
-                .ok_or_else(|| String::from("Cell index out of range"))?;
+            let cell = cells.get_mut(idx).ok_or_else(|| String::from("Cell index out of range"))?;
             cell["source"] = serde_json::Value::Array(source_lines(&new_source));
             cell["cell_type"] = serde_json::Value::String(match resolved_cell_type {
                 NotebookCellType::Code => String::from("code"),
@@ -4051,9 +3940,7 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
                     }
                 }
             }
-            cell.get("id")
-                .and_then(serde_json::Value::as_str)
-                .map(ToString::to_string)
+            cell.get("id").and_then(serde_json::Value::as_str).map(ToString::to_string)
         }
     };
 
@@ -4108,15 +3995,13 @@ fn build_notebook_cell(cell_id: &str, cell_type: NotebookCellType, source: &str)
 }
 
 fn cell_kind(cell: &serde_json::Value) -> Option<NotebookCellType> {
-    cell.get("cell_type")
-        .and_then(serde_json::Value::as_str)
-        .map(|kind| {
-            if kind == "markdown" {
-                NotebookCellType::Markdown
-            } else {
-                NotebookCellType::Code
-            }
-        })
+    cell.get("cell_type").and_then(serde_json::Value::as_str).map(|kind| {
+        if kind == "markdown" {
+            NotebookCellType::Markdown
+        } else {
+            NotebookCellType::Code
+        }
+    })
 }
 
 const MAX_SLEEP_DURATION_MS: u64 = 300_000;
@@ -4145,10 +4030,7 @@ fn execute_brief(input: BriefInput) -> Result<BriefOutput, String> {
         .attachments
         .as_ref()
         .map(|paths| {
-            paths
-                .iter()
-                .map(|path| resolve_attachment(path))
-                .collect::<Result<Vec<_>, String>>()
+            paths.iter().map(|path| resolve_attachment(path)).collect::<Result<Vec<_>, String>>()
         })
         .transpose()?;
 
@@ -4156,11 +4038,7 @@ fn execute_brief(input: BriefInput) -> Result<BriefOutput, String> {
         BriefStatus::Normal | BriefStatus::Proactive => input.message,
     };
 
-    Ok(BriefOutput {
-        message,
-        attachments,
-        sent_at: iso8601_timestamp(),
-    })
+    Ok(BriefOutput { message, attachments, sent_at: iso8601_timestamp() })
 }
 
 fn resolve_attachment(path: &str) -> Result<ResolvedAttachment, String> {
@@ -4175,10 +4053,7 @@ fn resolve_attachment(path: &str) -> Result<ResolvedAttachment, String> {
 
 fn is_image_path(path: &Path) -> bool {
     matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
+        path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(),
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg")
     )
 }
@@ -4344,11 +4219,7 @@ fn execute_exit_plan_mode(_input: ExitPlanModeInput) -> Result<PlanModeOutput, S
 
     if state.had_local_override {
         if let Some(previous_local_mode) = state.previous_local_mode.clone() {
-            set_nested_value(
-                &mut document,
-                PERMISSION_DEFAULT_MODE_PATH,
-                previous_local_mode,
-            );
+            set_nested_value(&mut document, PERMISSION_DEFAULT_MODE_PATH, previous_local_mode);
         } else {
             remove_nested_value(&mut document, PERMISSION_DEFAULT_MODE_PATH);
         }
@@ -4401,23 +4272,13 @@ fn execute_repl(input: ReplInput) -> Result<ReplOutput, String> {
     let output = if let Some(timeout_ms) = input.timeout_ms {
         let mut child = process.spawn().map_err(|error| error.to_string())?;
         loop {
-            if child
-                .try_wait()
-                .map_err(|error| error.to_string())?
-                .is_some()
-            {
-                break child
-                    .wait_with_output()
-                    .map_err(|error| error.to_string())?;
+            if child.try_wait().map_err(|error| error.to_string())?.is_some() {
+                break child.wait_with_output().map_err(|error| error.to_string())?;
             }
             if started.elapsed() >= Duration::from_millis(timeout_ms) {
                 child.kill().map_err(|error| error.to_string())?;
-                child
-                    .wait_with_output()
-                    .map_err(|error| error.to_string())?;
-                return Err(format!(
-                    "REPL execution exceeded timeout of {timeout_ms} ms"
-                ));
+                child.wait_with_output().map_err(|error| error.to_string())?;
+                return Err(format!("REPL execution exceeded timeout of {timeout_ms} ms"));
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -4465,10 +4326,7 @@ fn resolve_repl_runtime(language: &str) -> Result<ReplRuntime, String> {
 }
 
 fn detect_first_command(commands: &[&'static str]) -> Option<&'static str> {
-    commands
-        .iter()
-        .copied()
-        .find(|command| command_exists(command))
+    commands.iter().copied().find(|command| command_exists(command))
 }
 
 #[derive(Clone, Copy)]
@@ -4616,10 +4474,7 @@ fn normalize_config_value(spec: ConfigSettingSpec, value: ConfigValue) -> Result
             return Err(String::from("setting requires a string value"));
         };
         if !options.iter().any(|option| option == &as_str) {
-            return Err(format!(
-                "Invalid value \"{as_str}\". Options: {}",
-                options.join(", ")
-            ));
+            return Err(format!("Invalid value \"{as_str}\". Options: {}", options.join(", ")));
         }
     }
 
@@ -4663,11 +4518,8 @@ fn write_json_object(path: &Path, value: &serde_json::Map<String, Value>) -> Res
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+    std::fs::write(path, serde_json::to_string_pretty(value).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
 }
 
 fn get_nested_value<'a>(
@@ -4689,9 +4541,8 @@ fn set_nested_value(root: &mut serde_json::Map<String, Value>, path: &[&str], ne
         return;
     }
 
-    let entry = root
-        .entry((*first).to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let entry =
+        root.entry((*first).to_string()).or_insert_with(|| Value::Object(serde_json::Map::new()));
     if !entry.is_object() {
         *entry = Value::Object(serde_json::Map::new());
     }
@@ -4737,9 +4588,7 @@ fn read_plan_mode_state(path: &Path) -> Result<Option<PlanModeState>, String> {
             if contents.trim().is_empty() {
                 return Ok(None);
             }
-            serde_json::from_str(&contents)
-                .map(Some)
-                .map_err(|error| error.to_string())
+            serde_json::from_str(&contents).map(Some).map_err(|error| error.to_string())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
@@ -4750,11 +4599,8 @@ fn write_plan_mode_state(path: &Path, state: &PlanModeState) -> Result<(), Strin
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(state).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+    std::fs::write(path, serde_json::to_string_pretty(state).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
 }
 
 fn clear_plan_mode_state(path: &Path) -> Result<(), String> {
@@ -4766,10 +4612,7 @@ fn clear_plan_mode_state(path: &Path) -> Result<(), String> {
 }
 
 fn iso8601_timestamp() -> String {
-    if let Ok(output) = Command::new("date")
-        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-    {
+    if let Ok(output) = Command::new("date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]).output() {
         if output.status.success() {
             return String::from_utf8_lossy(&output.stdout).trim().to_string();
         }
@@ -4784,12 +4627,7 @@ fn execute_powershell(input: PowerShellInput) -> std::io::Result<runtime::BashCo
         return Ok(output);
     }
     let shell = detect_powershell_shell()?;
-    execute_shell_command(
-        shell,
-        &input.command,
-        input.timeout,
-        input.run_in_background,
-    )
+    execute_shell_command(shell, &input.command, input.timeout, input.run_in_background)
 }
 
 fn detect_powershell_shell() -> std::io::Result<&'static str> {
@@ -4851,14 +4689,8 @@ fn execute_shell_command(
     }
 
     let mut process = std::process::Command::new(shell);
-    process
-        .arg("-NoProfile")
-        .arg("-NonInteractive")
-        .arg("-Command")
-        .arg(command);
-    process
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    process.arg("-NoProfile").arg("-NonInteractive").arg("-Command").arg(command);
+    process.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
 
     if let Some(timeout_ms) = timeout {
         let mut child = process.spawn()?;
@@ -4951,11 +4783,7 @@ fn resolve_cell_index(
     cell_id: Option<&str>,
     edit_mode: NotebookEditMode,
 ) -> Result<usize, String> {
-    if cells.is_empty()
-        && matches!(
-            edit_mode,
-            NotebookEditMode::Replace | NotebookEditMode::Delete
-        )
+    if cells.is_empty() && matches!(edit_mode, NotebookEditMode::Replace | NotebookEditMode::Delete)
     {
         return Err(String::from("Notebook has no cells to edit"));
     }
@@ -4973,10 +4801,7 @@ fn source_lines(source: &str) -> Vec<serde_json::Value> {
     if source.is_empty() {
         return vec![serde_json::Value::String(String::new())];
     }
-    source
-        .split_inclusive('\n')
-        .map(|line| serde_json::Value::String(line.to_string()))
-        .collect()
+    source.split_inclusive('\n').map(|line| serde_json::Value::String(line.to_string())).collect()
 }
 
 fn format_notebook_edit_mode(mode: NotebookEditMode) -> String {
@@ -5022,8 +4847,8 @@ mod tests {
         agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
         execute_agent_with_spawn, execute_tool, final_assistant_text, mvp_tool_specs,
         permission_mode_from_plugin, persist_agent_terminal_state, push_output_block,
-        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName,
-        LaneFailureClass, SubagentToolExecutor,
+        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
+        SubagentToolExecutor,
     };
     use api::OutputContentBlock;
     use runtime::{
@@ -5051,11 +4876,7 @@ mod tests {
             .current_dir(cwd)
             .status()
             .unwrap_or_else(|error| panic!("git {} failed: {error}", args.join(" ")));
-        assert!(
-            status.success(),
-            "git {} exited with {status}",
-            args.join(" ")
-        );
+        assert!(status.success(), "git {} exited with {status}", args.join(" "));
     }
 
     fn init_git_repo(path: &Path) {
@@ -5075,19 +4896,14 @@ mod tests {
     }
 
     fn permission_policy_for_mode(mode: PermissionMode) -> PermissionPolicy {
-        mvp_tool_specs()
-            .into_iter()
-            .fold(PermissionPolicy::new(mode), |policy, spec| {
-                policy.with_tool_requirement(spec.name, spec.required_permission)
-            })
+        mvp_tool_specs().into_iter().fold(PermissionPolicy::new(mode), |policy, spec| {
+            policy.with_tool_requirement(spec.name, spec.required_permission)
+        })
     }
 
     #[test]
     fn exposes_mvp_tools() {
-        let names = mvp_tool_specs()
-            .into_iter()
-            .map(|spec| spec.name)
-            .collect::<Vec<_>>();
+        let names = mvp_tool_specs().into_iter().map(|spec| spec.name).collect::<Vec<_>>();
         assert!(names.contains(&"bash"));
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"WebFetch"));
@@ -5128,10 +4944,7 @@ mod tests {
         )
         .expect("WorkerCreate should succeed");
         let created_output: serde_json::Value = serde_json::from_str(&created).expect("json");
-        let worker_id = created_output["worker_id"]
-            .as_str()
-            .expect("worker id")
-            .to_string();
+        let worker_id = created_output["worker_id"].as_str().expect("worker id").to_string();
         assert_eq!(created_output["status"], "spawning");
         assert_eq!(created_output["trust_auto_resolve"], true);
 
@@ -5156,14 +4969,8 @@ mod tests {
         let observed_output: serde_json::Value = serde_json::from_str(&observed).expect("json");
         assert_eq!(observed_output["status"], "spawning");
         assert_eq!(observed_output["trust_gate_cleared"], true);
-        assert_eq!(
-            observed_output["events"][1]["payload"]["type"],
-            "trust_prompt"
-        );
-        assert_eq!(
-            observed_output["events"][2]["payload"]["resolution"],
-            "auto_allowlisted"
-        );
+        assert_eq!(observed_output["events"][1]["payload"]["type"], "trust_prompt");
+        assert_eq!(observed_output["events"][2]["payload"]["resolution"], "auto_allowlisted");
 
         let ready = execute_tool(
             "WorkerObserve",
@@ -5211,10 +5018,7 @@ mod tests {
         )
         .expect("WorkerCreate should succeed");
         let created_output: serde_json::Value = serde_json::from_str(&created).expect("json");
-        let worker_id = created_output["worker_id"]
-            .as_str()
-            .expect("worker id")
-            .to_string();
+        let worker_id = created_output["worker_id"].as_str().expect("worker id").to_string();
 
         execute_tool(
             "WorkerObserve",
@@ -5246,14 +5050,8 @@ mod tests {
         assert_eq!(recovered_output["status"], "ready_for_prompt");
         assert_eq!(recovered_output["last_error"]["kind"], "prompt_delivery");
         assert_eq!(recovered_output["replay_prompt"], "Investigate flaky boot");
-        assert_eq!(
-            recovered_output["events"][3]["payload"]["observed_target"],
-            "shell"
-        );
-        assert_eq!(
-            recovered_output["events"][4]["payload"]["recovery_armed"],
-            true
-        );
+        assert_eq!(recovered_output["events"][3]["payload"]["observed_target"], "shell");
+        assert_eq!(recovered_output["events"][4]["payload"]["recovery_armed"], true);
 
         let replayed = execute_tool(
             "WorkerSendPrompt",
@@ -5309,9 +5107,7 @@ mod tests {
             .expect_err("subagent write tool should be denied before dispatch");
 
         // then
-        assert!(error
-            .to_string()
-            .contains("requires workspace-write permission"));
+        assert!(error.to_string().contains("requires workspace-write permission"));
     }
 
     #[test]
@@ -5355,10 +5151,7 @@ mod tests {
             .expect("runtime tool permissions should resolve");
         assert_eq!(
             permissions,
-            vec![(
-                "mcp__demo__echo".to_string(),
-                runtime::PermissionMode::ReadOnly
-            )]
+            vec![("mcp__demo__echo".to_string(), runtime::PermissionMode::ReadOnly)]
         );
 
         let search = registry.search(
@@ -5385,10 +5178,7 @@ mod tests {
         let output = serde_json::to_value(search).expect("search output should serialize");
         assert_eq!(output["matches"][0], "mcp__demo__echo");
         assert_eq!(output["pending_mcp_servers"][0], "pending-server");
-        assert_eq!(
-            output["mcp_degraded"]["failed_servers"][0]["phase"],
-            "tool_discovery"
-        );
+        assert_eq!(output["mcp_degraded"]["failed_servers"][0]["phase"], "tool_discovery");
     }
 
     #[test]
@@ -5449,10 +5239,7 @@ mod tests {
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(output["url"], format!("http://{}/plain", server.addr()));
-        assert!(output["result"]
-            .as_str()
-            .expect("result")
-            .contains("plain text response"));
+        assert!(output["result"].as_str().expect("result").contains("plain text response"));
 
         let error = execute_tool(
             "WebFetch",
@@ -5481,10 +5268,7 @@ mod tests {
             )
         }));
 
-        std::env::set_var(
-            "CLAWD_WEB_SEARCH_BASE_URL",
-            format!("http://{}/search", server.addr()),
-        );
+        std::env::set_var("CLAWD_WEB_SEARCH_BASE_URL", format!("http://{}/search", server.addr()));
         let result = execute_tool(
             "WebSearch",
             &json!({
@@ -5511,9 +5295,7 @@ mod tests {
 
     #[test]
     fn web_search_handles_generic_links_and_invalid_base_url() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.contains("GET /fallback?q=generic+links "));
             HttpResponse::html(
@@ -5619,9 +5401,7 @@ mod tests {
 
     #[test]
     fn todo_write_persists_and_returns_previous_state() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos.json");
         std::env::set_var("CLAWD_TODO_STORE", &path);
 
@@ -5653,22 +5433,14 @@ mod tests {
         let _ = std::fs::remove_file(path);
 
         let second_output: serde_json::Value = serde_json::from_str(&second).expect("valid json");
-        assert_eq!(
-            second_output["oldTodos"].as_array().expect("array").len(),
-            2
-        );
-        assert_eq!(
-            second_output["newTodos"].as_array().expect("array").len(),
-            3
-        );
+        assert_eq!(second_output["oldTodos"].as_array().expect("array").len(), 2);
+        assert_eq!(second_output["newTodos"].as_array().expect("array").len(), 3);
         assert!(second_output["verificationNudgeNeeded"].is_null());
     }
 
     #[test]
     fn todo_write_rejects_invalid_payloads_and_sets_verification_nudge() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos-errors.json");
         std::env::set_var("CLAWD_TODO_STORE", &path);
 
@@ -5723,11 +5495,8 @@ mod tests {
         let home = temp_path("skills-home");
         let skill_dir = home.join(".agents").join("skills").join("help");
         fs::create_dir_all(&skill_dir).expect("skill dir should exist");
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "# help\n\nGuide on using oh-my-codex plugin\n",
-        )
-        .expect("skill file should exist");
+        fs::write(skill_dir.join("SKILL.md"), "# help\n\nGuide on using oh-my-codex plugin\n")
+            .expect("skill file should exist");
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &home);
 
@@ -5742,10 +5511,7 @@ mod tests {
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(output["skill"], "help");
-        assert!(output["path"]
-            .as_str()
-            .expect("path")
-            .ends_with("/help/SKILL.md"));
+        assert!(output["path"].as_str().expect("path").ends_with("/help/SKILL.md"));
         assert!(output["prompt"]
             .as_str()
             .expect("prompt")
@@ -5761,10 +5527,7 @@ mod tests {
         let dollar_output: serde_json::Value =
             serde_json::from_str(&dollar_result).expect("valid json");
         assert_eq!(dollar_output["skill"], "$help");
-        assert!(dollar_output["path"]
-            .as_str()
-            .expect("path")
-            .ends_with("/help/SKILL.md"));
+        assert!(dollar_output["path"].as_str().expect("path").ends_with("/help/SKILL.md"));
 
         if let Some(home) = original_home {
             std::env::set_var("HOME", home);
@@ -5776,11 +5539,9 @@ mod tests {
 
     #[test]
     fn tool_search_supports_keyword_and_select_queries() {
-        let keyword = execute_tool(
-            "ToolSearch",
-            &json!({"query": "web current", "max_results": 3}),
-        )
-        .expect("ToolSearch should succeed");
+        let keyword =
+            execute_tool("ToolSearch", &json!({"query": "web current", "max_results": 3}))
+                .expect("ToolSearch should succeed");
         let keyword_output: serde_json::Value = serde_json::from_str(&keyword).expect("valid json");
         let matches = keyword_output["matches"].as_array().expect("matches");
         assert!(matches.iter().any(|value| value == "WebSearch"));
@@ -5809,9 +5570,7 @@ mod tests {
 
     #[test]
     fn agent_persists_handoff_metadata() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-store");
         std::env::set_var("CLAWD_AGENT_STORE", &dir);
         let captured = Arc::new(Mutex::new(None::<AgentJob>));
@@ -5826,9 +5585,8 @@ mod tests {
                 model: None,
             },
             move |job| {
-                *captured_for_spawn
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job);
+                *captured_for_spawn.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(job);
                 Ok(())
             },
         )
@@ -5891,9 +5649,7 @@ mod tests {
 
     #[test]
     fn agent_fake_runner_can_persist_completion_and_failure() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-runner");
         std::env::set_var("CLAWD_AGENT_STORE", &dir);
 
@@ -5924,14 +5680,8 @@ mod tests {
             std::fs::read_to_string(&completed.output_file).expect("completed output should exist");
         assert!(completed_manifest.contains("\"status\": \"completed\""));
         assert!(completed_output.contains("Finished successfully"));
-        assert_eq!(
-            completed_manifest_json["laneEvents"][0]["event"],
-            "lane.started"
-        );
-        assert_eq!(
-            completed_manifest_json["laneEvents"][1]["event"],
-            "lane.finished"
-        );
+        assert_eq!(completed_manifest_json["laneEvents"][0]["event"], "lane.started");
+        assert_eq!(completed_manifest_json["laneEvents"][1]["event"], "lane.finished");
         assert!(completed_manifest_json["currentBlocker"].is_null());
 
         let failed = execute_agent_with_spawn(
@@ -5963,22 +5713,10 @@ mod tests {
         assert!(failed_manifest.contains("simulated failure"));
         assert!(failed_output.contains("simulated failure"));
         assert!(failed_output.contains("failure_class: tool_runtime"));
-        assert_eq!(
-            failed_manifest_json["currentBlocker"]["failureClass"],
-            "tool_runtime"
-        );
-        assert_eq!(
-            failed_manifest_json["laneEvents"][1]["event"],
-            "lane.blocked"
-        );
-        assert_eq!(
-            failed_manifest_json["laneEvents"][2]["event"],
-            "lane.failed"
-        );
-        assert_eq!(
-            failed_manifest_json["laneEvents"][2]["failureClass"],
-            "tool_runtime"
-        );
+        assert_eq!(failed_manifest_json["currentBlocker"]["failureClass"], "tool_runtime");
+        assert_eq!(failed_manifest_json["laneEvents"][1]["event"], "lane.blocked");
+        assert_eq!(failed_manifest_json["laneEvents"][2]["event"], "lane.failed");
+        assert_eq!(failed_manifest_json["laneEvents"][2]["failureClass"], "tool_runtime");
 
         let spawn_error = execute_agent_with_spawn(
             AgentInput {
@@ -5999,19 +5737,14 @@ mod tests {
             .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
             .find_map(|path| {
                 let contents = std::fs::read_to_string(&path).ok()?;
-                contents
-                    .contains("\"name\": \"spawn-error\"")
-                    .then_some(contents)
+                contents.contains("\"name\": \"spawn-error\"").then_some(contents)
             })
             .expect("failed manifest should still be written");
         let spawn_error_manifest_json: serde_json::Value =
             serde_json::from_str(&spawn_error_manifest).expect("spawn error manifest json");
         assert!(spawn_error_manifest.contains("\"status\": \"failed\""));
         assert!(spawn_error_manifest.contains("thread creation failed"));
-        assert_eq!(
-            spawn_error_manifest_json["currentBlocker"]["failureClass"],
-            "infra"
-        );
+        assert_eq!(spawn_error_manifest_json["currentBlocker"]["failureClass"], "infra");
 
         std::env::remove_var("CLAWD_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
@@ -6020,33 +5753,15 @@ mod tests {
     #[test]
     fn lane_failure_taxonomy_normalizes_common_blockers() {
         let cases = [
-            (
-                "prompt delivery failed in tmux pane",
-                LaneFailureClass::PromptDelivery,
-            ),
-            (
-                "trust prompt is still blocking startup",
-                LaneFailureClass::TrustGate,
-            ),
-            (
-                "branch stale against main after divergence",
-                LaneFailureClass::BranchDivergence,
-            ),
-            (
-                "compile failed after cargo check",
-                LaneFailureClass::Compile,
-            ),
+            ("prompt delivery failed in tmux pane", LaneFailureClass::PromptDelivery),
+            ("trust prompt is still blocking startup", LaneFailureClass::TrustGate),
+            ("branch stale against main after divergence", LaneFailureClass::BranchDivergence),
+            ("compile failed after cargo check", LaneFailureClass::Compile),
             ("targeted tests failed", LaneFailureClass::Test),
             ("plugin bootstrap failed", LaneFailureClass::PluginStartup),
             ("mcp handshake timed out", LaneFailureClass::McpHandshake),
-            (
-                "mcp startup failed before listing tools",
-                LaneFailureClass::McpStartup,
-            ),
-            (
-                "gateway routing rejected the request",
-                LaneFailureClass::GatewayRouting,
-            ),
+            ("mcp startup failed before listing tools", LaneFailureClass::McpStartup),
+            ("gateway routing rejected the request", LaneFailureClass::GatewayRouting),
             ("tool failed: denied tool execution from hook", LaneFailureClass::ToolRuntime),
             ("thread creation failed", LaneFailureClass::Infra),
         ];
@@ -6136,18 +5851,13 @@ mod tests {
 
     #[test]
     fn subagent_runtime_executes_tool_loop_with_isolated_session() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("subagent-input.txt");
         std::fs::write(&path, "hello from child").expect("write input file");
 
         let mut runtime = ConversationRuntime::new(
             Session::new(),
-            MockSubagentApiClient {
-                calls: 0,
-                input_path: path.display().to_string(),
-            },
+            MockSubagentApiClient { calls: 0, input_path: path.display().to_string() },
             SubagentToolExecutor::new(BTreeSet::from([String::from("read_file")])),
             agent_permission_policy(),
             vec![String::from("system prompt")],
@@ -6157,20 +5867,14 @@ mod tests {
             .run_turn("Inspect the delegated file", None)
             .expect("subagent loop should succeed");
 
-        assert_eq!(
-            final_assistant_text(&summary),
-            "Scope: completed mock review"
-        );
-        assert!(runtime
-            .session()
-            .messages
-            .iter()
-            .flat_map(|message| message.blocks.iter())
-            .any(|block| matches!(
+        assert_eq!(final_assistant_text(&summary), "Scope: completed mock review");
+        assert!(runtime.session().messages.iter().flat_map(|message| message.blocks.iter()).any(
+            |block| matches!(
                 block,
                 runtime::ContentBlock::ToolResult { output, .. }
                     if output.contains("hello from child")
-            )));
+            )
+        ));
 
         let _ = std::fs::remove_file(path);
     }
@@ -6334,10 +6038,7 @@ mod tests {
             .expect("bash failure should still return structured output");
         let failure_output: serde_json::Value = serde_json::from_str(&failure).expect("json");
         assert_eq!(failure_output["returnCodeInterpretation"], "exit_code:7");
-        assert!(failure_output["stderr"]
-            .as_str()
-            .expect("stderr")
-            .contains("oops"));
+        assert!(failure_output["stderr"].as_str().expect("stderr").contains("oops"));
 
         let timeout = execute_tool("bash", &json!({ "command": "sleep 1", "timeout": 10 }))
             .expect("bash timeout should return output");
@@ -6349,11 +6050,9 @@ mod tests {
             .expect("stderr")
             .contains("Command exceeded timeout"));
 
-        let background = execute_tool(
-            "bash",
-            &json!({ "command": "sleep 1", "run_in_background": true }),
-        )
-        .expect("bash background should succeed");
+        let background =
+            execute_tool("bash", &json!({ "command": "sleep 1", "run_in_background": true }))
+                .expect("bash background should succeed");
         let background_output: serde_json::Value = serde_json::from_str(&background).expect("json");
         assert!(background_output["backgroundTaskId"].as_str().is_some());
         assert_eq!(background_output["noOutputExpected"], true);
@@ -6361,45 +6060,27 @@ mod tests {
 
     #[test]
     fn bash_workspace_tests_are_blocked_when_branch_is_behind_main() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = temp_path("workspace-test-preflight");
         let original_dir = std::env::current_dir().expect("cwd");
         init_git_repo(&root);
         run_git(&root, &["checkout", "-b", "feature/stale-tests"]);
         run_git(&root, &["checkout", "main"]);
-        commit_file(
-            &root,
-            "hotfix.txt",
-            "fix from main\n",
-            "fix: unblock workspace tests",
-        );
+        commit_file(&root, "hotfix.txt", "fix from main\n", "fix: unblock workspace tests");
         run_git(&root, &["checkout", "feature/stale-tests"]);
         std::env::set_current_dir(&root).expect("set cwd");
 
-        let output = execute_tool(
-            "bash",
-            &json!({ "command": "cargo test --workspace --all-targets" }),
-        )
-        .expect("preflight should return structured output");
+        let output =
+            execute_tool("bash", &json!({ "command": "cargo test --workspace --all-targets" }))
+                .expect("preflight should return structured output");
         let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
-        assert_eq!(
-            output_json["returnCodeInterpretation"],
-            "preflight_blocked:branch_divergence"
-        );
+        assert_eq!(output_json["returnCodeInterpretation"], "preflight_blocked:branch_divergence");
         assert!(output_json["stderr"]
             .as_str()
             .expect("stderr")
             .contains("branch divergence detected before workspace tests"));
-        assert_eq!(
-            output_json["structuredContent"][0]["event"],
-            "branch.stale_against_main"
-        );
-        assert_eq!(
-            output_json["structuredContent"][0]["failureClass"],
-            "branch_divergence"
-        );
+        assert_eq!(output_json["structuredContent"][0]["event"], "branch.stale_against_main");
+        assert_eq!(output_json["structuredContent"][0]["failureClass"], "branch_divergence");
         assert_eq!(
             output_json["structuredContent"][0]["data"]["missingCommits"][0],
             "fix: unblock workspace tests"
@@ -6411,20 +6092,13 @@ mod tests {
 
     #[test]
     fn bash_targeted_tests_skip_branch_preflight() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = temp_path("targeted-test-no-preflight");
         let original_dir = std::env::current_dir().expect("cwd");
         init_git_repo(&root);
         run_git(&root, &["checkout", "-b", "feature/targeted-tests"]);
         run_git(&root, &["checkout", "main"]);
-        commit_file(
-            &root,
-            "hotfix.txt",
-            "fix from main\n",
-            "fix: only broad tests should block",
-        );
+        commit_file(&root, "hotfix.txt", "fix from main\n", "fix: only broad tests should block");
         run_git(&root, &["checkout", "feature/targeted-tests"]);
         std::env::set_current_dir(&root).expect("set cwd");
 
@@ -6434,10 +6108,7 @@ mod tests {
         )
         .expect("targeted commands should still execute");
         let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
-        assert_ne!(
-            output_json["returnCodeInterpretation"],
-            "preflight_blocked:branch_divergence"
-        );
+        assert_ne!(output_json["returnCodeInterpretation"], "preflight_blocked:branch_divergence");
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         let _ = std::fs::remove_dir_all(root);
@@ -6445,9 +6116,7 @@ mod tests {
 
     #[test]
     fn file_tools_cover_read_write_and_edit_behaviors() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = temp_path("fs-suite");
         fs::create_dir_all(&root).expect("create root");
         let original_dir = std::env::current_dir().expect("cwd");
@@ -6488,11 +6157,9 @@ mod tests {
         assert_eq!(read_slice_output["file"]["content"], "beta");
         assert_eq!(read_slice_output["file"]["startLine"], 2);
 
-        let read_past_end = execute_tool(
-            "read_file",
-            &json!({ "path": "nested/demo.txt", "offset": 50 }),
-        )
-        .expect("read past EOF should succeed");
+        let read_past_end =
+            execute_tool("read_file", &json!({ "path": "nested/demo.txt", "offset": 50 }))
+                .expect("read past EOF should succeed");
         let read_past_end_output: serde_json::Value =
             serde_json::from_str(&read_past_end).expect("json");
         assert_eq!(read_past_end_output["file"]["content"], "");
@@ -6556,19 +6223,14 @@ mod tests {
 
     #[test]
     fn glob_and_grep_tools_cover_success_and_errors() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = temp_path("search-suite");
         fs::create_dir_all(root.join("nested")).expect("create root");
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&root).expect("set cwd");
 
-        fs::write(
-            root.join("nested/lib.rs"),
-            "fn main() {}\nlet alpha = 1;\nlet alpha = 2;\n",
-        )
-        .expect("write rust file");
+        fs::write(root.join("nested/lib.rs"), "fn main() {}\nlet alpha = 1;\nlet alpha = 2;\n")
+            .expect("write rust file");
         fs::write(root.join("nested/notes.txt"), "alpha\nbeta\n").expect("write txt file");
 
         let globbed = execute_tool("glob_search", &json!({ "pattern": "nested/*.rs" }))
@@ -6615,11 +6277,9 @@ mod tests {
         let grep_count_output: serde_json::Value = serde_json::from_str(&grep_count).expect("json");
         assert_eq!(grep_count_output["numMatches"], 3);
 
-        let grep_error = execute_tool(
-            "grep_search",
-            &json!({ "pattern": "(alpha", "path": "nested" }),
-        )
-        .expect_err("invalid regex should fail");
+        let grep_error =
+            execute_tool("grep_search", &json!({ "pattern": "(alpha", "path": "nested" }))
+                .expect_err("invalid regex should fail");
         assert!(!grep_error.is_empty());
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
@@ -6634,10 +6294,7 @@ mod tests {
         let elapsed = started.elapsed();
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
         assert_eq!(output["duration_ms"], 20);
-        assert!(output["message"]
-            .as_str()
-            .expect("message")
-            .contains("Slept for 20ms"));
+        assert!(output["message"].as_str().expect("message").contains("Slept for 20ms"));
         assert!(elapsed >= Duration::from_millis(15));
     }
 
@@ -6686,9 +6343,7 @@ mod tests {
 
     #[test]
     fn config_reads_and_writes_supported_values() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::env::temp_dir().join(format!(
             "clawd-config-{}",
             std::time::SystemTime::now()
@@ -6700,11 +6355,8 @@ mod tests {
         let cwd = root.join("cwd");
         std::fs::create_dir_all(home.join(".claw")).expect("home dir");
         std::fs::create_dir_all(cwd.join(".claw")).expect("cwd dir");
-        std::fs::write(
-            home.join(".claw").join("settings.json"),
-            r#"{"verbose":false}"#,
-        )
-        .expect("write global settings");
+        std::fs::write(home.join(".claw").join("settings.json"), r#"{"verbose":false}"#)
+            .expect("write global settings");
 
         let original_home = std::env::var("HOME").ok();
         let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
@@ -6717,11 +6369,9 @@ mod tests {
         let get_output: serde_json::Value = serde_json::from_str(&get).expect("json");
         assert_eq!(get_output["value"], false);
 
-        let set = execute_tool(
-            "Config",
-            &json!({"setting": "permissions.defaultMode", "value": "plan"}),
-        )
-        .expect("set config");
+        let set =
+            execute_tool("Config", &json!({"setting": "permissions.defaultMode", "value": "plan"}))
+                .expect("set config");
         let set_output: serde_json::Value = serde_json::from_str(&set).expect("json");
         assert_eq!(set_output["operation"], "set");
         assert_eq!(set_output["newValue"], "plan");
@@ -6752,9 +6402,7 @@ mod tests {
 
     #[test]
     fn enter_and_exit_plan_mode_round_trip_existing_local_override() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::env::temp_dir().join(format!(
             "clawd-plan-mode-{}",
             std::time::SystemTime::now()
@@ -6805,11 +6453,7 @@ mod tests {
         let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.local.json"))
             .expect("local settings after exit");
         assert!(local_settings.contains(r#""defaultMode": "acceptEdits""#));
-        assert!(!cwd
-            .join(".claw")
-            .join("tool-state")
-            .join("plan-mode.json")
-            .exists());
+        assert!(!cwd.join(".claw").join("tool-state").join("plan-mode.json").exists());
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         match original_home {
@@ -6825,9 +6469,7 @@ mod tests {
 
     #[test]
     fn exit_plan_mode_clears_override_when_enter_created_it_from_empty_local_state() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = std::env::temp_dir().join(format!(
             "clawd-plan-mode-empty-{}",
             std::time::SystemTime::now()
@@ -6866,11 +6508,7 @@ mod tests {
             None,
             "permissions override should be removed on exit"
         );
-        assert!(!cwd
-            .join(".claw")
-            .join("tool-state")
-            .join("plan-mode.json")
-            .exists());
+        assert!(!cwd.join(".claw").join("tool-state").join("plan-mode.json").exists());
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         match original_home {
@@ -6947,9 +6585,7 @@ mod tests {
 
     #[test]
     fn powershell_runs_via_stub_shell() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!(
             "clawd-pwsh-bin-{}",
             std::time::SystemTime::now()
@@ -6968,19 +6604,13 @@ printf 'pwsh:%s' "$1"
 "#,
         )
         .expect("write script");
-        std::process::Command::new("/bin/chmod")
-            .arg("+x")
-            .arg(&script)
-            .status()
-            .expect("chmod");
+        std::process::Command::new("/bin/chmod").arg("+x").arg(&script).status().expect("chmod");
         let original_path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{}", dir.display(), original_path));
 
-        let result = execute_tool(
-            "PowerShell",
-            &json!({"command": "Write-Output hello", "timeout": 1000}),
-        )
-        .expect("PowerShell should succeed");
+        let result =
+            execute_tool("PowerShell", &json!({"command": "Write-Output hello", "timeout": 1000}))
+                .expect("PowerShell should succeed");
 
         let background = execute_tool(
             "PowerShell",
@@ -7003,9 +6633,7 @@ printf 'pwsh:%s' "$1"
 
     #[test]
     fn powershell_errors_when_shell_is_missing() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let original_path = std::env::var("PATH").unwrap_or_default();
         let empty_dir = std::env::temp_dir().join(format!(
             "clawd-empty-bin-{}",
@@ -7030,10 +6658,11 @@ printf 'pwsh:%s' "$1"
         use runtime::permission_enforcer::PermissionEnforcer;
         use runtime::PermissionPolicy;
 
-        let policy = mvp_tool_specs().into_iter().fold(
-            PermissionPolicy::new(runtime::PermissionMode::ReadOnly),
-            |policy, spec| policy.with_tool_requirement(spec.name, spec.required_permission),
-        );
+        let policy = mvp_tool_specs()
+            .into_iter()
+            .fold(PermissionPolicy::new(runtime::PermissionMode::ReadOnly), |policy, spec| {
+                policy.with_tool_requirement(spec.name, spec.required_permission)
+            });
         let mut registry = super::GlobalToolRegistry::builtin();
         registry.set_enforcer(PermissionEnforcer::new(policy));
         registry
@@ -7045,25 +6674,16 @@ printf 'pwsh:%s' "$1"
         let err = registry
             .execute("bash", &json!({ "command": "echo hi" }))
             .expect_err("bash should be denied in read-only mode");
-        assert!(
-            err.contains("current mode is read-only"),
-            "should cite active mode: {err}"
-        );
+        assert!(err.contains("current mode is read-only"), "should cite active mode: {err}");
     }
 
     #[test]
     fn given_read_only_enforcer_when_write_file_then_denied() {
         let registry = read_only_registry();
         let err = registry
-            .execute(
-                "write_file",
-                &json!({ "path": "/tmp/x.txt", "content": "x" }),
-            )
+            .execute("write_file", &json!({ "path": "/tmp/x.txt", "content": "x" }))
             .expect_err("write_file should be denied in read-only mode");
-        assert!(
-            err.contains("current mode is read-only"),
-            "should cite active mode: {err}"
-        );
+        assert!(err.contains("current mode is read-only"), "should cite active mode: {err}");
     }
 
     #[test]
@@ -7075,17 +6695,12 @@ printf 'pwsh:%s' "$1"
                 &json!({ "path": "/tmp/x.txt", "old_string": "a", "new_string": "b" }),
             )
             .expect_err("edit_file should be denied in read-only mode");
-        assert!(
-            err.contains("current mode is read-only"),
-            "should cite active mode: {err}"
-        );
+        assert!(err.contains("current mode is read-only"), "should cite active mode: {err}");
     }
 
     #[test]
     fn given_read_only_enforcer_when_read_file_then_not_permission_denied() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = temp_path("perm-read");
         fs::create_dir_all(&root).expect("create root");
         let file = root.join("readable.txt");
@@ -7102,17 +6717,12 @@ printf 'pwsh:%s' "$1"
     fn given_read_only_enforcer_when_glob_search_then_not_permission_denied() {
         let registry = read_only_registry();
         let result = registry.execute("glob_search", &json!({ "pattern": "*.rs" }));
-        assert!(
-            result.is_ok(),
-            "glob_search should be allowed in read-only mode: {result:?}"
-        );
+        assert!(result.is_ok(), "glob_search should be allowed in read-only mode: {result:?}");
     }
 
     #[test]
     fn given_no_enforcer_when_bash_then_executes_normally() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let registry = super::GlobalToolRegistry::builtin();
         let result = registry
             .execute("bash", &json!({ "command": "printf 'ok'" }))
@@ -7143,10 +6753,7 @@ printf 'pwsh:%s' "$1"
         assert_eq!(output["prompt"], "Ship packetized runtime task");
         assert_eq!(output["description"], "runtime/task system");
         assert_eq!(output["task_packet"]["repo"], "claw-code-parity");
-        assert_eq!(
-            output["task_packet"]["acceptance_tests"][1],
-            "cargo test --workspace"
-        );
+        assert_eq!(output["task_packet"]["acceptance_tests"][1], "cargo test --workspace");
     }
 
     struct TestServer {
@@ -7158,9 +6765,7 @@ printf 'pwsh:%s' "$1"
     impl TestServer {
         fn spawn(handler: Arc<dyn Fn(&str) -> HttpResponse + Send + Sync + 'static>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-            listener
-                .set_nonblocking(true)
-                .expect("set nonblocking listener");
+            listener.set_nonblocking(true).expect("set nonblocking listener");
             let addr = listener.local_addr().expect("local addr");
             let (tx, rx) = std::sync::mpsc::channel::<()>();
 
@@ -7176,9 +6781,7 @@ printf 'pwsh:%s' "$1"
                         let request = String::from_utf8_lossy(&buffer[..size]).into_owned();
                         let request_line = request.lines().next().unwrap_or_default().to_string();
                         let response = handler(&request_line);
-                        stream
-                            .write_all(response.to_bytes().as_slice())
-                            .expect("write response");
+                        stream.write_all(response.to_bytes().as_slice()).expect("write response");
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -7187,11 +6790,7 @@ printf 'pwsh:%s' "$1"
                 }
             });
 
-            Self {
-                addr,
-                shutdown: Some(tx),
-                handle: Some(handle),
-            }
+            Self { addr, shutdown: Some(tx), handle: Some(handle) }
         }
 
         fn addr(&self) -> SocketAddr {

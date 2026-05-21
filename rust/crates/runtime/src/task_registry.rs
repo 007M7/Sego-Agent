@@ -63,10 +63,7 @@ struct RegistryInner {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 impl TaskRegistry {
@@ -76,11 +73,7 @@ impl TaskRegistry {
     }
 
     pub fn create(&self, prompt: &str, description: Option<&str>) -> Task {
-        self.create_task(
-            prompt.to_owned(),
-            description.map(str::to_owned),
-            None,
-        )
+        self.create_task(prompt.to_owned(), description.map(str::to_owned), None)
     }
 
     pub fn create_from_packet(
@@ -88,11 +81,7 @@ impl TaskRegistry {
         packet: TaskPacket,
     ) -> Result<Task, TaskPacketValidationError> {
         let packet = validate_packet(packet)?.into_inner();
-        Ok(self.create_task(
-            packet.objective.clone(),
-            Some(packet.scope.clone()),
-            Some(packet),
-        ))
+        Ok(self.create_task(packet.objective.clone(), Some(packet.scope.clone()), Some(packet)))
     }
 
     fn create_task(
@@ -138,10 +127,8 @@ impl TaskRegistry {
 
     pub fn stop(&self, task_id: &str) -> Result<Task, String> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task =
+            inner.tasks.get_mut(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
 
         match task.status {
             TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Stopped => {
@@ -160,10 +147,8 @@ impl TaskRegistry {
 
     pub fn update(&self, task_id: &str, message: &str) -> Result<Task, String> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task =
+            inner.tasks.get_mut(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
 
         task.messages.push(TaskMessage {
             role: String::from("user"),
@@ -176,19 +161,14 @@ impl TaskRegistry {
 
     pub fn output(&self, task_id: &str) -> Result<String, String> {
         let inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task = inner.tasks.get(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
         Ok(task.output.clone())
     }
 
     pub fn append_output(&self, task_id: &str, output: &str) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task =
+            inner.tasks.get_mut(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
         task.output.push_str(output);
         task.updated_at = now_secs();
         Ok(())
@@ -196,10 +176,8 @@ impl TaskRegistry {
 
     pub fn set_status(&self, task_id: &str, status: TaskStatus) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task =
+            inner.tasks.get_mut(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
         task.status = status;
         task.updated_at = now_secs();
         Ok(())
@@ -207,10 +185,8 @@ impl TaskRegistry {
 
     pub fn assign_team(&self, task_id: &str, team_id: &str) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
-        let task = inner
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        let task =
+            inner.tasks.get_mut(task_id).ok_or_else(|| format!("task not found: {task_id}"))?;
         task.team_id = Some(team_id.to_owned());
         task.updated_at = now_secs();
         Ok(())
@@ -300,9 +276,7 @@ mod tests {
     fn stops_running_task() {
         let registry = TaskRegistry::new();
         let task = registry.create("Stoppable", None);
-        registry
-            .set_status(&task.task_id, TaskStatus::Running)
-            .unwrap();
+        registry.set_status(&task.task_id, TaskStatus::Running).unwrap();
 
         let stopped = registry.stop(&task.task_id).expect("stop should succeed");
         assert_eq!(stopped.status, TaskStatus::Stopped);
@@ -316,9 +290,8 @@ mod tests {
     fn updates_task_with_messages() {
         let registry = TaskRegistry::new();
         let task = registry.create("Messageable", None);
-        let updated = registry
-            .update(&task.task_id, "Here's more context")
-            .expect("update should succeed");
+        let updated =
+            registry.update(&task.task_id, "Here's more context").expect("update should succeed");
         assert_eq!(updated.messages.len(), 1);
         assert_eq!(updated.messages[0].content, "Here's more context");
         assert_eq!(updated.messages[0].role, "user");
@@ -328,12 +301,8 @@ mod tests {
     fn appends_and_retrieves_output() {
         let registry = TaskRegistry::new();
         let task = registry.create("Output task", None);
-        registry
-            .append_output(&task.task_id, "line 1\n")
-            .expect("append should succeed");
-        registry
-            .append_output(&task.task_id, "line 2\n")
-            .expect("append should succeed");
+        registry.append_output(&task.task_id, "line 1\n").expect("append should succeed");
+        registry.append_output(&task.task_id, "line 2\n").expect("append should succeed");
 
         let output = registry.output(&task.task_id).expect("output should exist");
         assert_eq!(output, "line 1\nline 2\n");
@@ -343,9 +312,7 @@ mod tests {
     fn assigns_team_and_removes_task() {
         let registry = TaskRegistry::new();
         let task = registry.create("Team task", None);
-        registry
-            .assign_team(&task.task_id, "team_abc")
-            .expect("assign should succeed");
+        registry.assign_team(&task.task_id, "team_abc").expect("assign should succeed");
 
         let fetched = registry.get(&task.task_id).unwrap();
         assert_eq!(fetched.team_id.as_deref(), Some("team_abc"));
@@ -363,9 +330,7 @@ mod tests {
         assert!(registry.update("nonexistent", "msg").is_err());
         assert!(registry.output("nonexistent").is_err());
         assert!(registry.append_output("nonexistent", "data").is_err());
-        assert!(registry
-            .set_status("nonexistent", TaskStatus::Running)
-            .is_err());
+        assert!(registry.set_status("nonexistent", TaskStatus::Running).is_err());
     }
 
     #[test]
@@ -380,10 +345,8 @@ mod tests {
         ];
 
         // when
-        let rendered: Vec<_> = cases
-            .into_iter()
-            .map(|(status, expected)| (status.to_string(), expected))
-            .collect();
+        let rendered: Vec<_> =
+            cases.into_iter().map(|(status, expected)| (status.to_string(), expected)).collect();
 
         // then
         assert_eq!(
@@ -421,9 +384,7 @@ mod tests {
         // given
         let registry = TaskRegistry::new();
         let task = registry.create("failed", None);
-        registry
-            .set_status(&task.task_id, TaskStatus::Failed)
-            .expect("set status should succeed");
+        registry.set_status(&task.task_id, TaskStatus::Failed).expect("set status should succeed");
 
         // when
         let result = registry.stop(&task.task_id);

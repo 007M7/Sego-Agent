@@ -35,21 +35,9 @@ impl HookEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookProgressEvent {
-    Started {
-        event: HookEvent,
-        tool_name: String,
-        command: String,
-    },
-    Completed {
-        event: HookEvent,
-        tool_name: String,
-        command: String,
-    },
-    Cancelled {
-        event: HookEvent,
-        tool_name: String,
-        command: String,
-    },
+    Started { event: HookEvent, tool_name: String, command: String },
+    Completed { event: HookEvent, tool_name: String, command: String },
+    Cancelled { event: HookEvent, tool_name: String, command: String },
 }
 
 pub trait HookProgressReporter {
@@ -326,10 +314,7 @@ impl HookRunner {
                 denied: false,
                 failed: false,
                 cancelled: true,
-                messages: vec![format!(
-                    "{} hook cancelled before execution",
-                    event.as_str()
-                )],
+                messages: vec![format!("{} hook cancelled before execution", event.as_str())],
                 permission_override: None,
                 permission_reason: None,
                 updated_input: None,
@@ -570,10 +555,7 @@ fn parse_hook_output(stdout: &str) -> ParsedHookOutput {
                 _ => None,
             };
         }
-        if let Some(reason) = specific
-            .get("permissionDecisionReason")
-            .and_then(Value::as_str)
-        {
+        if let Some(reason) = specific.get("permissionDecisionReason").and_then(Value::as_str) {
             parsed.permission_reason = Some(reason.to_string());
         }
         if let Some(updated_input) = specific.get("updatedInput") {
@@ -633,7 +615,7 @@ fn format_hook_failure(command: &str, code: i32, stdout: Option<&str>, stderr: &
 
 fn shell_command(command: &str) -> CommandWithStdin {
     #[cfg(windows)]
-    let mut command_builder = {
+    let command_builder = {
         let mut command_builder = Command::new("cmd");
         command_builder.arg("/C").arg(command);
         CommandWithStdin::new(command_builder)
@@ -777,10 +759,7 @@ mod tests {
 
         // then
         assert!(result.is_failed());
-        assert!(result
-            .messages()
-            .iter()
-            .any(|message| message.contains("warning hook")));
+        assert!(result.messages().iter().any(|message| message.contains("warning hook")));
     }
 
     #[test]
@@ -795,10 +774,7 @@ mod tests {
 
         let result = runner.run_pre_tool_use("bash", r#"{"command":"pwd"}"#);
 
-        assert_eq!(
-            result.permission_override(),
-            Some(PermissionOverride::Allow)
-        );
+        assert_eq!(result.permission_override(), Some(PermissionOverride::Allow));
         assert_eq!(result.permission_reason(), Some("hook ok"));
         assert_eq!(result.updated_input(), Some(r#"{"command":"git status"}"#));
         assert!(result.messages().iter().any(|message| message == "updated"));
@@ -840,24 +816,15 @@ mod tests {
 
         // then
         assert!(result.is_failed());
-        assert!(result
-            .messages()
-            .iter()
-            .any(|message| message.contains("broken failure hook")));
-        assert!(!result
-            .messages()
-            .iter()
-            .any(|message| message == "later failure hook"));
+        assert!(result.messages().iter().any(|message| message.contains("broken failure hook")));
+        assert!(!result.messages().iter().any(|message| message == "later failure hook"));
     }
 
     #[test]
     fn executes_hooks_in_configured_order() {
         // given
         let runner = HookRunner::new(RuntimeHookConfig::new(
-            vec![
-                shell_snippet("printf 'first'"),
-                shell_snippet("printf 'second'"),
-            ],
+            vec![shell_snippet("printf 'first'"), shell_snippet("printf 'second'")],
             Vec::new(),
             Vec::new(),
         ));
@@ -872,10 +839,7 @@ mod tests {
         );
 
         // then
-        assert_eq!(
-            result,
-            HookRunResult::allow(vec!["first".to_string(), "second".to_string()])
-        );
+        assert_eq!(result, HookRunResult::allow(vec!["first".to_string(), "second".to_string()]));
         assert_eq!(reporter.events.len(), 4);
         assert!(matches!(
             &reporter.events[0],
@@ -915,10 +879,7 @@ mod tests {
     fn stops_running_hooks_after_failure() {
         // given
         let runner = HookRunner::new(RuntimeHookConfig::new(
-            vec![
-                shell_snippet("printf 'broken'; exit 1"),
-                shell_snippet("printf 'later'"),
-            ],
+            vec![shell_snippet("printf 'broken'; exit 1"), shell_snippet("printf 'later'")],
             Vec::new(),
             Vec::new(),
         ));
@@ -928,10 +889,7 @@ mod tests {
 
         // then
         assert!(result.is_failed());
-        assert!(result
-            .messages()
-            .iter()
-            .any(|message| message.contains("broken")));
+        assert!(result.messages().iter().any(|message| message.contains("broken")));
         assert!(!result.messages().iter().any(|message| message == "later"));
     }
 
@@ -961,17 +919,11 @@ mod tests {
         assert!(result.is_cancelled());
         assert!(reporter.events.iter().any(|event| matches!(
             event,
-            HookProgressEvent::Started {
-                event: HookEvent::PreToolUse,
-                ..
-            }
+            HookProgressEvent::Started { event: HookEvent::PreToolUse, .. }
         )));
         assert!(reporter.events.iter().any(|event| matches!(
             event,
-            HookProgressEvent::Cancelled {
-                event: HookEvent::PreToolUse,
-                ..
-            }
+            HookProgressEvent::Cancelled { event: HookEvent::PreToolUse, .. }
         )));
     }
 

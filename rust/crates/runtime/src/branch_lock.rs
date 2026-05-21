@@ -28,10 +28,7 @@ pub struct BranchLockRegistry {
 impl BranchLockRegistry {
     #[must_use]
     pub fn new(workspace_root: impl AsRef<Path>) -> Self {
-        Self {
-            locks: HashMap::new(),
-            lock_dir: workspace_root.as_ref().join(LOCK_DIR),
-        }
+        Self { locks: HashMap::new(), lock_dir: workspace_root.as_ref().join(LOCK_DIR) }
     }
 
     /// Try to acquire a lock for the given scope. Returns true if acquired,
@@ -41,9 +38,7 @@ impl BranchLockRegistry {
 
         if let Some(existing) = self.locks.get(scope) {
             let now = now_secs();
-            if existing.locked_at_secs + LOCK_TTL_SECONDS > now
-                && existing.agent_id != agent_id
-            {
+            if existing.locked_at_secs + LOCK_TTL_SECONDS > now && existing.agent_id != agent_id {
                 return false; // Still locked by another agent
             }
             // Lock expired or same agent — allow re-acquire
@@ -79,26 +74,21 @@ impl BranchLockRegistry {
     /// Check if a scope is currently locked.
     #[must_use]
     pub fn is_locked(&self, scope: &str) -> bool {
-        self.locks.get(scope).is_some_and(|lock| {
-            lock.locked_at_secs + LOCK_TTL_SECONDS > now_secs()
-        })
+        self.locks
+            .get(scope)
+            .is_some_and(|lock| lock.locked_at_secs + LOCK_TTL_SECONDS > now_secs())
     }
 
     /// List all active locks.
     #[must_use]
     pub fn active_locks(&self) -> Vec<&BranchLock> {
         let now = now_secs();
-        self.locks
-            .values()
-            .filter(|lock| lock.locked_at_secs + LOCK_TTL_SECONDS > now)
-            .collect()
+        self.locks.values().filter(|lock| lock.locked_at_secs + LOCK_TTL_SECONDS > now).collect()
     }
 
     fn refresh(&mut self) {
         let now = now_secs();
-        self.locks.retain(|_, lock| {
-            lock.locked_at_secs + LOCK_TTL_SECONDS > now
-        });
+        self.locks.retain(|_, lock| lock.locked_at_secs + LOCK_TTL_SECONDS > now);
     }
 
     fn persist_lock(&self, lock: &BranchLock) -> Result<(), std::io::Error> {
@@ -121,10 +111,7 @@ impl BranchLockRegistry {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -174,9 +161,6 @@ mod tests {
     }
 
     fn rand_id() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
     }
 }

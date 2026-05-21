@@ -26,24 +26,10 @@ pub enum MessageRole {
 /// Structured message content stored inside a [`Session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: String,
-    },
-    ToolResult {
-        tool_use_id: String,
-        tool_name: String,
-        output: String,
-        is_error: bool,
-    },
-    Thinking {
-        thinking: String,
-        signature: Option<String>,
-    },
+    Text { text: String },
+    ToolUse { id: String, name: String, input: String },
+    ToolResult { tool_use_id: String, tool_name: String, output: String, is_error: bool },
+    Thinking { thinking: String, signature: Option<String> },
 }
 
 /// One conversation message with optional token-usage metadata.
@@ -174,9 +160,7 @@ impl Session {
         let contents = fs::read_to_string(path)?;
         let session = match JsonValue::parse(&contents) {
             Ok(value)
-                if value
-                    .as_object()
-                    .is_some_and(|object| object.contains_key("messages")) =>
+                if value.as_object().is_some_and(|object| object.contains_key("messages")) =>
             {
                 Self::from_json(&value)?
             }
@@ -208,11 +192,8 @@ impl Session {
     pub fn record_compaction(&mut self, summary: impl Into<String>, removed_message_count: usize) {
         self.touch();
         let count = self.compaction.as_ref().map_or(1, |value| value.count + 1);
-        self.compaction = Some(SessionCompaction {
-            count,
-            removed_message_count,
-            summary: summary.into(),
-        });
+        self.compaction =
+            Some(SessionCompaction { count, removed_message_count, summary: summary.into() });
     }
 
     #[must_use]
@@ -235,14 +216,8 @@ impl Session {
 
     pub fn to_json(&self) -> Result<JsonValue, SessionError> {
         let mut object = BTreeMap::new();
-        object.insert(
-            "version".to_string(),
-            JsonValue::Number(i64::from(self.version)),
-        );
-        object.insert(
-            "session_id".to_string(),
-            JsonValue::String(self.session_id.clone()),
-        );
+        object.insert("version".to_string(), JsonValue::Number(i64::from(self.version)));
+        object.insert("session_id".to_string(), JsonValue::String(self.session_id.clone()));
         object.insert(
             "created_at_ms".to_string(),
             JsonValue::Number(i64_from_u64(self.created_at_ms, "created_at_ms")?),
@@ -253,12 +228,7 @@ impl Session {
         );
         object.insert(
             "messages".to_string(),
-            JsonValue::Array(
-                self.messages
-                    .iter()
-                    .map(ConversationMessage::to_json)
-                    .collect(),
-            ),
+            JsonValue::Array(self.messages.iter().map(ConversationMessage::to_json).collect()),
         );
         if let Some(compaction) = &self.compaction {
             object.insert("compaction".to_string(), compaction.to_json()?);
@@ -301,10 +271,7 @@ impl Session {
             .map(|value| required_u64_from_value(value, "updated_at_ms"))
             .transpose()?
             .unwrap_or(created_at_ms);
-        let compaction = object
-            .get("compaction")
-            .map(SessionCompaction::from_json)
-            .transpose()?;
+        let compaction = object.get("compaction").map(SessionCompaction::from_json).transpose()?;
         let fork = object.get("fork").map(SessionFork::from_json).transpose()?;
         Ok(Self {
             version,
@@ -345,15 +312,12 @@ impl Session {
                     line_number + 1
                 ))
             })?;
-            match object
-                .get("type")
-                .and_then(JsonValue::as_str)
-                .ok_or_else(|| {
-                    SessionError::Format(format!(
-                        "JSONL record at line {} missing type",
-                        line_number + 1
-                    ))
-                })? {
+            match object.get("type").and_then(JsonValue::as_str).ok_or_else(|| {
+                SessionError::Format(format!(
+                    "JSONL record at line {} missing type",
+                    line_number + 1
+                ))
+            })? {
                 "session_meta" => {
                     version = required_u32(object, "version")?;
                     session_id = Some(required_string(object, "session_id")?);
@@ -371,9 +335,8 @@ impl Session {
                     messages.push(ConversationMessage::from_json(message_value)?);
                 }
                 "compaction" => {
-                    compaction = Some(SessionCompaction::from_json(&JsonValue::Object(
-                        object.clone(),
-                    ))?);
+                    compaction =
+                        Some(SessionCompaction::from_json(&JsonValue::Object(object.clone()))?);
                 }
                 other => {
                     return Err(SessionError::Format(format!(
@@ -402,11 +365,7 @@ impl Session {
         if let Some(compaction) = &self.compaction {
             lines.push(compaction.to_jsonl_record()?.render());
         }
-        lines.extend(
-            self.messages
-                .iter()
-                .map(|message| message_record(message).render()),
-        );
+        lines.extend(self.messages.iter().map(|message| message_record(message).render()));
         let mut rendered = lines.join("\n");
         rendered.push('\n');
         Ok(rendered)
@@ -430,18 +389,9 @@ impl Session {
 
     fn meta_record(&self) -> Result<JsonValue, SessionError> {
         let mut object = BTreeMap::new();
-        object.insert(
-            "type".to_string(),
-            JsonValue::String("session_meta".to_string()),
-        );
-        object.insert(
-            "version".to_string(),
-            JsonValue::Number(i64::from(self.version)),
-        );
-        object.insert(
-            "session_id".to_string(),
-            JsonValue::String(self.session_id.clone()),
-        );
+        object.insert("type".to_string(), JsonValue::String("session_meta".to_string()));
+        object.insert("version".to_string(), JsonValue::Number(i64::from(self.version)));
+        object.insert("session_id".to_string(), JsonValue::String(self.session_id.clone()));
         object.insert(
             "created_at_ms".to_string(),
             JsonValue::Number(i64_from_u64(self.created_at_ms, "created_at_ms")?),
@@ -479,20 +429,12 @@ impl ConversationMessage {
 
     #[must_use]
     pub fn assistant(blocks: Vec<ContentBlock>) -> Self {
-        Self {
-            role: MessageRole::Assistant,
-            blocks,
-            usage: None,
-        }
+        Self { role: MessageRole::Assistant, blocks, usage: None }
     }
 
     #[must_use]
     pub fn assistant_with_usage(blocks: Vec<ContentBlock>, usage: Option<TokenUsage>) -> Self {
-        Self {
-            role: MessageRole::Assistant,
-            blocks,
-            usage,
-        }
+        Self { role: MessageRole::Assistant, blocks, usage }
     }
 
     #[must_use]
@@ -553,9 +495,7 @@ impl ConversationMessage {
             "assistant" => MessageRole::Assistant,
             "tool" => MessageRole::Tool,
             other => {
-                return Err(SessionError::Format(format!(
-                    "unsupported message role: {other}"
-                )))
+                return Err(SessionError::Format(format!("unsupported message role: {other}")))
             }
         };
         let blocks = object
@@ -566,11 +506,7 @@ impl ConversationMessage {
             .map(ContentBlock::from_json)
             .collect::<Result<Vec<_>, _>>()?;
         let usage = object.get("usage").map(usage_from_json).transpose()?;
-        Ok(Self {
-            role,
-            blocks,
-            usage,
-        })
+        Ok(Self { role, blocks, usage })
     }
 }
 
@@ -584,40 +520,20 @@ impl ContentBlock {
                 object.insert("text".to_string(), JsonValue::String(text.clone()));
             }
             Self::ToolUse { id, name, input } => {
-                object.insert(
-                    "type".to_string(),
-                    JsonValue::String("tool_use".to_string()),
-                );
+                object.insert("type".to_string(), JsonValue::String("tool_use".to_string()));
                 object.insert("id".to_string(), JsonValue::String(id.clone()));
                 object.insert("name".to_string(), JsonValue::String(name.clone()));
                 object.insert("input".to_string(), JsonValue::String(input.clone()));
             }
-            Self::ToolResult {
-                tool_use_id,
-                tool_name,
-                output,
-                is_error,
-            } => {
-                object.insert(
-                    "type".to_string(),
-                    JsonValue::String("tool_result".to_string()),
-                );
-                object.insert(
-                    "tool_use_id".to_string(),
-                    JsonValue::String(tool_use_id.clone()),
-                );
-                object.insert(
-                    "tool_name".to_string(),
-                    JsonValue::String(tool_name.clone()),
-                );
+            Self::ToolResult { tool_use_id, tool_name, output, is_error } => {
+                object.insert("type".to_string(), JsonValue::String("tool_result".to_string()));
+                object.insert("tool_use_id".to_string(), JsonValue::String(tool_use_id.clone()));
+                object.insert("tool_name".to_string(), JsonValue::String(tool_name.clone()));
                 object.insert("output".to_string(), JsonValue::String(output.clone()));
                 object.insert("is_error".to_string(), JsonValue::Bool(*is_error));
             }
             Self::Thinking { thinking, signature } => {
-                object.insert(
-                    "type".to_string(),
-                    JsonValue::String("thinking".to_string()),
-                );
+                object.insert("type".to_string(), JsonValue::String("thinking".to_string()));
                 object.insert("thinking".to_string(), JsonValue::String(thinking.clone()));
                 if let Some(ref sig) = signature {
                     object.insert("signature".to_string(), JsonValue::String(sig.clone()));
@@ -636,9 +552,7 @@ impl ContentBlock {
             .and_then(JsonValue::as_str)
             .ok_or_else(|| SessionError::Format("missing block type".to_string()))?
         {
-            "text" => Ok(Self::Text {
-                text: required_string(object, "text")?,
-            }),
+            "text" => Ok(Self::Text { text: required_string(object, "text")? }),
             "tool_use" => Ok(Self::ToolUse {
                 id: required_string(object, "id")?,
                 name: required_string(object, "name")?,
@@ -664,9 +578,7 @@ impl ContentBlock {
                     .and_then(JsonValue::as_str)
                     .map(ToOwned::to_owned),
             }),
-            other => Err(SessionError::Format(format!(
-                "unsupported block type: {other}"
-            ))),
+            other => Err(SessionError::Format(format!("unsupported block type: {other}"))),
         }
     }
 }
@@ -674,45 +586,24 @@ impl ContentBlock {
 impl SessionCompaction {
     pub fn to_json(&self) -> Result<JsonValue, SessionError> {
         let mut object = BTreeMap::new();
-        object.insert(
-            "count".to_string(),
-            JsonValue::Number(i64::from(self.count)),
-        );
+        object.insert("count".to_string(), JsonValue::Number(i64::from(self.count)));
         object.insert(
             "removed_message_count".to_string(),
-            JsonValue::Number(i64_from_usize(
-                self.removed_message_count,
-                "removed_message_count",
-            )?),
+            JsonValue::Number(i64_from_usize(self.removed_message_count, "removed_message_count")?),
         );
-        object.insert(
-            "summary".to_string(),
-            JsonValue::String(self.summary.clone()),
-        );
+        object.insert("summary".to_string(), JsonValue::String(self.summary.clone()));
         Ok(JsonValue::Object(object))
     }
 
     pub fn to_jsonl_record(&self) -> Result<JsonValue, SessionError> {
         let mut object = BTreeMap::new();
-        object.insert(
-            "type".to_string(),
-            JsonValue::String("compaction".to_string()),
-        );
-        object.insert(
-            "count".to_string(),
-            JsonValue::Number(i64::from(self.count)),
-        );
+        object.insert("type".to_string(), JsonValue::String("compaction".to_string()));
+        object.insert("count".to_string(), JsonValue::Number(i64::from(self.count)));
         object.insert(
             "removed_message_count".to_string(),
-            JsonValue::Number(i64_from_usize(
-                self.removed_message_count,
-                "removed_message_count",
-            )?),
+            JsonValue::Number(i64_from_usize(self.removed_message_count, "removed_message_count")?),
         );
-        object.insert(
-            "summary".to_string(),
-            JsonValue::String(self.summary.clone()),
-        );
+        object.insert("summary".to_string(), JsonValue::String(self.summary.clone()));
         Ok(JsonValue::Object(object))
     }
 
@@ -737,10 +628,7 @@ impl SessionFork {
             JsonValue::String(self.parent_session_id.clone()),
         );
         if let Some(branch_name) = &self.branch_name {
-            object.insert(
-                "branch_name".to_string(),
-                JsonValue::String(branch_name.clone()),
-            );
+            object.insert("branch_name".to_string(), JsonValue::String(branch_name.clone()));
         }
         JsonValue::Object(object)
     }
@@ -768,14 +656,8 @@ fn message_record(message: &ConversationMessage) -> JsonValue {
 
 fn usage_to_json(usage: TokenUsage) -> JsonValue {
     let mut object = BTreeMap::new();
-    object.insert(
-        "input_tokens".to_string(),
-        JsonValue::Number(i64::from(usage.input_tokens)),
-    );
-    object.insert(
-        "output_tokens".to_string(),
-        JsonValue::Number(i64::from(usage.output_tokens)),
-    );
+    object.insert("input_tokens".to_string(), JsonValue::Number(i64::from(usage.input_tokens)));
+    object.insert("output_tokens".to_string(), JsonValue::Number(i64::from(usage.output_tokens)));
     object.insert(
         "cache_creation_input_tokens".to_string(),
         JsonValue::Number(i64::from(usage.cache_creation_input_tokens)),
@@ -819,16 +701,12 @@ fn required_u32(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u32, 
 }
 
 fn required_u64(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u64, SessionError> {
-    let value = object
-        .get(key)
-        .ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
+    let value = object.get(key).ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
     required_u64_from_value(value, key)
 }
 
 fn required_u64_from_value(value: &JsonValue, key: &str) -> Result<u64, SessionError> {
-    let value = value
-        .as_i64()
-        .ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
+    let value = value.as_i64().ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
     u64::try_from(value).map_err(|_| SessionError::Format(format!("{key} out of range")))
 }
 
@@ -885,10 +763,7 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), SessionError> {
 }
 
 fn temporary_path_for(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("session");
+    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("session");
     path.with_file_name(format!(
         "{file_name}.tmp-{}-{}",
         current_time_millis(),
@@ -909,10 +784,7 @@ fn rotate_session_file_if_needed(path: &Path) -> Result<(), SessionError> {
 }
 
 fn rotated_log_path(path: &Path) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("session");
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("session");
     path.with_file_name(format!("{stem}.rot-{}.jsonl", current_time_millis()))
 }
 
@@ -920,31 +792,23 @@ fn cleanup_rotated_logs(path: &Path) -> Result<(), SessionError> {
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("session");
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("session");
     let prefix = format!("{stem}.rot-");
     let mut rotated_paths = fs::read_dir(parent)?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|entry_path| {
-            entry_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(&prefix)
-                        && Path::new(name)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-                })
+            entry_path.file_name().and_then(|value| value.to_str()).is_some_and(|name| {
+                name.starts_with(&prefix)
+                    && Path::new(name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            })
         })
         .collect::<Vec<_>>();
 
     rotated_paths.sort_by_key(|entry_path| {
-        fs::metadata(entry_path)
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(UNIX_EPOCH)
+        fs::metadata(entry_path).and_then(|metadata| metadata.modified()).unwrap_or(UNIX_EPOCH)
     });
 
     let remove_count = rotated_paths.len().saturating_sub(MAX_ROTATED_FILES);
@@ -969,15 +833,11 @@ mod tests {
     #[test]
     fn persists_and_restores_session_jsonl() {
         let mut session = Session::new();
-        session
-            .push_user_text("hello")
-            .expect("user message should append");
+        session.push_user_text("hello").expect("user message should append");
         session
             .push_message(ConversationMessage::assistant_with_usage(
                 vec![
-                    ContentBlock::Text {
-                        text: "thinking".to_string(),
-                    },
+                    ContentBlock::Text { text: "thinking".to_string() },
                     ContentBlock::ToolUse {
                         id: "tool-1".to_string(),
                         name: "bash".to_string(),
@@ -993,9 +853,7 @@ mod tests {
             ))
             .expect("assistant message should append");
         session
-            .push_message(ConversationMessage::tool_result(
-                "tool-1", "bash", "hi", false,
-            ))
+            .push_message(ConversationMessage::tool_result("tool-1", "bash", "hi", false))
             .expect("tool result should append");
 
         let path = temp_session_path("jsonl");
@@ -1005,10 +863,7 @@ mod tests {
 
         assert_eq!(restored, session);
         assert_eq!(restored.messages[2].role, MessageRole::Tool);
-        assert_eq!(
-            restored.messages[1].usage.expect("usage").total_tokens(),
-            17
-        );
+        assert_eq!(restored.messages[1].usage.expect("usage").total_tokens(), 17);
         assert_eq!(restored.session_id, session.session_id);
     }
 
@@ -1032,10 +887,7 @@ mod tests {
         fs::remove_file(&path).expect("temp file should be removable");
 
         assert_eq!(restored.messages.len(), 1);
-        assert_eq!(
-            restored.messages[0],
-            ConversationMessage::user_text("legacy")
-        );
+        assert_eq!(restored.messages[0], ConversationMessage::user_text("legacy"));
         assert!(!restored.session_id.is_empty());
     }
 
@@ -1043,12 +895,8 @@ mod tests {
     fn appends_messages_to_persisted_jsonl_session() {
         let path = temp_session_path("append");
         let mut session = Session::new().with_persistence_path(path.clone());
-        session
-            .save_to_path(&path)
-            .expect("initial save should succeed");
-        session
-            .push_user_text("hi")
-            .expect("user append should succeed");
+        session.save_to_path(&path).expect("initial save should succeed");
+        session.push_user_text("hi").expect("user append should succeed");
         session
             .push_message(ConversationMessage::assistant(vec![ContentBlock::Text {
                 text: "hello".to_string(),
@@ -1066,9 +914,7 @@ mod tests {
     fn persists_compaction_metadata() {
         let path = temp_session_path("compaction");
         let mut session = Session::new();
-        session
-            .push_user_text("before")
-            .expect("message should append");
+        session.push_user_text("before").expect("message should append");
         session.record_compaction("summarized earlier work", 4);
         session.save_to_path(&path).expect("session should save");
 
@@ -1085,16 +931,11 @@ mod tests {
     fn forks_sessions_with_branch_metadata_and_persists_it() {
         let path = temp_session_path("fork");
         let mut session = Session::new();
-        session
-            .push_user_text("before fork")
-            .expect("message should append");
+        session.push_user_text("before fork").expect("message should append");
 
-        let forked = session
-            .fork(Some("investigation".to_string()))
-            .with_persistence_path(path.clone());
-        forked
-            .save_to_path(&path)
-            .expect("forked session should save");
+        let forked =
+            session.fork(Some("investigation".to_string())).with_persistence_path(path.clone());
+        forked.save_to_path(&path).expect("forked session should save");
 
         let restored = Session::load_from_path(&path).expect("forked session should load");
         fs::remove_file(&path).expect("temp file should be removable");
@@ -1122,10 +963,7 @@ mod tests {
         rotate_session_file_if_needed(&path).expect("rotation should succeed");
 
         // then
-        assert!(
-            !path.exists(),
-            "original path should be rotated away before rewrite"
-        );
+        assert!(!path.exists(), "original path should be rotated away before rewrite");
 
         for _ in 0..5 {
             let rotated = super::rotated_log_path(&path);
@@ -1189,9 +1027,7 @@ mod tests {
     fn rejects_legacy_session_json_without_messages() {
         // given
         let session = JsonValue::Object(
-            [("version".to_string(), JsonValue::Number(1))]
-                .into_iter()
-                .collect(),
+            [("version".to_string(), JsonValue::Number(1))].into_iter().collect(),
         );
 
         // when
@@ -1218,9 +1054,7 @@ mod tests {
     fn rejects_unknown_content_block_type() {
         // given
         let block = JsonValue::Object(
-            [("type".to_string(), JsonValue::String("unknown".to_string()))]
-                .into_iter()
-                .collect(),
+            [("type".to_string(), JsonValue::String("unknown".to_string()))].into_iter().collect(),
         );
 
         // when
@@ -1256,15 +1090,12 @@ mod tests {
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|entry_path| {
-                entry_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|name| {
-                        name.starts_with(&format!("{stem}.rot-"))
-                            && Path::new(name)
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-                    })
+                entry_path.file_name().and_then(|value| value.to_str()).is_some_and(|name| {
+                    name.starts_with(&format!("{stem}.rot-"))
+                        && Path::new(name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+                })
             })
             .collect()
     }

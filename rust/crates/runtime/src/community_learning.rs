@@ -22,9 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::green_contract::GreenLevel;
-use crate::workflow::{WorkflowSnapshot};
-use crate::recovery_recipes::FailureScenario;
+use crate::workflow::WorkflowSnapshot;
 
 const TELEMETRY_CONFIG_FILE: &str = "telemetry.json";
 const REPORT_ENDPOINT: &str = "https://sego-telemetry.example.com/api/v1/report";
@@ -65,13 +63,7 @@ impl CommunityLearning {
         let config_dir = workspace_root.as_ref().join(".claw");
         let (enabled, device_id, session_count) = Self::load_config(&config_dir);
 
-        Self {
-            enabled,
-            device_id,
-            config_dir,
-            session_count,
-            pending_reports: Vec::new(),
-        }
+        Self { enabled, device_id, config_dir, session_count, pending_reports: Vec::new() }
     }
 
     /// Enable telemetry for this workspace.
@@ -107,17 +99,19 @@ impl CommunityLearning {
         let _ = self.save_config();
 
         // Extract model family (strip version specifics)
-        let model_family = model
-            .split('/').last().unwrap_or(model)
-            .split('@').next().unwrap_or(model)
-            .to_string();
+        let model_family =
+            model.split('/').last().unwrap_or(model).split('@').next().unwrap_or(model).to_string();
 
         // Extract only domain from API base URL (strip path and credentials)
         let api_domain = api_base_url
             .trim_start_matches("https://")
             .trim_start_matches("http://")
-            .split('/').next().unwrap_or("unknown")
-            .split('@').last().unwrap_or("unknown")
+            .split('/')
+            .next()
+            .unwrap_or("unknown")
+            .split('@')
+            .last()
+            .unwrap_or("unknown")
             .to_string();
 
         // Collect failure types
@@ -169,11 +163,7 @@ impl CommunityLearning {
                 let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
                 let enabled = parsed["enabled"].as_bool().unwrap_or(false);
                 let device_id = parsed["device_id"].as_str().unwrap_or("").to_string();
-                let device_id = if device_id.is_empty() {
-                    generate_device_id()
-                } else {
-                    device_id
-                };
+                let device_id = if device_id.is_empty() { generate_device_id() } else { device_id };
                 let session_count = parsed["session_count"].as_u64().unwrap_or(0) as u32;
                 (enabled, device_id, session_count)
             }
@@ -198,19 +188,13 @@ fn generate_device_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     nanos.hash(&mut hasher);
     format!("sego-{:016x}", hasher.finish())
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -258,7 +242,8 @@ mod tests {
         snap.green_level = Some(GreenLevel::Package);
         snap.compute_efficiency();
 
-        let report = cl.collect_report(&snap, "deepseek-v4-pro", "https://api.deepseek.com/anthropic")
+        let report = cl
+            .collect_report(&snap, "deepseek-v4-pro", "https://api.deepseek.com/anthropic")
             .expect("should generate report");
 
         assert_eq!(report.failure_count, 2);
@@ -278,7 +263,8 @@ mod tests {
         cl.enable();
 
         let snap = WorkflowSnapshot::new("test");
-        let report = cl.collect_report(&snap, "claude-opus-4-7", "https://user:pass@proxy.example.com/v1/chat")
+        let report = cl
+            .collect_report(&snap, "claude-opus-4-7", "https://user:pass@proxy.example.com/v1/chat")
             .expect("should generate report");
 
         assert_eq!(report.api_domain, "proxy.example.com");
@@ -294,9 +280,6 @@ mod tests {
     }
 
     fn rand_id() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
     }
 }

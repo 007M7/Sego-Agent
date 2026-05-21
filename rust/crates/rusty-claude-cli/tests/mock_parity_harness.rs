@@ -22,9 +22,8 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         .map(|entry| (entry.name.clone(), entry))
         .collect::<BTreeMap<_, _>>();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-    let server = runtime
-        .block_on(MockAnthropicService::spawn())
-        .expect("mock service should start");
+    let server =
+        runtime.block_on(MockAnthropicService::spawn()).expect("mock service should start");
     let base_url = server.base_url();
 
     let cases = [
@@ -151,14 +150,9 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
     ];
 
     let case_names = cases.iter().map(|case| case.name).collect::<Vec<_>>();
-    let manifest_names = manifest_entries
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        case_names, manifest_names,
-        "manifest and harness cases must stay aligned"
-    );
+    let manifest_names =
+        manifest_entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>();
+    assert_eq!(case_names, manifest_names, "manifest and harness cases must stay aligned");
 
     let mut scenario_reports = Vec::new();
 
@@ -173,30 +167,17 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         let manifest_entry = manifest
             .get(case.name)
             .unwrap_or_else(|| panic!("missing manifest entry for {}", case.name));
-        scenario_reports.push(build_scenario_report(
-            case.name,
-            manifest_entry,
-            &run.response,
-        ));
+        scenario_reports.push(build_scenario_report(case.name, manifest_entry, &run.response));
 
         fs::remove_dir_all(&workspace.root).expect("workspace cleanup should succeed");
     }
 
     let captured = runtime.block_on(server.captured_requests());
-    assert_eq!(
-        captured.len(),
-        21,
-        "twelve scenarios should produce twenty-one requests"
-    );
-    assert!(captured
-        .iter()
-        .all(|request| request.path == "/v1/messages"));
+    assert_eq!(captured.len(), 21, "twelve scenarios should produce twenty-one requests");
+    assert!(captured.iter().all(|request| request.path == "/v1/messages"));
     assert!(captured.iter().all(|request| request.stream));
 
-    let scenarios = captured
-        .iter()
-        .map(|request| request.scenario.as_str())
-        .collect::<Vec<_>>();
+    let scenarios = captured.iter().map(|request| request.scenario.as_str()).collect::<Vec<_>>();
     assert_eq!(
         scenarios,
         vec![
@@ -226,9 +207,7 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
 
     let mut request_counts = BTreeMap::new();
     for request in &captured {
-        *request_counts
-            .entry(request.scenario.as_str())
-            .or_insert(0_usize) += 1;
+        *request_counts.entry(request.scenario.as_str()).or_insert(0_usize) += 1;
     }
     for report in &mut scenario_reports {
         report.request_count = *request_counts
@@ -259,11 +238,7 @@ struct HarnessWorkspace {
 
 impl HarnessWorkspace {
     fn new(root: PathBuf) -> Self {
-        Self {
-            config_home: root.join("config-home"),
-            home: root.join("home"),
-            root,
-        }
+        Self { config_home: root.join("config-home"), home: root.join("home"), root }
     }
 
     fn create(&self) -> std::io::Result<()> {
@@ -352,10 +327,7 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    ScenarioRun {
-        response: parse_json_output(&stdout),
-        stdout,
-    }
+    ScenarioRun { response: parse_json_output(&stdout), stdout }
 }
 
 #[allow(dead_code)]
@@ -373,11 +345,8 @@ fn prepare_auto_compact_fixture(workspace: &HarnessWorkspace) {
 {"type":"message","message":{"role":"user","blocks":[{"type":"text","text":"step three of the parity scenario"}]}}
 {"type":"message","message":{"role":"assistant","blocks":[{"type":"text","text":"acknowledged step three"}]}}
 "#;
-    fs::write(
-        sessions_dir.join(format!("{session_id}.jsonl")),
-        session_jsonl,
-    )
-    .expect("pre-seeded session should write");
+    fs::write(sessions_dir.join(format!("{session_id}.jsonl")), session_jsonl)
+        .expect("pre-seeded session should write");
 }
 
 fn prepare_noop(_: &HarnessWorkspace) {}
@@ -404,10 +373,7 @@ fn prepare_multi_tool_fixture(workspace: &HarnessWorkspace) {
 }
 
 fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
-    let plugin_root = workspace
-        .root
-        .join("external-plugins")
-        .join("parity-plugin");
+    let plugin_root = workspace.root.join("external-plugins").join("parity-plugin");
     let tool_dir = plugin_root.join("tools");
     let manifest_dir = plugin_root.join(".claude-plugin");
     fs::create_dir_all(&tool_dir).expect("plugin tools dir");
@@ -419,9 +385,7 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
         "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n",
     )
     .expect("plugin script should write");
-    let mut permissions = fs::metadata(&script_path)
-        .expect("plugin script metadata")
-        .permissions();
+    let mut permissions = fs::metadata(&script_path).expect("plugin script metadata").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&script_path, permissions).expect("plugin script should be executable");
 
@@ -478,53 +442,33 @@ fn assert_streaming_text(_: &HarnessWorkspace, run: &ScenarioRun) {
 
 fn assert_read_file_roundtrip(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("read_file".to_string())
-    );
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("read_file".to_string()));
     assert_eq!(
         run.response["tool_uses"][0]["input"],
         Value::String(r#"{"path":"fixture.txt"}"#.to_string())
     );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("alpha parity line"));
-    let output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    assert!(run.response["message"].as_str().expect("message text").contains("alpha parity line"));
+    let output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     assert!(output.contains(&workspace.root.join("fixture.txt").display().to_string()));
     assert!(output.contains("alpha parity line"));
 }
 
 fn assert_grep_chunk_assembly(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("grep_search".to_string())
-    );
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("grep_search".to_string()));
     assert_eq!(
         run.response["tool_uses"][0]["input"],
         Value::String(
             r#"{"pattern":"parity","path":"fixture.txt","output_mode":"count"}"#.to_string()
         )
     );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("2 occurrences"));
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(false)
-    );
+    assert!(run.response["message"].as_str().expect("message text").contains("2 occurrences"));
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
 }
 
 fn assert_write_file_allowed(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("write_file".to_string())
-    );
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("write_file".to_string()));
     assert!(run.response["message"]
         .as_str()
         .expect("message text")
@@ -532,106 +476,49 @@ fn assert_write_file_allowed(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     let generated = workspace.root.join("generated").join("output.txt");
     let contents = fs::read_to_string(&generated).expect("generated file should exist");
     assert_eq!(contents, "created by mock service\n");
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(false)
-    );
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
 }
 
 fn assert_write_file_denied(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("write_file".to_string())
-    );
-    let tool_output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("write_file".to_string()));
+    let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     assert!(tool_output.contains("requires workspace-write permission"));
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(true)
-    );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("denied as expected"));
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(true));
+    assert!(run.response["message"].as_str().expect("message text").contains("denied as expected"));
     assert!(!workspace.root.join("generated").join("denied.txt").exists());
 }
 
 fn assert_multi_tool_turn_roundtrip(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    let tool_uses = run.response["tool_uses"]
-        .as_array()
-        .expect("tool uses array");
-    assert_eq!(
-        tool_uses.len(),
-        2,
-        "expected two tool uses in a single turn"
-    );
+    let tool_uses = run.response["tool_uses"].as_array().expect("tool uses array");
+    assert_eq!(tool_uses.len(), 2, "expected two tool uses in a single turn");
     assert_eq!(tool_uses[0]["name"], Value::String("read_file".to_string()));
-    assert_eq!(
-        tool_uses[1]["name"],
-        Value::String("grep_search".to_string())
-    );
-    let tool_results = run.response["tool_results"]
-        .as_array()
-        .expect("tool results array");
-    assert_eq!(
-        tool_results.len(),
-        2,
-        "expected two tool results in a single turn"
-    );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("alpha parity line"));
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("2 occurrences"));
+    assert_eq!(tool_uses[1]["name"], Value::String("grep_search".to_string()));
+    let tool_results = run.response["tool_results"].as_array().expect("tool results array");
+    assert_eq!(tool_results.len(), 2, "expected two tool results in a single turn");
+    assert!(run.response["message"].as_str().expect("message text").contains("alpha parity line"));
+    assert!(run.response["message"].as_str().expect("message text").contains("2 occurrences"));
 }
 
 fn assert_bash_stdout_roundtrip(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("bash".to_string())
-    );
-    let tool_output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("bash".to_string()));
+    let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     let parsed: Value = serde_json::from_str(tool_output).expect("bash output json");
-    assert_eq!(
-        parsed["stdout"],
-        Value::String("alpha from bash".to_string())
-    );
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(false)
-    );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("alpha from bash"));
+    assert_eq!(parsed["stdout"], Value::String("alpha from bash".to_string()));
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
+    assert!(run.response["message"].as_str().expect("message text").contains("alpha from bash"));
 }
 
 fn assert_bash_permission_prompt_approved(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert!(run.stdout.contains("Permission approval required"));
     assert!(run.stdout.contains("Approve this tool call? [y/N]:"));
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(false)
-    );
-    let tool_output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
+    let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     let parsed: Value = serde_json::from_str(tool_output).expect("bash output json");
-    assert_eq!(
-        parsed["stdout"],
-        Value::String("approved via prompt".to_string())
-    );
+    assert_eq!(parsed["stdout"], Value::String("approved via prompt".to_string()));
     assert!(run.response["message"]
         .as_str()
         .expect("message text")
@@ -642,39 +529,20 @@ fn assert_bash_permission_prompt_denied(_: &HarnessWorkspace, run: &ScenarioRun)
     assert!(run.stdout.contains("Permission approval required"));
     assert!(run.stdout.contains("Approve this tool call? [y/N]:"));
     assert_eq!(run.response["iterations"], Value::from(2));
-    let tool_output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     assert!(tool_output.contains("denied by user approval prompt"));
-    assert_eq!(
-        run.response["tool_results"][0]["is_error"],
-        Value::Bool(true)
-    );
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("denied as expected"));
+    assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(true));
+    assert!(run.response["message"].as_str().expect("message text").contains("denied as expected"));
 }
 
 fn assert_plugin_tool_roundtrip(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
-    assert_eq!(
-        run.response["tool_uses"][0]["name"],
-        Value::String("plugin_echo".to_string())
-    );
-    let tool_output = run.response["tool_results"][0]["output"]
-        .as_str()
-        .expect("tool output");
+    assert_eq!(run.response["tool_uses"][0]["name"], Value::String("plugin_echo".to_string()));
+    let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     let parsed: Value = serde_json::from_str(tool_output).expect("plugin output json");
-    assert_eq!(
-        parsed["plugin"],
-        Value::String("parity-plugin@external".to_string())
-    );
+    assert_eq!(parsed["plugin"], Value::String("parity-plugin@external".to_string()));
     assert_eq!(parsed["tool"], Value::String("plugin_echo".to_string()));
-    assert_eq!(
-        parsed["input"]["message"],
-        Value::String("hello from plugin parity".to_string())
-    );
+    assert_eq!(parsed["input"]["message"], Value::String("hello from plugin parity".to_string()));
     assert!(run.response["message"]
         .as_str()
         .expect("message text")
@@ -695,16 +563,12 @@ fn assert_auto_compact_triggered(_: &HarnessWorkspace, run: &ScenarioRun) {
     );
     // auto_compaction key must be present in JSON (may be null for below-threshold sessions)
     assert!(
-        run.response
-            .as_object()
-            .expect("response object")
-            .contains_key("auto_compaction"),
+        run.response.as_object().expect("response object").contains_key("auto_compaction"),
         "auto_compaction key must be present in JSON output"
     );
     // Verify input_tokens field reflects the large mock token counts
-    let input_tokens = run.response["usage"]["input_tokens"]
-        .as_u64()
-        .expect("input_tokens should be present");
+    let input_tokens =
+        run.response["usage"]["input_tokens"].as_u64().expect("input_tokens should be present");
     assert!(
         input_tokens >= 50_000,
         "input_tokens should reflect mock service value (got {input_tokens})"
@@ -718,19 +582,10 @@ fn assert_token_cost_reporting(_: &HarnessWorkspace, run: &ScenarioRun) {
         .expect("message text")
         .contains("token cost reporting parity complete."),);
     let usage = &run.response["usage"];
+    assert!(usage["input_tokens"].as_u64().unwrap_or(0) > 0, "input_tokens should be non-zero");
+    assert!(usage["output_tokens"].as_u64().unwrap_or(0) > 0, "output_tokens should be non-zero");
     assert!(
-        usage["input_tokens"].as_u64().unwrap_or(0) > 0,
-        "input_tokens should be non-zero"
-    );
-    assert!(
-        usage["output_tokens"].as_u64().unwrap_or(0) > 0,
-        "output_tokens should be non-zero"
-    );
-    assert!(
-        run.response["estimated_cost"]
-            .as_str()
-            .map(|cost| cost.starts_with('$'))
-            .unwrap_or(false),
+        run.response["estimated_cost"].as_str().map(|cost| cost.starts_with('$')).unwrap_or(false),
         "estimated_cost should be a dollar-prefixed string"
     );
 }
@@ -766,9 +621,7 @@ fn build_scenario_report(
         category: manifest_entry.category.clone(),
         description: manifest_entry.description.clone(),
         parity_refs: manifest_entry.parity_refs.clone(),
-        iterations: response["iterations"]
-            .as_u64()
-            .expect("iterations should exist"),
+        iterations: response["iterations"].as_u64().expect("iterations should exist"),
         request_count: 0,
         tool_uses: response["tool_uses"]
             .as_array()
@@ -782,10 +635,7 @@ fn build_scenario_report(
             .iter()
             .filter(|value| value["is_error"].as_bool().unwrap_or(false))
             .count(),
-        final_message: response["message"]
-            .as_str()
-            .expect("message text")
-            .to_string(),
+        final_message: response["message"].as_str().expect("message text").to_string(),
     }
 }
 
@@ -799,11 +649,8 @@ fn maybe_write_report(reports: &[ScenarioReport]) {
         "request_count": reports.iter().map(|report| report.request_count).sum::<usize>(),
         "scenarios": reports.iter().map(scenario_report_json).collect::<Vec<_>>(),
     });
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(&payload).expect("report json should serialize"),
-    )
-    .expect("report should write");
+    fs::write(path, serde_json::to_vec_pretty(&payload).expect("report json should serialize"))
+        .expect("report should write");
 }
 
 fn load_scenario_manifest() -> Vec<ScenarioManifestEntry> {
@@ -814,10 +661,7 @@ fn load_scenario_manifest() -> Vec<ScenarioManifestEntry> {
         .expect("scenario manifest should parse")
         .into_iter()
         .map(|entry| ScenarioManifestEntry {
-            name: entry["name"]
-                .as_str()
-                .expect("scenario name should be a string")
-                .to_string(),
+            name: entry["name"].as_str().expect("scenario name should be a string").to_string(),
             category: entry["category"]
                 .as_str()
                 .expect("scenario category should be a string")
@@ -830,12 +674,7 @@ fn load_scenario_manifest() -> Vec<ScenarioManifestEntry> {
                 .as_array()
                 .expect("parity refs should be an array")
                 .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .expect("parity ref should be a string")
-                        .to_string()
-                })
+                .map(|value| value.as_str().expect("parity ref should be a string").to_string())
                 .collect(),
         })
         .collect()
@@ -870,8 +709,6 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         .expect("clock should be after epoch")
         .as_millis();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "claw-mock-parity-{label}-{}-{millis}-{counter}",
-        std::process::id()
-    ))
+    std::env::temp_dir()
+        .join(format!("claw-mock-parity-{label}-{}-{millis}-{counter}", std::process::id()))
 }

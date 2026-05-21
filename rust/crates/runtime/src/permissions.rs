@@ -48,10 +48,7 @@ impl PermissionContext {
         override_decision: Option<PermissionOverride>,
         override_reason: Option<String>,
     ) -> Self {
-        Self {
-            override_decision,
-            override_reason,
-        }
+        Self { override_decision, override_reason }
     }
 
     #[must_use]
@@ -122,28 +119,15 @@ impl PermissionPolicy {
         tool_name: impl Into<String>,
         required_mode: PermissionMode,
     ) -> Self {
-        self.tool_requirements
-            .insert(tool_name.into(), required_mode);
+        self.tool_requirements.insert(tool_name.into(), required_mode);
         self
     }
 
     #[must_use]
     pub fn with_permission_rules(mut self, config: &RuntimePermissionRuleConfig) -> Self {
-        self.allow_rules = config
-            .allow()
-            .iter()
-            .map(|rule| PermissionRule::parse(rule))
-            .collect();
-        self.deny_rules = config
-            .deny()
-            .iter()
-            .map(|rule| PermissionRule::parse(rule))
-            .collect();
-        self.ask_rules = config
-            .ask()
-            .iter()
-            .map(|rule| PermissionRule::parse(rule))
-            .collect();
+        self.allow_rules = config.allow().iter().map(|rule| PermissionRule::parse(rule)).collect();
+        self.deny_rules = config.deny().iter().map(|rule| PermissionRule::parse(rule)).collect();
+        self.ask_rules = config.ask().iter().map(|rule| PermissionRule::parse(rule)).collect();
         self
     }
 
@@ -154,10 +138,7 @@ impl PermissionPolicy {
 
     #[must_use]
     pub fn required_mode_for(&self, tool_name: &str) -> PermissionMode {
-        self.tool_requirements
-            .get(tool_name)
-            .copied()
-            .unwrap_or(PermissionMode::DangerFullAccess)
+        self.tool_requirements.get(tool_name).copied().unwrap_or(PermissionMode::DangerFullAccess)
     }
 
     #[must_use]
@@ -242,10 +223,8 @@ impl PermissionPolicy {
         }
 
         if let Some(rule) = ask_rule {
-            let reason = format!(
-                "tool '{tool_name}' requires approval due to ask rule '{}'",
-                rule.raw
-            );
+            let reason =
+                format!("tool '{tool_name}' requires approval due to ask rule '{}'", rule.raw);
             return Self::prompt_or_deny(
                 tool_name,
                 input,
@@ -402,10 +381,7 @@ fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
 }
 
 fn unescape_rule_content(content: &str) -> String {
-    content
-        .replace(r"\(", "(")
-        .replace(r"\)", ")")
-        .replace(r"\\", r"\")
+    content.replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", r"\")
 }
 
 fn find_first_unescaped(value: &str, needle: char) -> Option<usize> {
@@ -487,9 +463,7 @@ mod tests {
             if self.allow {
                 PermissionPromptDecision::Allow
             } else {
-                PermissionPromptDecision::Deny {
-                    reason: "not now".to_string(),
-                }
+                PermissionPromptDecision::Deny { reason: "not now".to_string() }
             }
         }
     }
@@ -500,14 +474,8 @@ mod tests {
             .with_tool_requirement("read_file", PermissionMode::ReadOnly)
             .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
 
-        assert_eq!(
-            policy.authorize("read_file", "{}", None),
-            PermissionOutcome::Allow
-        );
-        assert_eq!(
-            policy.authorize("write_file", "{}", None),
-            PermissionOutcome::Allow
-        );
+        assert_eq!(policy.authorize("read_file", "{}", None), PermissionOutcome::Allow);
+        assert_eq!(policy.authorize("write_file", "{}", None), PermissionOutcome::Allow);
     }
 
     #[test]
@@ -530,34 +498,22 @@ mod tests {
     fn prompts_for_workspace_write_to_danger_full_access_escalation() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
-        let mut prompter = RecordingPrompter {
-            seen: Vec::new(),
-            allow: true,
-        };
+        let mut prompter = RecordingPrompter { seen: Vec::new(), allow: true };
 
         let outcome = policy.authorize("bash", "echo hi", Some(&mut prompter));
 
         assert_eq!(outcome, PermissionOutcome::Allow);
         assert_eq!(prompter.seen.len(), 1);
         assert_eq!(prompter.seen[0].tool_name, "bash");
-        assert_eq!(
-            prompter.seen[0].current_mode,
-            PermissionMode::WorkspaceWrite
-        );
-        assert_eq!(
-            prompter.seen[0].required_mode,
-            PermissionMode::DangerFullAccess
-        );
+        assert_eq!(prompter.seen[0].current_mode, PermissionMode::WorkspaceWrite);
+        assert_eq!(prompter.seen[0].required_mode, PermissionMode::DangerFullAccess);
     }
 
     #[test]
     fn honors_prompt_rejection_reason() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
-        let mut prompter = RecordingPrompter {
-            seen: Vec::new(),
-            allow: false,
-        };
+        let mut prompter = RecordingPrompter { seen: Vec::new(), allow: false };
 
         assert!(matches!(
             policy.authorize("bash", "echo hi", Some(&mut prompter)),
@@ -596,10 +552,7 @@ mod tests {
         let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
             .with_permission_rules(&rules);
-        let mut prompter = RecordingPrompter {
-            seen: Vec::new(),
-            allow: true,
-        };
+        let mut prompter = RecordingPrompter { seen: Vec::new(), allow: true };
 
         let outcome = policy.authorize("bash", r#"{"command":"git status"}"#, Some(&mut prompter));
 
@@ -625,10 +578,7 @@ mod tests {
             Some(PermissionOverride::Allow),
             Some("hook approved".to_string()),
         );
-        let mut prompter = RecordingPrompter {
-            seen: Vec::new(),
-            allow: true,
-        };
+        let mut prompter = RecordingPrompter { seen: Vec::new(), allow: true };
 
         let outcome = policy.authorize_with_context(
             "bash",
@@ -652,9 +602,7 @@ mod tests {
 
         assert_eq!(
             policy.authorize_with_context("bash", "{}", &context, None),
-            PermissionOutcome::Deny {
-                reason: "blocked by hook".to_string(),
-            }
+            PermissionOutcome::Deny { reason: "blocked by hook".to_string() }
         );
     }
 
@@ -666,18 +614,12 @@ mod tests {
             Some(PermissionOverride::Ask),
             Some("hook requested confirmation".to_string()),
         );
-        let mut prompter = RecordingPrompter {
-            seen: Vec::new(),
-            allow: true,
-        };
+        let mut prompter = RecordingPrompter { seen: Vec::new(), allow: true };
 
         let outcome = policy.authorize_with_context("bash", "{}", &context, Some(&mut prompter));
 
         assert_eq!(outcome, PermissionOutcome::Allow);
         assert_eq!(prompter.seen.len(), 1);
-        assert_eq!(
-            prompter.seen[0].reason.as_deref(),
-            Some("hook requested confirmation")
-        );
+        assert_eq!(prompter.seen[0].reason.as_deref(), Some("hook requested confirmation"));
     }
 }

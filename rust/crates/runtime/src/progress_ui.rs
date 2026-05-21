@@ -187,9 +187,7 @@ impl<W: Write> ProgressUI<W> {
     /// Look up a phase message by index.
     #[must_use]
     pub fn phase_message(&self, idx: usize) -> &str {
-        self.phases
-            .get(idx)
-            .map_or("", |p| p.message.as_str())
+        self.phases.get(idx).map_or("", |p| p.message.as_str())
     }
 
     // -- lifecycle ----------------------------------------------------------
@@ -214,16 +212,8 @@ impl<W: Write> ProgressUI<W> {
     /// Render a single compact progress bar line (overwrites previous line
     /// with `\r`).
     pub fn render_compact(&mut self, current_phase_idx: Option<usize>) -> io::Result<()> {
-        let completed = self
-            .phases
-            .iter()
-            .filter(|p| p.status == PhaseStatus::Completed)
-            .count();
-        let failed = self
-            .phases
-            .iter()
-            .filter(|p| p.status == PhaseStatus::Failed)
-            .count();
+        let completed = self.phases.iter().filter(|p| p.status == PhaseStatus::Completed).count();
+        let failed = self.phases.iter().filter(|p| p.status == PhaseStatus::Failed).count();
         let total = self.phases.len();
 
         let spinner = SPINNER_FRAMES[self.spinner_idx % SPINNER_FRAMES.len()];
@@ -236,16 +226,19 @@ impl<W: Write> ProgressUI<W> {
         let msg = current_phase_idx
             .and_then(|i| {
                 let m = self.phase_message(i);
-                if m.is_empty() { None } else { Some(m) }
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(m)
+                }
             })
             .map(|m| format!(" — {DIM}{m}{RESET}"))
             .unwrap_or_default();
 
         let spinner_color = if failed > 0 { RED } else { CYAN };
 
-        let line = format!(
-            " {spinner_color}{spinner}{RESET} {bar} {BOLD}{running_name}{RESET}{msg}"
-        );
+        let line =
+            format!(" {spinner_color}{spinner}{RESET} {bar} {BOLD}{running_name}{RESET}{msg}");
 
         write!(self.out, "\r{}\x1b[K", line)?;
         self.out.flush()
@@ -284,16 +277,8 @@ impl<W: Write> ProgressUI<W> {
     }
 
     fn print_footer(&mut self, final_message: &str) -> io::Result<()> {
-        let completed = self
-            .phases
-            .iter()
-            .filter(|p| p.status == PhaseStatus::Completed)
-            .count();
-        let failed = self
-            .phases
-            .iter()
-            .filter(|p| p.status == PhaseStatus::Failed)
-            .count();
+        let completed = self.phases.iter().filter(|p| p.status == PhaseStatus::Completed).count();
+        let failed = self.phases.iter().filter(|p| p.status == PhaseStatus::Failed).count();
         let total = self.phases.len();
         let total_ms: f64 = self.phases.iter().map(|p| p.elapsed_ms).sum();
 
@@ -327,11 +312,7 @@ impl<W: Write> ProgressUI<W> {
     fn render_full(&mut self) -> io::Result<()> {
         for p in &self.phases {
             let icon = p.status.ansi_icon();
-            let msg = if p.message.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", p.message)
-            };
+            let msg = if p.message.is_empty() { String::new() } else { format!(" {}", p.message) };
             let elapsed = if p.elapsed_ms > 0.0 {
                 format!(" {}", elapsed_str(p.elapsed_ms))
             } else {

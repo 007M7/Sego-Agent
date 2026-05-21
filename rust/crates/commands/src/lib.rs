@@ -1047,64 +1047,29 @@ pub enum SlashCommand {
     Status,
     Sandbox,
     Compact,
-    Bughunter {
-        scope: Option<String>,
-    },
+    Bughunter { scope: Option<String> },
     Commit,
-    Pr {
-        context: Option<String>,
-    },
-    Issue {
-        context: Option<String>,
-    },
-    Ultraplan {
-        task: Option<String>,
-    },
-    Teleport {
-        target: Option<String>,
-    },
+    Pr { context: Option<String> },
+    Issue { context: Option<String> },
+    Ultraplan { task: Option<String> },
+    Teleport { target: Option<String> },
     DebugToolCall,
-    Model {
-        model: Option<String>,
-    },
-    Permissions {
-        mode: Option<String>,
-    },
-    Clear {
-        confirm: bool,
-    },
+    Model { model: Option<String> },
+    Permissions { mode: Option<String> },
+    Clear { confirm: bool },
     Cost,
-    Resume {
-        session_path: Option<String>,
-    },
-    Config {
-        section: Option<String>,
-    },
-    Mcp {
-        action: Option<String>,
-        target: Option<String>,
-    },
+    Resume { session_path: Option<String> },
+    Config { section: Option<String> },
+    Mcp { action: Option<String>, target: Option<String> },
     Memory,
     Init,
     Diff,
     Version,
-    Export {
-        path: Option<String>,
-    },
-    Session {
-        action: Option<String>,
-        target: Option<String>,
-    },
-    Plugins {
-        action: Option<String>,
-        target: Option<String>,
-    },
-    Agents {
-        args: Option<String>,
-    },
-    Skills {
-        args: Option<String>,
-    },
+    Export { path: Option<String> },
+    Session { action: Option<String>, target: Option<String> },
+    Plugins { action: Option<String>, target: Option<String> },
+    Agents { args: Option<String> },
+    Skills { args: Option<String> },
     Doctor,
     Login,
     Logout,
@@ -1127,60 +1092,24 @@ pub enum SlashCommand {
     SecurityReview,
     Keybindings,
     PrivacySettings,
-    Plan {
-        mode: Option<String>,
-    },
-    Review {
-        scope: Option<String>,
-    },
-    Tasks {
-        args: Option<String>,
-    },
-    Theme {
-        name: Option<String>,
-    },
-    Voice {
-        mode: Option<String>,
-    },
-    Usage {
-        scope: Option<String>,
-    },
-    Rename {
-        name: Option<String>,
-    },
-    Copy {
-        target: Option<String>,
-    },
-    Hooks {
-        args: Option<String>,
-    },
-    Context {
-        action: Option<String>,
-    },
-    Color {
-        scheme: Option<String>,
-    },
-    Effort {
-        level: Option<String>,
-    },
-    Branch {
-        name: Option<String>,
-    },
-    Rewind {
-        steps: Option<String>,
-    },
-    Ide {
-        target: Option<String>,
-    },
-    Tag {
-        label: Option<String>,
-    },
-    OutputStyle {
-        style: Option<String>,
-    },
-    AddDir {
-        path: Option<String>,
-    },
+    Plan { mode: Option<String> },
+    Review { scope: Option<String> },
+    Tasks { args: Option<String> },
+    Theme { name: Option<String> },
+    Voice { mode: Option<String> },
+    Usage { scope: Option<String> },
+    Rename { name: Option<String> },
+    Copy { target: Option<String> },
+    Hooks { args: Option<String> },
+    Context { action: Option<String> },
+    Color { scheme: Option<String> },
+    Effort { level: Option<String> },
+    Branch { name: Option<String> },
+    Rewind { steps: Option<String> },
+    Ide { target: Option<String> },
+    Tag { label: Option<String> },
+    OutputStyle { style: Option<String> },
+    AddDir { path: Option<String> },
     Unknown(String),
 }
 
@@ -1191,9 +1120,7 @@ pub struct SlashCommandParseError {
 
 impl SlashCommandParseError {
     fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+        Self { message: message.into() }
     }
 }
 
@@ -1263,15 +1190,9 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::DebugToolCall
         }
-        "model" => SlashCommand::Model {
-            model: optional_single_arg(command, &args, "[model]")?,
-        },
-        "permissions" => SlashCommand::Permissions {
-            mode: parse_permissions_mode(&args)?,
-        },
-        "clear" => SlashCommand::Clear {
-            confirm: parse_clear_args(&args)?,
-        },
+        "model" => SlashCommand::Model { model: optional_single_arg(command, &args, "[model]")? },
+        "permissions" => SlashCommand::Permissions { mode: parse_permissions_mode(&args)? },
+        "clear" => SlashCommand::Clear { confirm: parse_clear_args(&args)? },
         "cost" => {
             validate_no_args(command, &args)?;
             SlashCommand::Cost
@@ -1279,9 +1200,7 @@ pub fn validate_slash_command_input(
         "resume" => SlashCommand::Resume {
             session_path: Some(require_remainder(command, remainder, "<session-path>")?),
         },
-        "config" => SlashCommand::Config {
-            section: parse_config_section(&args)?,
-        },
+        "config" => SlashCommand::Config { section: parse_config_section(&args)? },
         "mcp" => parse_mcp_command(&args)?,
         "memory" => {
             validate_no_args(command, &args)?;
@@ -1302,12 +1221,8 @@ pub fn validate_slash_command_input(
         "export" => SlashCommand::Export { path: remainder },
         "session" => parse_session_command(&args)?,
         "plugin" | "plugins" | "marketplace" => parse_plugin_command(&args)?,
-        "agents" => SlashCommand::Agents {
-            args: parse_list_or_help_args(command, remainder)?,
-        },
-        "skills" => SlashCommand::Skills {
-            args: parse_skills_args(remainder.as_deref())?,
-        },
+        "agents" => SlashCommand::Agents { args: parse_list_or_help_args(command, remainder)? },
+        "skills" => SlashCommand::Skills { args: parse_skills_args(remainder.as_deref())? },
         "doctor" => {
             validate_no_args(command, &args)?;
             SlashCommand::Doctor
@@ -1450,16 +1365,10 @@ fn require_remainder(
 }
 
 fn parse_permissions_mode(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
-    let mode = optional_single_arg(
-        "permissions",
-        args,
-        "[read-only|workspace-write|danger-full-access]",
-    )?;
+    let mode =
+        optional_single_arg("permissions", args, "[read-only|workspace-write|danger-full-access]")?;
     if let Some(mode) = mode {
-        if matches!(
-            mode.as_str(),
-            "read-only" | "workspace-write" | "danger-full-access"
-        ) {
+        if matches!(mode.as_str(), "read-only" | "workspace-write" | "danger-full-access") {
             return Ok(Some(mode));
         }
         return Err(command_error(
@@ -1549,29 +1458,20 @@ fn parse_session_command(args: &[&str]) -> Result<SlashCommand, SlashCommandPars
 
 fn parse_mcp_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseError> {
     match args {
-        [] => Ok(SlashCommand::Mcp {
-            action: None,
-            target: None,
-        }),
-        ["list"] => Ok(SlashCommand::Mcp {
-            action: Some("list".to_string()),
-            target: None,
-        }),
+        [] => Ok(SlashCommand::Mcp { action: None, target: None }),
+        ["list"] => Ok(SlashCommand::Mcp { action: Some("list".to_string()), target: None }),
         ["list", ..] => Err(usage_error("mcp list", "")),
         ["show"] => Err(usage_error("mcp show", "<server>")),
         ["show", target] => Ok(SlashCommand::Mcp {
             action: Some("show".to_string()),
             target: Some((*target).to_string()),
         }),
-        ["show", ..] => Err(command_error(
-            "Unexpected arguments for /mcp show.",
-            "mcp",
-            "/mcp show <server>",
-        )),
-        ["help" | "-h" | "--help"] => Ok(SlashCommand::Mcp {
-            action: Some("help".to_string()),
-            target: None,
-        }),
+        ["show", ..] => {
+            Err(command_error("Unexpected arguments for /mcp show.", "mcp", "/mcp show <server>"))
+        }
+        ["help" | "-h" | "--help"] => {
+            Ok(SlashCommand::Mcp { action: Some("help".to_string()), target: None })
+        }
         [action, ..] => Err(command_error(
             &format!("Unknown /mcp action '{action}'. Use list, show <server>, or help."),
             "mcp",
@@ -1697,11 +1597,7 @@ fn parse_skills_args(args: Option<&str>) -> Result<Option<String>, SlashCommandP
 fn usage_error(command: &str, argument_hint: &str) -> SlashCommandParseError {
     let usage = format!("/{command} {argument_hint}");
     let usage = usage.trim_end().to_string();
-    command_error(
-        &format!("Usage: {usage}"),
-        command_root_name(command),
-        &usage,
-    )
+    command_error(&format!("Usage: {usage}"), command_root_name(command), &usage)
 }
 
 fn command_error(message: &str, command: &str, usage: &str) -> SlashCommandParseError {
@@ -1723,10 +1619,7 @@ fn remainder_after_command(input: &str, command: &str) -> Option<String> {
 fn find_slash_command_spec(name: &str) -> Option<&'static SlashCommandSpec> {
     slash_command_specs().iter().find(|spec| {
         spec.name.eq_ignore_ascii_case(name)
-            || spec
-                .aliases
-                .iter()
-                .any(|alias| alias.eq_ignore_ascii_case(name))
+            || spec.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(name))
     })
 }
 
@@ -1745,18 +1638,11 @@ fn slash_command_detail_lines(spec: &SlashCommandSpec) -> Vec<String> {
     let mut lines = vec![format!("/{}", spec.name)];
     lines.push(format!("  Summary          {}", spec.summary));
     lines.push(format!("  Usage            {}", slash_command_usage(spec)));
-    lines.push(format!(
-        "  Category         {}",
-        slash_command_category(spec.name)
-    ));
+    lines.push(format!("  Category         {}", slash_command_category(spec.name)));
     if !spec.aliases.is_empty() {
         lines.push(format!(
             "  Aliases          {}",
-            spec.aliases
-                .iter()
-                .map(|alias| format!("/{alias}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            spec.aliases.iter().map(|alias| format!("/{alias}")).collect::<Vec<_>>().join(", ")
         ));
     }
     if spec.resume_supported {
@@ -1777,10 +1663,7 @@ pub fn slash_command_specs() -> &'static [SlashCommandSpec] {
 
 #[must_use]
 pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
-    slash_command_specs()
-        .iter()
-        .filter(|spec| spec.resume_supported)
-        .collect()
+    slash_command_specs().iter().filter(|spec| spec.resume_supported).collect()
 }
 
 fn slash_command_category(name: &str) -> &'static str {
@@ -1813,18 +1696,10 @@ fn format_slash_command_help_line(spec: &SlashCommandSpec) -> String {
     } else {
         format!(
             " (aliases: {})",
-            spec.aliases
-                .iter()
-                .map(|alias| format!("/{alias}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            spec.aliases.iter().map(|alias| format!("/{alias}")).collect::<Vec<_>>().join(", ")
         )
     };
-    let resume = if spec.resume_supported {
-        " [resume]"
-    } else {
-        ""
-    };
+    let resume = if spec.resume_supported { " [resume]" } else { "" };
     format!("  {name:<66} {}{alias_suffix}{resume}", spec.summary)
 }
 
@@ -1895,11 +1770,7 @@ pub fn suggest_slash_commands(input: &str, limit: usize) -> Vec<String> {
         .collect::<Vec<_>>();
 
     suggestions.sort_unstable();
-    suggestions
-        .into_iter()
-        .map(|(_, _, _, name)| format!("/{name}"))
-        .take(limit)
-        .collect()
+    suggestions.into_iter().map(|(_, _, _, name)| format!("/{name}")).take(limit).collect()
 }
 
 #[must_use]
@@ -2190,10 +2061,7 @@ fn render_mcp_report_for(
     match normalize_optional_args(args) {
         None | Some("list") => {
             let runtime_config = loader.load()?;
-            Ok(render_mcp_summary_report(
-                cwd,
-                runtime_config.mcp().servers(),
-            ))
+            Ok(render_mcp_summary_report(cwd, runtime_config.mcp().servers()))
         }
         Some("-h" | "--help" | "help") => Ok(render_mcp_usage(None)),
         Some("show") => Ok(render_mcp_usage(Some("show"))),
@@ -2207,11 +2075,7 @@ fn render_mcp_report_for(
                 return Ok(render_mcp_usage(Some(args)));
             }
             let runtime_config = loader.load()?;
-            Ok(render_mcp_server_report(
-                cwd,
-                server_name,
-                runtime_config.mcp().get(server_name),
-            ))
+            Ok(render_mcp_server_report(cwd, server_name, runtime_config.mcp().get(server_name)))
         }
         Some(args) => Ok(render_mcp_usage(Some(args))),
     }
@@ -2225,11 +2089,7 @@ pub fn render_plugins_report(plugins: &[PluginSummary]) -> String {
         return lines.join("\n");
     }
     for plugin in plugins {
-        let enabled = if plugin.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
+        let enabled = if plugin.enabled { "enabled" } else { "disabled" };
         lines.push(format!(
             "  {name:<20} v{version:<10} {enabled}",
             name = plugin.metadata.name,
@@ -2295,16 +2155,8 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
 
     if let Some(home) = env::var_os("HOME") {
         let home = PathBuf::from(home);
-        push_unique_root(
-            &mut roots,
-            DefinitionSource::UserCodex,
-            home.join(".codex").join(leaf),
-        );
-        push_unique_root(
-            &mut roots,
-            DefinitionSource::UserClaude,
-            home.join(".claude").join(leaf),
-        );
+        push_unique_root(&mut roots, DefinitionSource::UserCodex, home.join(".codex").join(leaf));
+        push_unique_root(&mut roots, DefinitionSource::UserClaude, home.join(".claude").join(leaf));
     }
 
     roots
@@ -2452,11 +2304,7 @@ fn default_skill_install_root() -> std::io::Result<PathBuf> {
 
 fn resolve_skill_install_source(source: &str, cwd: &Path) -> std::io::Result<SkillInstallSource> {
     let candidate = PathBuf::from(source);
-    let source = if candidate.is_absolute() {
-        candidate
-    } else {
-        cwd.join(candidate)
-    };
+    let source = if candidate.is_absolute() { candidate } else { cwd.join(candidate) };
     let source = fs::canonicalize(&source)?;
 
     if source.is_dir() {
@@ -2464,22 +2312,13 @@ fn resolve_skill_install_source(source: &str, cwd: &Path) -> std::io::Result<Ski
         if !prompt_path.is_file() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "skill directory '{}' must contain SKILL.md",
-                    source.display()
-                ),
+                format!("skill directory '{}' must contain SKILL.md", source.display()),
             ));
         }
-        return Ok(SkillInstallSource::Directory {
-            root: source,
-            prompt_path,
-        });
+        return Ok(SkillInstallSource::Directory { root: source, prompt_path });
     }
 
-    if source
-        .extension()
-        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
-    {
+    if source.extension().is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md")) {
         return Ok(SkillInstallSource::MarkdownFile { path: source });
     }
 
@@ -2512,10 +2351,7 @@ fn derive_skill_install_name(
 }
 
 fn sanitize_skill_invocation_name(candidate: &str) -> Option<String> {
-    let trimmed = candidate
-        .trim()
-        .trim_start_matches('/')
-        .trim_start_matches('$');
+    let trimmed = candidate.trim().trim_start_matches('/').trim_start_matches('$');
     if trimmed.is_empty() {
         return None;
     }
@@ -2535,9 +2371,7 @@ fn sanitize_skill_invocation_name(candidate: &str) -> Option<String> {
         }
     }
 
-    let sanitized = sanitized
-        .trim_matches(|ch| matches!(ch, '-' | '_' | '.'))
-        .to_string();
+    let sanitized = sanitized.trim_matches(|ch| matches!(ch, '-' | '_' | '.')).to_string();
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
@@ -2566,12 +2400,12 @@ impl SkillInstallSource {
 
     fn fallback_name(&self) -> Option<String> {
         match self {
-            Self::Directory { root, .. } => root
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string()),
-            Self::MarkdownFile { path } => path
-                .file_stem()
-                .map(|name| name.to_string_lossy().to_string()),
+            Self::Directory { root, .. } => {
+                root.file_name().map(|name| name.to_string_lossy().to_string())
+            }
+            Self::MarkdownFile { path } => {
+                path.file_stem().map(|name| name.to_string_lossy().to_string())
+            }
         }
     }
 
@@ -2600,11 +2434,7 @@ fn push_unique_skill_root(
     origin: SkillOrigin,
 ) {
     if path.is_dir() && !roots.iter().any(|existing| existing.path == path) {
-        roots.push(SkillRoot {
-            source,
-            path,
-            origin,
-        });
+        roots.push(SkillRoot { source, path, origin });
     }
 }
 
@@ -2739,10 +2569,7 @@ fn parse_toml_string(contents: &str, key: &str) -> Option<String> {
             continue;
         };
         let value = value.trim();
-        let Some(value) = value
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-        else {
+        let Some(value) = value.strip_prefix('"').and_then(|value| value.strip_suffix('"')) else {
             continue;
         };
         if !value.is_empty() {
@@ -2787,11 +2614,7 @@ fn unquote_frontmatter_value(value: &str) -> String {
     value
         .strip_prefix('"')
         .and_then(|trimmed| trimmed.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|trimmed| trimmed.strip_suffix('\''))
-        })
+        .or_else(|| value.strip_prefix('\'').and_then(|trimmed| trimmed.strip_suffix('\'')))
         .unwrap_or(value)
         .trim()
         .to_string()
@@ -2802,15 +2625,9 @@ fn render_agents_report(agents: &[AgentSummary]) -> String {
         return "No agents found.".to_string();
     }
 
-    let total_active = agents
-        .iter()
-        .filter(|agent| agent.shadowed_by.is_none())
-        .count();
-    let mut lines = vec![
-        "Agents".to_string(),
-        format!("  {total_active} active agents"),
-        String::new(),
-    ];
+    let total_active = agents.iter().filter(|agent| agent.shadowed_by.is_none()).count();
+    let mut lines =
+        vec!["Agents".to_string(), format!("  {total_active} active agents"), String::new()];
 
     for source in [
         DefinitionSource::ProjectCodex,
@@ -2819,10 +2636,7 @@ fn render_agents_report(agents: &[AgentSummary]) -> String {
         DefinitionSource::UserCodex,
         DefinitionSource::UserClaude,
     ] {
-        let group = agents
-            .iter()
-            .filter(|agent| agent.source == source)
-            .collect::<Vec<_>>();
+        let group = agents.iter().filter(|agent| agent.source == source).collect::<Vec<_>>();
         if group.is_empty() {
             continue;
         }
@@ -2860,15 +2674,9 @@ fn render_skills_report(skills: &[SkillSummary]) -> String {
         return "No skills found.".to_string();
     }
 
-    let total_active = skills
-        .iter()
-        .filter(|skill| skill.shadowed_by.is_none())
-        .count();
-    let mut lines = vec![
-        "Skills".to_string(),
-        format!("  {total_active} available skills"),
-        String::new(),
-    ];
+    let total_active = skills.iter().filter(|skill| skill.shadowed_by.is_none()).count();
+    let mut lines =
+        vec!["Skills".to_string(), format!("  {total_active} available skills"), String::new()];
 
     for source in [
         DefinitionSource::ProjectCodex,
@@ -2877,10 +2685,7 @@ fn render_skills_report(skills: &[SkillSummary]) -> String {
         DefinitionSource::UserCodex,
         DefinitionSource::UserClaude,
     ] {
-        let group = skills
-            .iter()
-            .filter(|skill| skill.source == source)
-            .collect::<Vec<_>>();
+        let group = skills.iter().filter(|skill| skill.source == source).collect::<Vec<_>>();
         if group.is_empty() {
             continue;
         }
@@ -2916,14 +2721,8 @@ fn render_skill_install_report(skill: &InstalledSkill) -> String {
         lines.push(format!("  Display name     {display_name}"));
     }
     lines.push(format!("  Source           {}", skill.source.display()));
-    lines.push(format!(
-        "  Registry         {}",
-        skill.registry_root.display()
-    ));
-    lines.push(format!(
-        "  Installed path   {}",
-        skill.installed_path.display()
-    ));
+    lines.push(format!("  Registry         {}", skill.registry_root.display()));
+    lines.push(format!("  Installed path   {}", skill.installed_path.display()));
     lines.join("\n")
 }
 
@@ -2971,19 +2770,13 @@ fn render_mcp_server_report(
         format!("  Working directory {}", cwd.display()),
         format!("  Name              {server_name}"),
         format!("  Scope             {}", config_source_label(server.scope)),
-        format!(
-            "  Transport         {}",
-            mcp_transport_label(&server.config)
-        ),
+        format!("  Transport         {}", mcp_transport_label(&server.config)),
     ];
 
     match &server.config {
         McpServerConfig::Stdio(config) => {
             lines.push(format!("  Command           {}", config.command));
-            lines.push(format!(
-                "  Args              {}",
-                format_optional_list(&config.args)
-            ));
+            lines.push(format!("  Args              {}", format_optional_list(&config.args)));
             lines.push(format!(
                 "  Env keys          {}",
                 format_optional_keys(config.env.keys().cloned().collect())
@@ -3005,10 +2798,7 @@ fn render_mcp_server_report(
                 "  Header helper     {}",
                 config.headers_helper.as_deref().unwrap_or("<none>")
             ));
-            lines.push(format!(
-                "  OAuth             {}",
-                format_mcp_oauth(config.oauth.as_ref())
-            ));
+            lines.push(format!("  OAuth             {}", format_mcp_oauth(config.oauth.as_ref())));
         }
         McpServerConfig::Ws(config) => {
             lines.push(format!("  URL               {}", config.url));
@@ -3180,10 +2970,7 @@ pub fn handle_slash_command(
                     result.removed_message_count
                 )
             };
-            Some(SlashCommandResult {
-                message,
-                session: result.compacted_session,
-            })
+            Some(SlashCommandResult { message, session: result.compacted_session })
         }
         SlashCommand::Help => Some(SlashCommandResult {
             message: render_slash_command_help(),
@@ -3337,119 +3124,69 @@ mod tests {
     }
 
     fn parse_error_message(input: &str) -> String {
-        SlashCommand::parse(input)
-            .expect_err("slash command should be rejected")
-            .to_string()
+        SlashCommand::parse(input).expect_err("slash command should be rejected").to_string()
     }
 
     #[allow(clippy::too_many_lines)]
     #[test]
     fn parses_supported_slash_commands() {
         assert_eq!(SlashCommand::parse("/help"), Ok(Some(SlashCommand::Help)));
-        assert_eq!(
-            SlashCommand::parse(" /status "),
-            Ok(Some(SlashCommand::Status))
-        );
-        assert_eq!(
-            SlashCommand::parse("/sandbox"),
-            Ok(Some(SlashCommand::Sandbox))
-        );
+        assert_eq!(SlashCommand::parse(" /status "), Ok(Some(SlashCommand::Status)));
+        assert_eq!(SlashCommand::parse("/sandbox"), Ok(Some(SlashCommand::Sandbox)));
         assert_eq!(
             SlashCommand::parse("/bughunter runtime"),
-            Ok(Some(SlashCommand::Bughunter {
-                scope: Some("runtime".to_string())
-            }))
+            Ok(Some(SlashCommand::Bughunter { scope: Some("runtime".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/commit"),
-            Ok(Some(SlashCommand::Commit))
-        );
+        assert_eq!(SlashCommand::parse("/commit"), Ok(Some(SlashCommand::Commit)));
         assert_eq!(
             SlashCommand::parse("/pr ready for review"),
-            Ok(Some(SlashCommand::Pr {
-                context: Some("ready for review".to_string())
-            }))
+            Ok(Some(SlashCommand::Pr { context: Some("ready for review".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/issue flaky test"),
-            Ok(Some(SlashCommand::Issue {
-                context: Some("flaky test".to_string())
-            }))
+            Ok(Some(SlashCommand::Issue { context: Some("flaky test".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/ultraplan ship both features"),
-            Ok(Some(SlashCommand::Ultraplan {
-                task: Some("ship both features".to_string())
-            }))
+            Ok(Some(SlashCommand::Ultraplan { task: Some("ship both features".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/teleport conversation.rs"),
-            Ok(Some(SlashCommand::Teleport {
-                target: Some("conversation.rs".to_string())
-            }))
+            Ok(Some(SlashCommand::Teleport { target: Some("conversation.rs".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/debug-tool-call"),
-            Ok(Some(SlashCommand::DebugToolCall))
-        );
+        assert_eq!(SlashCommand::parse("/debug-tool-call"), Ok(Some(SlashCommand::DebugToolCall)));
         assert_eq!(
             SlashCommand::parse("/bughunter runtime"),
-            Ok(Some(SlashCommand::Bughunter {
-                scope: Some("runtime".to_string())
-            }))
+            Ok(Some(SlashCommand::Bughunter { scope: Some("runtime".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/commit"),
-            Ok(Some(SlashCommand::Commit))
-        );
+        assert_eq!(SlashCommand::parse("/commit"), Ok(Some(SlashCommand::Commit)));
         assert_eq!(
             SlashCommand::parse("/pr ready for review"),
-            Ok(Some(SlashCommand::Pr {
-                context: Some("ready for review".to_string())
-            }))
+            Ok(Some(SlashCommand::Pr { context: Some("ready for review".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/issue flaky test"),
-            Ok(Some(SlashCommand::Issue {
-                context: Some("flaky test".to_string())
-            }))
+            Ok(Some(SlashCommand::Issue { context: Some("flaky test".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/ultraplan ship both features"),
-            Ok(Some(SlashCommand::Ultraplan {
-                task: Some("ship both features".to_string())
-            }))
+            Ok(Some(SlashCommand::Ultraplan { task: Some("ship both features".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/teleport conversation.rs"),
-            Ok(Some(SlashCommand::Teleport {
-                target: Some("conversation.rs".to_string())
-            }))
+            Ok(Some(SlashCommand::Teleport { target: Some("conversation.rs".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/debug-tool-call"),
-            Ok(Some(SlashCommand::DebugToolCall))
-        );
+        assert_eq!(SlashCommand::parse("/debug-tool-call"), Ok(Some(SlashCommand::DebugToolCall)));
         assert_eq!(
             SlashCommand::parse("/model claude-opus"),
-            Ok(Some(SlashCommand::Model {
-                model: Some("claude-opus".to_string()),
-            }))
+            Ok(Some(SlashCommand::Model { model: Some("claude-opus".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/model"),
-            Ok(Some(SlashCommand::Model { model: None }))
-        );
+        assert_eq!(SlashCommand::parse("/model"), Ok(Some(SlashCommand::Model { model: None })));
         assert_eq!(
             SlashCommand::parse("/permissions read-only"),
-            Ok(Some(SlashCommand::Permissions {
-                mode: Some("read-only".to_string()),
-            }))
+            Ok(Some(SlashCommand::Permissions { mode: Some("read-only".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/clear"),
-            Ok(Some(SlashCommand::Clear { confirm: false }))
-        );
+        assert_eq!(SlashCommand::parse("/clear"), Ok(Some(SlashCommand::Clear { confirm: false })));
         assert_eq!(
             SlashCommand::parse("/clear --confirm"),
             Ok(Some(SlashCommand::Clear { confirm: true }))
@@ -3457,9 +3194,7 @@ mod tests {
         assert_eq!(SlashCommand::parse("/cost"), Ok(Some(SlashCommand::Cost)));
         assert_eq!(
             SlashCommand::parse("/resume session.json"),
-            Ok(Some(SlashCommand::Resume {
-                session_path: Some("session.json".to_string()),
-            }))
+            Ok(Some(SlashCommand::Resume { session_path: Some("session.json".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/config"),
@@ -3467,16 +3202,11 @@ mod tests {
         );
         assert_eq!(
             SlashCommand::parse("/config env"),
-            Ok(Some(SlashCommand::Config {
-                section: Some("env".to_string())
-            }))
+            Ok(Some(SlashCommand::Config { section: Some("env".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/mcp"),
-            Ok(Some(SlashCommand::Mcp {
-                action: None,
-                target: None
-            }))
+            Ok(Some(SlashCommand::Mcp { action: None, target: None }))
         );
         assert_eq!(
             SlashCommand::parse("/mcp show remote"),
@@ -3485,21 +3215,13 @@ mod tests {
                 target: Some("remote".to_string())
             }))
         );
-        assert_eq!(
-            SlashCommand::parse("/memory"),
-            Ok(Some(SlashCommand::Memory))
-        );
+        assert_eq!(SlashCommand::parse("/memory"), Ok(Some(SlashCommand::Memory)));
         assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init)));
         assert_eq!(SlashCommand::parse("/diff"), Ok(Some(SlashCommand::Diff)));
-        assert_eq!(
-            SlashCommand::parse("/version"),
-            Ok(Some(SlashCommand::Version))
-        );
+        assert_eq!(SlashCommand::parse("/version"), Ok(Some(SlashCommand::Version)));
         assert_eq!(
             SlashCommand::parse("/export notes.txt"),
-            Ok(Some(SlashCommand::Export {
-                path: Some("notes.txt".to_string())
-            }))
+            Ok(Some(SlashCommand::Export { path: Some("notes.txt".to_string()) }))
         );
         assert_eq!(
             SlashCommand::parse("/session switch abc123"),
@@ -3517,10 +3239,7 @@ mod tests {
         );
         assert_eq!(
             SlashCommand::parse("/plugins list"),
-            Ok(Some(SlashCommand::Plugins {
-                action: Some("list".to_string()),
-                target: None
-            }))
+            Ok(Some(SlashCommand::Plugins { action: Some("list".to_string()), target: None }))
         );
         assert_eq!(
             SlashCommand::parse("/plugins enable demo"),
@@ -3750,22 +3469,15 @@ mod tests {
         let mut session = Session::new();
         session.messages = vec![
             ConversationMessage::user_text("a ".repeat(200)),
-            ConversationMessage::assistant(vec![ContentBlock::Text {
-                text: "b ".repeat(200),
-            }]),
+            ConversationMessage::assistant(vec![ContentBlock::Text { text: "b ".repeat(200) }]),
             ConversationMessage::tool_result("1", "bash", "ok ".repeat(200), false),
-            ConversationMessage::assistant(vec![ContentBlock::Text {
-                text: "recent".to_string(),
-            }]),
+            ConversationMessage::assistant(vec![ContentBlock::Text { text: "recent".to_string() }]),
         ];
 
         let result = handle_slash_command(
             "/compact",
             &session,
-            CompactionConfig {
-                preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
-            },
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 },
         )
         .expect("slash command should be handled");
 
@@ -3788,22 +3500,16 @@ mod tests {
         assert!(handle_slash_command("/unknown", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/status", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/sandbox", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/bughunter", &session, CompactionConfig::default()).is_none()
-        );
+        assert!(handle_slash_command("/bughunter", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/commit", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/pr", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/issue", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/ultraplan", &session, CompactionConfig::default()).is_none()
-        );
+        assert!(handle_slash_command("/ultraplan", &session, CompactionConfig::default()).is_none());
         assert!(
             handle_slash_command("/teleport foo", &session, CompactionConfig::default()).is_none()
         );
-        assert!(
-            handle_slash_command("/debug-tool-call", &session, CompactionConfig::default())
-                .is_none()
-        );
+        assert!(handle_slash_command("/debug-tool-call", &session, CompactionConfig::default())
+            .is_none());
         assert!(
             handle_slash_command("/model claude", &session, CompactionConfig::default()).is_none()
         );
@@ -3814,10 +3520,8 @@ mod tests {
         )
         .is_none());
         assert!(handle_slash_command("/clear", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/clear --confirm", &session, CompactionConfig::default())
-                .is_none()
-        );
+        assert!(handle_slash_command("/clear --confirm", &session, CompactionConfig::default())
+            .is_none());
         assert!(handle_slash_command("/cost", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command(
             "/resume session.json",
@@ -3838,10 +3542,8 @@ mod tests {
         assert!(handle_slash_command("/mcp list", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/diff", &session, CompactionConfig::default()).is_none());
         assert!(handle_slash_command("/version", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/export note.txt", &session, CompactionConfig::default())
-                .is_none()
-        );
+        assert!(handle_slash_command("/export note.txt", &session, CompactionConfig::default())
+            .is_none());
         assert!(
             handle_slash_command("/session list", &session, CompactionConfig::default()).is_none()
         );
@@ -3896,27 +3598,9 @@ mod tests {
         let user_home = temp_dir("agents-home");
         let user_agents = user_home.join(".codex").join("agents");
 
-        write_agent(
-            &project_agents,
-            "planner",
-            "Project planner",
-            "gpt-5.4",
-            "medium",
-        );
-        write_agent(
-            &user_agents,
-            "planner",
-            "User planner",
-            "gpt-5.4-mini",
-            "high",
-        );
-        write_agent(
-            &user_agents,
-            "verifier",
-            "Verification agent",
-            "gpt-5.4-mini",
-            "high",
-        );
+        write_agent(&project_agents, "planner", "Project planner", "gpt-5.4", "medium");
+        write_agent(&user_agents, "planner", "User planner", "gpt-5.4-mini", "high");
+        write_agent(&user_agents, "verifier", "Verification agent", "gpt-5.4-mini", "high");
 
         let roots = vec![
             (DefinitionSource::ProjectCodex, project_agents),
@@ -4115,11 +3799,7 @@ mod tests {
         let workspace = temp_dir("skills-install-workspace");
         let source_root = workspace.join("source").join("help");
         let install_root = temp_dir("skills-install-root");
-        write_skill(
-            source_root.parent().expect("parent"),
-            "help",
-            "Helpful skill",
-        );
+        write_skill(source_root.parent().expect("parent"), "help", "Helpful skill");
         let script_dir = source_root.join("scripts");
         fs::create_dir_all(&script_dir).expect("script dir");
         fs::write(script_dir.join("run.sh"), "#!/bin/sh\necho help\n").expect("write script");
@@ -4135,11 +3815,7 @@ mod tests {
         assert_eq!(installed.display_name.as_deref(), Some("help"));
         assert!(installed.installed_path.ends_with(Path::new("help")));
         assert!(installed.installed_path.join("SKILL.md").is_file());
-        assert!(installed
-            .installed_path
-            .join("scripts")
-            .join("run.sh")
-            .is_file());
+        assert!(installed.installed_path.join("scripts").join("run.sh").is_file());
 
         let report = super::render_skill_install_report(&installed);
         assert!(report.contains("Result           installed help"));

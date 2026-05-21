@@ -295,9 +295,7 @@ mod tests {
         let mut session = Session::new();
         session.messages = vec![ConversationMessage {
             role: MessageRole::Assistant,
-            blocks: vec![ContentBlock::Text {
-                text: "done".to_string(),
-            }],
+            blocks: vec![ContentBlock::Text { text: "done".to_string() }],
             usage: Some(TokenUsage {
                 input_tokens: 5,
                 output_tokens: 2,

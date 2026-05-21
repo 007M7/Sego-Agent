@@ -17,9 +17,7 @@ use tokio::sync::Mutex;
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[tokio::test]
@@ -38,19 +36,14 @@ async fn send_message_posts_json_and_parses_response() {
         "\"request_id\":\"req_body_123\"",
         "}"
     );
-    let server = spawn_server(
-        state.clone(),
-        vec![http_response("200 OK", "application/json", body)],
-    )
-    .await;
+    let server =
+        spawn_server(state.clone(), vec![http_response("200 OK", "application/json", body)]).await;
 
     let client = ApiClient::new("test-key")
         .with_auth_token(Some("proxy-token".to_string()))
         .with_base_url(server.base_url());
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("request should succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("request should succeed");
 
     assert_eq!(response.id, "msg_test");
     assert_eq!(response.total_tokens(), 16);
@@ -59,31 +52,20 @@ async fn send_message_posts_json_and_parses_response() {
     assert_eq!(response.usage.cache_read_input_tokens, 0);
     assert_eq!(
         response.content,
-        vec![OutputContentBlock::Text {
-            text: "Hello from Claude".to_string(),
-        }]
+        vec![OutputContentBlock::Text { text: "Hello from Claude".to_string() }]
     );
 
     let captured = state.lock().await;
     let request = captured.first().expect("server should capture request");
     assert_eq!(request.method, "POST");
     assert_eq!(request.path, "/v1/messages");
-    assert_eq!(
-        request.headers.get("x-api-key").map(String::as_str),
-        Some("test-key")
-    );
+    assert_eq!(request.headers.get("x-api-key").map(String::as_str), Some("test-key"));
     assert_eq!(
         request.headers.get("authorization").map(String::as_str),
         Some("Bearer proxy-token")
     );
-    assert_eq!(
-        request.headers.get("anthropic-version").map(String::as_str),
-        Some("2023-06-01")
-    );
-    assert_eq!(
-        request.headers.get("user-agent").map(String::as_str),
-        Some("claude-code/0.1.0")
-    );
+    assert_eq!(request.headers.get("anthropic-version").map(String::as_str), Some("2023-06-01"));
+    assert_eq!(request.headers.get("user-agent").map(String::as_str), Some("claude-code/0.1.0"));
     assert_eq!(
         request.headers.get("anthropic-beta").map(String::as_str),
         Some("claude-code-20250219,prompt-caching-scope-2026-01-05")
@@ -97,10 +79,7 @@ async fn send_message_posts_json_and_parses_response() {
     assert!(body.get("stream").is_none());
     assert_eq!(body["tools"][0]["name"], json!("get_weather"));
     assert_eq!(body["tool_choice"]["type"], json!("auto"));
-    assert_eq!(
-        body["betas"],
-        json!(["claude-code-20250219", "prompt-caching-scope-2026-01-05"])
-    );
+    assert_eq!(body["betas"], json!(["claude-code-20250219", "prompt-caching-scope-2026-01-05"]));
 }
 
 #[tokio::test]
@@ -136,10 +115,8 @@ async fn send_message_applies_request_profile_and_records_telemetry() {
         .with_extra_body_param("metadata", json!({"source": "clawd-code"}))
         .with_session_tracer(SessionTracer::new("session-telemetry", sink.clone()));
 
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("request should succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("request should succeed");
 
     assert_eq!(response.request_id.as_deref(), Some("req_profile_123"));
 
@@ -149,20 +126,13 @@ async fn send_message_applies_request_profile_and_records_telemetry() {
         request.headers.get("anthropic-beta").map(String::as_str),
         Some("claude-code-20250219,prompt-caching-scope-2026-01-05,tools-2026-04-01")
     );
-    assert_eq!(
-        request.headers.get("user-agent").map(String::as_str),
-        Some("claude-code/9.9.9")
-    );
+    assert_eq!(request.headers.get("user-agent").map(String::as_str), Some("claude-code/9.9.9"));
     let body: serde_json::Value =
         serde_json::from_str(&request.body).expect("request body should be json");
     assert_eq!(body["metadata"]["source"], json!("clawd-code"));
     assert_eq!(
         body["betas"],
-        json!([
-            "claude-code-20250219",
-            "prompt-caching-scope-2026-01-05",
-            "tools-2026-04-01"
-        ])
+        json!(["claude-code-20250219", "prompt-caching-scope-2026-01-05", "tools-2026-04-01"])
     );
 
     let events = sink.events();
@@ -223,17 +193,11 @@ async fn send_message_parses_prompt_cache_token_usage_from_response() {
         "\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":321,\"cache_read_input_tokens\":654,\"output_tokens\":4}",
         "}"
     );
-    let server = spawn_server(
-        state,
-        vec![http_response("200 OK", "application/json", body)],
-    )
-    .await;
+    let server = spawn_server(state, vec![http_response("200 OK", "application/json", body)]).await;
 
     let client = AnthropicClient::new("test-key").with_base_url(server.base_url());
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("request should succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("request should succeed");
 
     assert_eq!(response.usage.input_tokens, 12);
     assert_eq!(response.usage.cache_creation_input_tokens, 321);
@@ -285,19 +249,13 @@ async fn stream_message_parses_sse_events_with_tool_use() {
         .with_auth_token(Some("proxy-token".to_string()))
         .with_base_url(server.base_url())
         .with_prompt_cache(PromptCache::new("stream-session"));
-    let mut stream = client
-        .stream_message(&sample_request(false))
-        .await
-        .expect("stream should start");
+    let mut stream =
+        client.stream_message(&sample_request(false)).await.expect("stream should start");
 
     assert_eq!(stream.request_id(), Some("req_stream_456"));
 
     let mut events = Vec::new();
-    while let Some(event) = stream
-        .next_event()
-        .await
-        .expect("stream event should parse")
-    {
+    while let Some(event) = stream.next_event().await.expect("stream event should parse") {
         events.push(event);
     }
 
@@ -318,10 +276,7 @@ async fn stream_message_parses_sse_events_with_tool_use() {
         })
     ));
     assert!(matches!(events[3], StreamEvent::ContentBlockStop(_)));
-    assert!(matches!(
-        events[4],
-        StreamEvent::MessageDelta(MessageDeltaEvent { .. })
-    ));
+    assert!(matches!(events[4], StreamEvent::MessageDelta(MessageDeltaEvent { .. })));
     assert!(matches!(events[5], StreamEvent::MessageStop(_)));
 
     match &events[1] {
@@ -339,16 +294,11 @@ async fn stream_message_parses_sse_events_with_tool_use() {
     let request = captured.first().expect("server should capture request");
     assert!(request.body.contains("\"stream\":true"));
 
-    let cache_stats = client
-        .prompt_cache_stats()
-        .expect("prompt cache stats should exist");
+    let cache_stats = client.prompt_cache_stats().expect("prompt cache stats should exist");
     assert_eq!(cache_stats.tracked_requests, 1);
     assert_eq!(cache_stats.last_cache_creation_input_tokens, Some(34));
     assert_eq!(cache_stats.last_cache_read_input_tokens, Some(55));
-    assert_eq!(
-        cache_stats.last_cache_source.as_deref(),
-        Some("api-response")
-    );
+    assert_eq!(cache_stats.last_cache_source.as_deref(), Some("api-response"));
 
     std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
     std::env::remove_var("CLAUDE_CONFIG_HOME");
@@ -374,14 +324,14 @@ async fn retries_retryable_failures_before_succeeding() {
     )
     .await;
 
-    let client = ApiClient::new("test-key")
-        .with_base_url(server.base_url())
-        .with_retry_policy(2, Duration::from_millis(1), Duration::from_millis(2));
+    let client = ApiClient::new("test-key").with_base_url(server.base_url()).with_retry_policy(
+        2,
+        Duration::from_millis(1),
+        Duration::from_millis(2),
+    );
 
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("retry should eventually succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("retry should eventually succeed");
 
     assert_eq!(response.total_tokens(), 5);
     assert_eq!(state.lock().await.len(), 2);
@@ -422,10 +372,7 @@ async fn provider_client_dispatches_anthropic_requests() {
     let captured = state.lock().await;
     let request = captured.first().expect("server should capture request");
     assert_eq!(request.path, "/v1/messages");
-    assert_eq!(
-        request.headers.get("x-api-key").map(String::as_str),
-        Some("test-key")
-    );
+    assert_eq!(request.headers.get("x-api-key").map(String::as_str), Some("test-key"));
 }
 
 #[tokio::test]
@@ -448,20 +395,17 @@ async fn surfaces_retry_exhaustion_for_persistent_retryable_errors() {
     )
     .await;
 
-    let client = ApiClient::new("test-key")
-        .with_base_url(server.base_url())
-        .with_retry_policy(1, Duration::from_millis(1), Duration::from_millis(2));
+    let client = ApiClient::new("test-key").with_base_url(server.base_url()).with_retry_policy(
+        1,
+        Duration::from_millis(1),
+        Duration::from_millis(2),
+    );
 
-    let error = client
-        .send_message(&sample_request(false))
-        .await
-        .expect_err("persistent 503 should fail");
+    let error =
+        client.send_message(&sample_request(false)).await.expect_err("persistent 503 should fail");
 
     match error {
-        ApiError::RetriesExhausted {
-            attempts,
-            last_error,
-        } => {
+        ApiError::RetriesExhausted { attempts, last_error } => {
             assert_eq!(attempts, 2);
             assert!(matches!(
                 *last_error,
@@ -505,10 +449,8 @@ async fn send_message_reuses_recent_completion_cache_entries() {
         .with_base_url(server.base_url())
         .with_prompt_cache(PromptCache::new("integration-session"));
 
-    let first = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("first request should succeed");
+    let first =
+        client.send_message(&sample_request(false)).await.expect("first request should succeed");
     let second = client
         .send_message(&sample_request(false))
         .await
@@ -517,9 +459,7 @@ async fn send_message_reuses_recent_completion_cache_entries() {
     assert_eq!(first.content, second.content);
     assert_eq!(state.lock().await.len(), 1);
 
-    let cache_stats = client
-        .prompt_cache_stats()
-        .expect("prompt cache stats should exist");
+    let cache_stats = client.prompt_cache_stats().expect("prompt cache stats should exist");
     assert_eq!(cache_stats.completion_cache_hits, 1);
     assert_eq!(cache_stats.completion_cache_misses, 1);
     assert_eq!(cache_stats.completion_cache_writes, 1);
@@ -569,18 +509,10 @@ async fn send_message_tracks_unexpected_prompt_cache_breaks() {
             ..PromptCacheConfig::default()
         }));
 
-    client
-        .send_message(&request)
-        .await
-        .expect("first response should succeed");
-    client
-        .send_message(&request)
-        .await
-        .expect("second response should succeed");
+    client.send_message(&request).await.expect("first response should succeed");
+    client.send_message(&request).await.expect("second response should succeed");
 
-    let cache_stats = client
-        .prompt_cache_stats()
-        .expect("prompt cache stats should exist");
+    let cache_stats = client.prompt_cache_stats().expect("prompt cache stats should exist");
     assert_eq!(cache_stats.unexpected_cache_breaks, 1);
     assert_eq!(
         cache_stats.last_break_reason.as_deref(),
@@ -600,9 +532,7 @@ async fn live_stream_smoke_test() {
             model: std::env::var("ANTHROPIC_MODEL")
                 .unwrap_or_else(|_| "claude-3-7-sonnet-latest".to_string()),
             max_tokens: 32,
-            messages: vec![InputMessage::user_text(
-                "Reply with exactly: hello from rust",
-            )],
+            messages: vec![InputMessage::user_text("Reply with exactly: hello from rust")],
             system: None,
             tools: None,
             tool_choice: None,
@@ -611,11 +541,7 @@ async fn live_stream_smoke_test() {
         .await
         .expect("live stream should start");
 
-    while let Some(_event) = stream
-        .next_event()
-        .await
-        .expect("live stream should yield events")
-    {}
+    while let Some(_event) = stream.next_event().await.expect("live stream should yield events") {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,12 +573,8 @@ async fn spawn_server(
     state: Arc<Mutex<Vec<CapturedRequest>>>,
     responses: Vec<String>,
 ) -> TestServer {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("listener should have local addr");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener should bind");
+    let address = listener.local_addr().expect("listener should have local addr");
     let join_handle = tokio::spawn(async move {
         for response in responses {
             let (mut socket, _) = listener.accept().await.expect("server should accept");
@@ -661,10 +583,7 @@ async fn spawn_server(
 
             loop {
                 let mut chunk = [0_u8; 1024];
-                let read = socket
-                    .read(&mut chunk)
-                    .await
-                    .expect("request read should succeed");
+                let read = socket.read(&mut chunk).await.expect("request read should succeed");
                 if read == 0 {
                     break;
                 }
@@ -701,10 +620,7 @@ async fn spawn_server(
             let mut body = remaining[4..].to_vec();
             while body.len() < content_length {
                 let mut chunk = vec![0_u8; content_length - body.len()];
-                let read = socket
-                    .read(&mut chunk)
-                    .await
-                    .expect("body read should succeed");
+                let read = socket.read(&mut chunk).await.expect("body read should succeed");
                 if read == 0 {
                     break;
                 }
@@ -718,17 +634,11 @@ async fn spawn_server(
                 body: String::from_utf8(body).expect("body should be utf8"),
             });
 
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("response write should succeed");
+            socket.write_all(response.as_bytes()).await.expect("response write should succeed");
         }
     });
 
-    TestServer {
-        base_url: format!("http://{address}"),
-        join_handle,
-    }
+    TestServer { base_url: format!("http://{address}"), join_handle }
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -763,9 +673,7 @@ fn sample_request(stream: bool) -> MessageRequest {
         messages: vec![InputMessage {
             role: "user".to_string(),
             content: vec![
-                InputContentBlock::Text {
-                    text: "Say hello".to_string(),
-                },
+                InputContentBlock::Text { text: "Say hello".to_string() },
                 InputContentBlock::ToolResult {
                     tool_use_id: "toolu_prev".to_string(),
                     content: vec![api::ToolResultContentBlock::Json {

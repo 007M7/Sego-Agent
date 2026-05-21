@@ -121,14 +121,7 @@ impl PromptCache {
         let paths = PromptCachePaths::for_session(&config.session_id);
         let stats = read_json::<PromptCacheStats>(&paths.stats_path).unwrap_or_default();
         let previous = read_json::<TrackedPromptState>(&paths.session_state_path);
-        Self {
-            inner: Arc::new(Mutex::new(PromptCacheInner {
-                config,
-                paths,
-                stats,
-                previous,
-            })),
-        }
+        Self { inner: Arc::new(Mutex::new(PromptCacheInner { config, paths, stats, previous })) }
     }
 
     #[must_use]
@@ -184,10 +177,7 @@ impl PromptCache {
             &request_hash,
             "completion-cache",
         );
-        inner.previous = Some(TrackedPromptState::from_usage(
-            request,
-            &entry.response.usage,
-        ));
+        inner.previous = Some(TrackedPromptState::from_usage(request, &entry.response.usage));
         persist_state(&inner);
         Some(entry.response)
     }
@@ -236,16 +226,11 @@ impl PromptCache {
         }
         persist_state(&inner);
 
-        PromptCacheRecord {
-            cache_break,
-            stats: inner.stats.clone(),
-        }
+        PromptCacheRecord { cache_break, stats: inner.stats.clone() }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, PromptCacheInner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -331,9 +316,8 @@ fn detect_cache_break(
                 .saturating_sub(current.cache_read_input_tokens),
         });
     }
-    let token_drop = previous
-        .cache_read_input_tokens
-        .saturating_sub(current.cache_read_input_tokens);
+    let token_drop =
+        previous.cache_read_input_tokens.saturating_sub(current.cache_read_input_tokens);
     if token_drop < config.cache_break_min_drop {
         return None;
     }
@@ -352,21 +336,13 @@ fn detect_cache_break(
         reasons.push("message payload changed");
     }
 
-    let elapsed = current
-        .observed_at_unix_secs
-        .saturating_sub(previous.observed_at_unix_secs);
+    let elapsed = current.observed_at_unix_secs.saturating_sub(previous.observed_at_unix_secs);
 
     let (unexpected, reason) = if reasons.is_empty() {
         if elapsed > config.prompt_ttl.as_secs() {
-            (
-                false,
-                format!("possible prompt cache TTL expiry after {elapsed}s"),
-            )
+            (false, format!("possible prompt cache TTL expiry after {elapsed}s"))
         } else {
-            (
-                true,
-                "cache read tokens dropped while prompt fingerprint remained stable".to_string(),
-            )
+            (true, "cache read tokens dropped while prompt fingerprint remained stable".to_string())
         }
     } else {
         (false, reasons.join(", "))
@@ -433,10 +409,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 }
 
 fn request_hash_hex(request: &MessageRequest) -> String {
-    format!(
-        "{REQUEST_FINGERPRINT_PREFIX}-{:016x}",
-        hash_serializable(request)
-    )
+    format!("{REQUEST_FINGERPRINT_PREFIX}-{:016x}", hash_serializable(request))
 }
 
 fn hash_serializable<T: Serialize>(value: &T) -> u64 {
@@ -445,19 +418,13 @@ fn hash_serializable<T: Serialize>(value: &T) -> u64 {
 }
 
 fn sanitize_path_segment(value: &str) -> String {
-    let sanitized: String = value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect();
+    let sanitized: String =
+        value.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
     if sanitized.len() <= MAX_SANITIZED_LENGTH {
         return sanitized;
     }
     let suffix = format!("-{:x}", hash_string(value));
-    format!(
-        "{}{}",
-        &sanitized[..MAX_SANITIZED_LENGTH.saturating_sub(suffix.len())],
-        suffix
-    )
+    format!("{}{}", &sanitized[..MAX_SANITIZED_LENGTH.saturating_sub(suffix.len())], suffix)
 }
 
 fn hash_string(value: &str) -> u64 {
@@ -466,23 +433,16 @@ fn hash_string(value: &str) -> u64 {
 
 fn base_cache_root() -> PathBuf {
     if let Some(config_home) = std::env::var_os("CLAUDE_CONFIG_HOME") {
-        return PathBuf::from(config_home)
-            .join("cache")
-            .join("prompt-cache");
+        return PathBuf::from(config_home).join("cache").join("prompt-cache");
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".claude")
-            .join("cache")
-            .join("prompt-cache");
+        return PathBuf::from(home).join(".claude").join("cache").join("prompt-cache");
     }
     std::env::temp_dir().join("claude-prompt-cache")
 }
 
 fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs())
 }
 
 const fn current_fingerprint_version() -> u32 {
@@ -591,10 +551,7 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!(
             "prompt-cache-test-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos()
         ));
         std::env::set_var("CLAUDE_CONFIG_HOME", &temp_root);
         let cache = PromptCache::new("unit-test-session");
@@ -605,9 +562,7 @@ mod tests {
         let record = cache.record_response(&request, &response);
         assert!(record.cache_break.is_none());
 
-        let cached = cache
-            .lookup_completion(&request)
-            .expect("cached response should load");
+        let cached = cache.lookup_completion(&request).expect("cached response should load");
         assert_eq!(cached.content, response.content);
 
         let stats = cache.stats();
@@ -629,10 +584,7 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!(
             "prompt-cache-distinct-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos()
         ));
         std::env::set_var("CLAUDE_CONFIG_HOME", &temp_root);
         let cache = PromptCache::new("distinct-request-session");
@@ -654,10 +606,7 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!(
             "prompt-cache-expired-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos()
         ));
         std::env::set_var("CLAUDE_CONFIG_HOME", &temp_root);
         let cache = PromptCache::with_config(PromptCacheConfig {
@@ -716,9 +665,7 @@ mod tests {
             id: "msg_test".to_string(),
             kind: "message".to_string(),
             role: "assistant".to_string(),
-            content: vec![OutputContentBlock::Text {
-                text: text.to_string(),
-            }],
+            content: vec![OutputContentBlock::Text { text: text.to_string() }],
             model: "claude-3-7-sonnet-latest".to_string(),
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,
