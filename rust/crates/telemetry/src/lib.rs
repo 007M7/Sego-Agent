@@ -92,10 +92,7 @@ impl AnthropicRequestProfile {
     #[must_use]
     pub fn header_pairs(&self) -> Vec<(String, String)> {
         let mut headers = vec![
-            (
-                "anthropic-version".to_string(),
-                self.anthropic_version.clone(),
-            ),
+            ("anthropic-version".to_string(), self.anthropic_version.clone()),
             ("user-agent".to_string(), self.client_identity.user_agent()),
         ];
         if !self.betas.is_empty() {
@@ -142,11 +139,7 @@ pub struct AnalyticsEvent {
 impl AnalyticsEvent {
     #[must_use]
     pub fn new(namespace: impl Into<String>, action: impl Into<String>) -> Self {
-        Self {
-            namespace: namespace.into(),
-            action: action.into(),
-            properties: Map::new(),
-        }
+        Self { namespace: namespace.into(), action: action.into(), properties: Map::new() }
     }
 
     #[must_use]
@@ -214,19 +207,13 @@ pub struct MemoryTelemetrySink {
 impl MemoryTelemetrySink {
     #[must_use]
     pub fn events(&self) -> Vec<TelemetryEvent> {
-        self.events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
 impl TelemetrySink for MemoryTelemetrySink {
     fn record(&self, event: TelemetryEvent) {
-        self.events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(event);
+        self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(event);
     }
 }
 
@@ -237,9 +224,7 @@ pub struct JsonlTelemetrySink {
 
 impl Debug for JsonlTelemetrySink {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JsonlTelemetrySink")
-            .field("path", &self.path)
-            .finish_non_exhaustive()
+        f.debug_struct("JsonlTelemetrySink").field("path", &self.path).finish_non_exhaustive()
     }
 }
 
@@ -250,10 +235,7 @@ impl JsonlTelemetrySink {
             std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self {
-            path,
-            file: Mutex::new(file),
-        })
+        Ok(Self { path, file: Mutex::new(file) })
     }
 
     #[must_use]
@@ -267,10 +249,7 @@ impl TelemetrySink for JsonlTelemetrySink {
         let Ok(line) = serde_json::to_string(&event) else {
             return;
         };
-        let mut file = self
-            .file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut file = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = writeln!(file, "{line}");
         let _ = file.flush();
     }
@@ -294,11 +273,7 @@ impl Debug for SessionTracer {
 impl SessionTracer {
     #[must_use]
     pub fn new(session_id: impl Into<String>, sink: Arc<dyn TelemetrySink>) -> Self {
-        Self {
-            session_id: session_id.into(),
-            sequence: Arc::new(AtomicU64::new(0)),
-            sink,
-        }
+        Self { session_id: session_id.into(), sequence: Arc::new(AtomicU64::new(0)), sink }
     }
 
     #[must_use]
@@ -333,10 +308,7 @@ impl SessionTracer {
             path: path.clone(),
             attributes: attributes.clone(),
         });
-        self.record(
-            "http_request_started",
-            merge_trace_fields(method, path, attempt, attributes),
-        );
+        self.record("http_request_started", merge_trace_fields(method, path, attempt, attributes));
     }
 
     pub fn record_http_request_succeeded(
@@ -396,10 +368,7 @@ impl SessionTracer {
 
     pub fn record_analytics(&self, event: AnalyticsEvent) {
         let mut attributes = event.properties.clone();
-        attributes.insert(
-            "namespace".to_string(),
-            Value::String(event.namespace.clone()),
-        );
+        attributes.insert("namespace".to_string(), Value::String(event.namespace.clone()));
         attributes.insert("action".to_string(), Value::String(event.action.clone()));
         self.sink.record(TelemetryEvent::Analytics(event));
         self.record("analytics", attributes);
@@ -442,10 +411,7 @@ mod tests {
         assert_eq!(
             profile.header_pairs(),
             vec![
-                (
-                    "anthropic-version".to_string(),
-                    DEFAULT_ANTHROPIC_VERSION.to_string()
-                ),
+                ("anthropic-version".to_string(), DEFAULT_ANTHROPIC_VERSION.to_string()),
                 ("user-agent".to_string(), "claude-code/1.2.3".to_string()),
                 (
                     "anthropic-beta".to_string(),
@@ -458,10 +424,7 @@ mod tests {
         let body = profile
             .render_json_body(&serde_json::json!({"model": "claude-sonnet"}))
             .expect("body should serialize");
-        assert_eq!(
-            body["metadata"]["source"],
-            Value::String("test".to_string())
-        );
+        assert_eq!(body["metadata"]["source"], Value::String("test".to_string()));
         assert_eq!(
             body["betas"],
             serde_json::json!([

@@ -28,26 +28,19 @@ async fn send_message_uses_openai_compatible_endpoint_and_auth() {
         "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5}",
         "}"
     );
-    let server = spawn_server(
-        state.clone(),
-        vec![http_response("200 OK", "application/json", body)],
-    )
-    .await;
+    let server =
+        spawn_server(state.clone(), vec![http_response("200 OK", "application/json", body)]).await;
 
     let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
         .with_base_url(server.base_url());
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("request should succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("request should succeed");
 
     assert_eq!(response.model, "grok-3");
     assert_eq!(response.total_tokens(), 16);
     assert_eq!(
         response.content,
-        vec![OutputContentBlock::Text {
-            text: "Hello from Grok".to_string(),
-        }]
+        vec![OutputContentBlock::Text { text: "Hello from Grok".to_string() }]
     );
 
     let captured = state.lock().await;
@@ -77,19 +70,14 @@ async fn send_message_accepts_full_chat_completions_endpoint_override() {
         "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}",
         "}"
     );
-    let server = spawn_server(
-        state.clone(),
-        vec![http_response("200 OK", "application/json", body)],
-    )
-    .await;
+    let server =
+        spawn_server(state.clone(), vec![http_response("200 OK", "application/json", body)]).await;
 
     let endpoint_url = format!("{}/chat/completions", server.base_url());
     let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
         .with_base_url(endpoint_url);
-    let response = client
-        .send_message(&sample_request(false))
-        .await
-        .expect("request should succeed");
+    let response =
+        client.send_message(&sample_request(false)).await.expect("request should succeed");
 
     assert_eq!(response.total_tokens(), 10);
 
@@ -120,10 +108,8 @@ async fn stream_message_normalizes_text_and_multiple_tool_calls() {
 
     let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
         .with_base_url(server.base_url());
-    let mut stream = client
-        .stream_message(&sample_request(false))
-        .await
-        .expect("stream should start");
+    let mut stream =
+        client.stream_message(&sample_request(false)).await.expect("stream should start");
 
     assert_eq!(stream.request_id(), Some("req_grok_stream"));
 
@@ -175,18 +161,9 @@ async fn stream_message_normalizes_text_and_multiple_tool_calls() {
             delta: ContentBlockDelta::InputJsonDelta { .. },
         })
     ));
-    assert!(matches!(
-        events[7],
-        StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 1 })
-    ));
-    assert!(matches!(
-        events[8],
-        StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 2 })
-    ));
-    assert!(matches!(
-        events[9],
-        StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 })
-    ));
+    assert!(matches!(events[7], StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 1 })));
+    assert!(matches!(events[8], StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 2 })));
+    assert!(matches!(events[9], StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 })));
     assert!(matches!(events[10], StreamEvent::MessageDelta(_)));
     assert!(matches!(events[11], StreamEvent::MessageStop(_)));
 
@@ -219,10 +196,8 @@ async fn openai_streaming_requests_opt_into_usage_chunks() {
 
     let client = OpenAiCompatClient::new("openai-test-key", OpenAiCompatConfig::openai())
         .with_base_url(server.base_url());
-    let mut stream = client
-        .stream_message(&sample_request(false))
-        .await
-        .expect("stream should start");
+    let mut stream =
+        client.stream_message(&sample_request(false)).await.expect("stream should start");
 
     assert_eq!(stream.request_id(), Some("req_openai_stream"));
 
@@ -246,14 +221,8 @@ async fn openai_streaming_requests_opt_into_usage_chunks() {
             ..
         })
     ));
-    assert!(matches!(
-        events[3],
-        StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 })
-    ));
-    assert!(matches!(
-        events[4],
-        StreamEvent::MessageDelta(MessageDeltaEvent { .. })
-    ));
+    assert!(matches!(events[3], StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 })));
+    assert!(matches!(events[4], StreamEvent::MessageDelta(MessageDeltaEvent { .. })));
     assert!(matches!(events[5], StreamEvent::MessageStop(_)));
 
     match &events[4] {
@@ -338,9 +307,7 @@ async fn spawn_server(
     state: Arc<Mutex<Vec<CapturedRequest>>>,
     responses: Vec<String>,
 ) -> TestServer {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("listener should bind");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener should bind");
     let address = listener.local_addr().expect("listener addr");
     let join_handle = tokio::spawn(async move {
         for response in responses {
@@ -365,11 +332,7 @@ async fn spawn_server(
             let header_text = String::from_utf8(header_bytes.to_vec()).expect("utf8 headers");
             let mut lines = header_text.split("\r\n");
             let request_line = lines.next().expect("request line");
-            let path = request_line
-                .split_whitespace()
-                .nth(1)
-                .expect("path")
-                .to_string();
+            let path = request_line.split_whitespace().nth(1).expect("path").to_string();
             let mut headers = HashMap::new();
             let mut content_length = 0_usize;
             for line in lines {
@@ -400,17 +363,11 @@ async fn spawn_server(
                 body: String::from_utf8(body).expect("utf8 body"),
             });
 
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("write response");
+            socket.write_all(response.as_bytes()).await.expect("write response");
         }
     });
 
-    TestServer {
-        base_url: format!("http://{address}"),
-        join_handle,
-    }
+    TestServer { base_url: format!("http://{address}"), join_handle }
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -444,9 +401,7 @@ fn sample_request(stream: bool) -> MessageRequest {
         max_tokens: 64,
         messages: vec![InputMessage {
             role: "user".to_string(),
-            content: vec![InputContentBlock::Text {
-                text: "Say hello".to_string(),
-            }],
+            content: vec![InputContentBlock::Text { text: "Say hello".to_string() }],
         }],
         system: Some("Use tools when needed".to_string()),
         tools: Some(vec![ToolDefinition {
@@ -465,9 +420,7 @@ fn sample_request(stream: bool) -> MessageRequest {
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct ScopedEnvVar {

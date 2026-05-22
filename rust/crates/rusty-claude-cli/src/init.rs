@@ -1,13 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STARTER_CLAUDE_JSON: &str = concat!(
-    "{\n",
-    "  \"permissions\": {\n",
-    "    \"defaultMode\": \"dontAsk\"\n",
-    "  }\n",
-    "}\n",
-);
+const STARTER_CLAUDE_JSON: &str =
+    concat!("{\n", "  \"permissions\": {\n", "    \"defaultMode\": \"dontAsk\"\n", "  }\n", "}\n",);
 const GITIGNORE_COMMENT: &str = "# Claw Code local artifacts";
 const GITIGNORE_ENTRIES: [&str; 2] = [".claude/settings.local.json", ".claude/sessions/"];
 
@@ -44,16 +39,10 @@ pub(crate) struct InitReport {
 impl InitReport {
     #[must_use]
     pub(crate) fn render(&self) -> String {
-        let mut lines = vec![
-            "Init".to_string(),
-            format!("  Project          {}", self.project_root.display()),
-        ];
+        let mut lines =
+            vec!["Init".to_string(), format!("  Project          {}", self.project_root.display())];
         for artifact in &self.artifacts {
-            lines.push(format!(
-                "  {:<16} {}",
-                artifact.name,
-                artifact.status.label()
-            ));
+            lines.push(format!("  {:<16} {}", artifact.name, artifact.status.label()));
         }
         lines.push("  Next step        Review and tailor the generated guidance".to_string());
         lines.join("\n")
@@ -81,10 +70,7 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
     let mut artifacts = Vec::new();
 
     let claude_dir = cwd.join(".claude");
-    artifacts.push(InitArtifact {
-        name: ".claude/",
-        status: ensure_dir(&claude_dir)?,
-    });
+    artifacts.push(InitArtifact { name: ".claude/", status: ensure_dir(&claude_dir)? });
 
     let claude_json = cwd.join(".claude.json");
     artifacts.push(InitArtifact {
@@ -93,10 +79,8 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
     });
 
     let gitignore = cwd.join(".gitignore");
-    artifacts.push(InitArtifact {
-        name: ".gitignore",
-        status: ensure_gitignore_entries(&gitignore)?,
-    });
+    artifacts
+        .push(InitArtifact { name: ".gitignore", status: ensure_gitignore_entries(&gitignore)? });
 
     let claude_md = cwd.join("CLAUDE.md");
     let content = render_init_claude_md(cwd);
@@ -105,10 +89,7 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
         status: write_file_if_missing(&claude_md, &content)?,
     });
 
-    Ok(InitReport {
-        project_root: cwd.to_path_buf(),
-        artifacts,
-    })
+    Ok(InitReport { project_root: cwd.to_path_buf(), artifacts })
 }
 
 fn ensure_dir(path: &Path) -> Result<InitStatus, std::io::Error> {
@@ -179,10 +160,7 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     if detected_frameworks.is_empty() {
         lines.push("- Frameworks: none detected from the supported starter markers.".to_string());
     } else {
-        lines.push(format!(
-            "- Frameworks/tooling markers: {}.",
-            detected_frameworks.join(", ")
-        ));
+        lines.push(format!("- Frameworks/tooling markers: {}.", detected_frameworks.join(", ")));
     }
     lines.push(String::new());
 
@@ -217,9 +195,8 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
 }
 
 fn detect_repo(cwd: &Path) -> RepoDetection {
-    let package_json_contents = fs::read_to_string(cwd.join("package.json"))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let package_json_contents =
+        fs::read_to_string(cwd.join("package.json")).unwrap_or_default().to_ascii_lowercase();
     RepoDetection {
         rust_workspace: cwd.join("rust").join("Cargo.toml").is_file(),
         rust_root: cwd.join("Cargo.toml").is_file(),
@@ -390,9 +367,7 @@ mod tests {
             .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
-        assert!(first
-            .render()
-            .contains("CLAUDE.md        skipped (already exists)"));
+        assert!(first.render().contains("CLAUDE.md        skipped (already exists)"));
         let second = initialize_repo(&root).expect("second init should succeed");
         let second_rendered = second.render();
         assert!(second_rendered.contains(".claude/         skipped (already exists)"));

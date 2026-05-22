@@ -17,13 +17,7 @@ fn status_command_applies_model_and_permission_mode_flags() {
     // when
     let output = Command::new(env!("CARGO_BIN_EXE_claw"))
         .current_dir(&temp_dir)
-        .args([
-            "--model",
-            "sonnet",
-            "--permission-mode",
-            "read-only",
-            "status",
-        ])
+        .args(["--model", "sonnet", "--permission-mode", "read-only", "status"])
         .output()
         .expect("claw should launch");
 
@@ -47,11 +41,7 @@ fn resume_flag_loads_a_saved_session_and_dispatches_status() {
     // when
     let output = Command::new(env!("CARGO_BIN_EXE_claw"))
         .current_dir(&temp_dir)
-        .args([
-            "--resume",
-            session_path.to_str().expect("utf8 path"),
-            "/status",
-        ])
+        .args(["--resume", session_path.to_str().expect("utf8 path"), "/status"])
         .output()
         .expect("claw should launch");
 
@@ -116,22 +106,14 @@ fn config_command_loads_defaults_from_standard_config_locations() {
         .expect("write user settings");
     fs::write(temp_dir.join(".claw.json"), r#"{"model":"sonnet"}"#)
         .expect("write project settings");
-    fs::write(
-        temp_dir.join(".claw").join("settings.local.json"),
-        r#"{"model":"opus"}"#,
-    )
-    .expect("write local settings");
+    fs::write(temp_dir.join(".claw").join("settings.local.json"), r#"{"model":"opus"}"#)
+        .expect("write local settings");
     let session_path = write_session(&temp_dir, "config-defaults");
 
     // when
     let output = command_in(&temp_dir)
         .env("CLAW_CONFIG_HOME", &config_home)
-        .args([
-            "--resume",
-            session_path.to_str().expect("utf8 path"),
-            "/config",
-            "model",
-        ])
+        .args(["--resume", session_path.to_str().expect("utf8 path"), "/config", "model"])
         .output()
         .expect("claw should launch");
 
@@ -142,20 +124,10 @@ fn config_command_loads_defaults_from_standard_config_locations() {
     assert!(stdout.contains("Loaded files      3"));
     assert!(stdout.contains("Merged section: model"));
     assert!(stdout.contains("opus"));
-    assert!(stdout.contains(
-        config_home
-            .join("settings.json")
-            .to_str()
-            .expect("utf8 path")
-    ));
+    assert!(stdout.contains(config_home.join("settings.json").to_str().expect("utf8 path")));
     assert!(stdout.contains(temp_dir.join(".claw.json").to_str().expect("utf8 path")));
-    assert!(stdout.contains(
-        temp_dir
-            .join(".claw")
-            .join("settings.local.json")
-            .to_str()
-            .expect("utf8 path")
-    ));
+    assert!(stdout
+        .contains(temp_dir.join(".claw").join("settings.local.json").to_str().expect("utf8 path")));
 
     fs::remove_dir_all(temp_dir).expect("cleanup temp dir");
 }
@@ -172,9 +144,7 @@ fn write_session(root: &Path, label: &str) -> PathBuf {
     session
         .push_user_text(format!("session fixture for {label}"))
         .expect("session write should succeed");
-    session
-        .save_to_path(&session_path)
-        .expect("session should persist");
+    session.save_to_path(&session_path).expect("session should persist");
     session_path
 }
 
@@ -193,8 +163,5 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         .expect("clock should be after epoch")
         .as_millis();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "claw-{label}-{}-{millis}-{counter}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("claw-{label}-{}-{millis}-{counter}", std::process::id()))
 }

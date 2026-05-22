@@ -45,9 +45,27 @@ jobs:
           name: sego-linux
           path: rust/target/release/sego
 
+  build-macos:
+    name: Build macOS binary
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Build release
+        run: cargo build --release
+        working-directory: rust
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sego-macos
+          path: rust/target/release/sego
+
   release:
     name: Create Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
@@ -57,6 +75,10 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           name: sego-linux
+          path: artifacts
+      - uses: actions/download-artifact@v5
+        with:
+          name: sego-macos
           path: artifacts
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -71,12 +93,16 @@ jobs:
             ### Download
             - **Windows:** `sego.exe`
             - **Linux:** `sego`
+            - **macOS:** `sego` (rename from Linux artifact)
 
             ### Quick Start
             ```bash
-            set ANTHROPIC_API_KEY=sk-your-key
-            set ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-            sego
+            # Set your API key
+            export ANTHROPIC_API_KEY=sk-your-key
+            export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+
+            # Run
+            ./sego
             ```
 
             ### Build from source

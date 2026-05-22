@@ -161,19 +161,14 @@ impl LaneEvent {
 mod tests {
     use serde_json::json;
 
-    use super::{
-        LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
-    };
+    use super::{LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass};
 
     #[test]
     fn canonical_lane_event_names_serialize_to_expected_wire_values() {
         let cases = [
             (LaneEventName::Started, "lane.started"),
             (LaneEventName::Ready, "lane.ready"),
-            (
-                LaneEventName::PromptMisdelivery,
-                "lane.prompt_misdelivery",
-            ),
+            (LaneEventName::PromptMisdelivery, "lane.prompt_misdelivery"),
             (LaneEventName::Blocked, "lane.blocked"),
             (LaneEventName::Red, "lane.red"),
             (LaneEventName::Green, "lane.green"),
@@ -186,10 +181,7 @@ mod tests {
             (LaneEventName::Merged, "lane.merged"),
             (LaneEventName::Superseded, "lane.superseded"),
             (LaneEventName::Closed, "lane.closed"),
-            (
-                LaneEventName::BranchStaleAgainstMain,
-                "branch.stale_against_main",
-            ),
+            (LaneEventName::BranchStaleAgainstMain, "branch.stale_against_main"),
         ];
 
         for (event, expected) in cases {

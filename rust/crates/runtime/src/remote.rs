@@ -149,12 +149,7 @@ impl UpstreamProxyBootstrap {
 impl UpstreamProxyState {
     #[must_use]
     pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            proxy_url: None,
-            ca_bundle_path: None,
-            no_proxy: no_proxy_list(),
-        }
+        Self { enabled: false, proxy_url: None, ca_bundle_path: None, no_proxy: no_proxy_list() }
     }
 
     #[must_use]
@@ -226,11 +221,7 @@ pub fn inherited_upstream_proxy_env(
     }
     UPSTREAM_PROXY_ENV_KEYS
         .iter()
-        .filter_map(|key| {
-            env_map
-                .get(*key)
-                .map(|value| ((*key).to_string(), value.clone()))
-        })
+        .filter_map(|key| env_map.get(*key).map(|value| ((*key).to_string(), value.clone())))
         .collect()
 }
 
@@ -243,10 +234,7 @@ fn default_ca_bundle_path() -> PathBuf {
 
 fn env_truthy(value: Option<&String>) -> bool {
     value.is_some_and(|raw| {
-        matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
+        matches!(raw.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
 }
 
@@ -273,14 +261,8 @@ mod tests {
     fn remote_context_reads_env_state() {
         let env = BTreeMap::from([
             ("CLAUDE_CODE_REMOTE".to_string(), "true".to_string()),
-            (
-                "CLAUDE_CODE_REMOTE_SESSION_ID".to_string(),
-                "session-123".to_string(),
-            ),
-            (
-                "ANTHROPIC_BASE_URL".to_string(),
-                "https://remote.test".to_string(),
-            ),
+            ("CLAUDE_CODE_REMOTE_SESSION_ID".to_string(), "session-123".to_string()),
+            ("ANTHROPIC_BASE_URL".to_string(), "https://remote.test".to_string()),
         ]);
         let context = RemoteSessionContext::from_env_map(&env);
         assert!(context.enabled);
@@ -309,18 +291,9 @@ mod tests {
         let env = BTreeMap::from([
             ("CLAUDE_CODE_REMOTE".to_string(), "1".to_string()),
             ("CCR_UPSTREAM_PROXY_ENABLED".to_string(), "true".to_string()),
-            (
-                "CLAUDE_CODE_REMOTE_SESSION_ID".to_string(),
-                "session-123".to_string(),
-            ),
-            (
-                "ANTHROPIC_BASE_URL".to_string(),
-                "https://remote.test".to_string(),
-            ),
-            (
-                "CCR_SESSION_TOKEN_PATH".to_string(),
-                token_path.to_string_lossy().into_owned(),
-            ),
+            ("CLAUDE_CODE_REMOTE_SESSION_ID".to_string(), "session-123".to_string()),
+            ("ANTHROPIC_BASE_URL".to_string(), "https://remote.test".to_string()),
+            ("CCR_SESSION_TOKEN_PATH".to_string(), token_path.to_string_lossy().into_owned()),
             (
                 "CCR_CA_BUNDLE_PATH".to_string(),
                 root.join("ca-bundle.crt").to_string_lossy().into_owned(),
@@ -330,18 +303,12 @@ mod tests {
         let bootstrap = UpstreamProxyBootstrap::from_env_map(&env);
         assert!(bootstrap.should_enable());
         assert_eq!(bootstrap.token.as_deref(), Some("secret-token"));
-        assert_eq!(
-            bootstrap.ws_url(),
-            "wss://remote.test/v1/code/upstreamproxy/ws"
-        );
+        assert_eq!(bootstrap.ws_url(), "wss://remote.test/v1/code/upstreamproxy/ws");
 
         let state = bootstrap.state_for_port(9443);
         assert!(state.enabled);
         let env = state.subprocess_env();
-        assert_eq!(
-            env.get("HTTPS_PROXY").map(String::as_str),
-            Some("http://127.0.0.1:9443")
-        );
+        assert_eq!(env.get("HTTPS_PROXY").map(String::as_str), Some("http://127.0.0.1:9443"));
         assert_eq!(
             env.get("SSL_CERT_FILE").map(String::as_str),
             Some(root.join("ca-bundle.crt").to_string_lossy().as_ref())
@@ -356,36 +323,21 @@ mod tests {
         fs::create_dir_all(&root).expect("temp dir");
         let token_path = root.join("session_token");
         fs::write(&token_path, " abc123 \n").expect("write token");
-        assert_eq!(
-            read_token(&token_path).expect("read token").as_deref(),
-            Some("abc123")
-        );
-        assert_eq!(
-            read_token(&root.join("missing")).expect("missing token"),
-            None
-        );
+        assert_eq!(read_token(&token_path).expect("read token").as_deref(), Some("abc123"));
+        assert_eq!(read_token(&root.join("missing")).expect("missing token"), None);
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 
     #[test]
     fn inherited_proxy_env_requires_proxy_and_ca() {
         let env = BTreeMap::from([
-            (
-                "HTTPS_PROXY".to_string(),
-                "http://127.0.0.1:8888".to_string(),
-            ),
-            (
-                "SSL_CERT_FILE".to_string(),
-                "/tmp/ca-bundle.crt".to_string(),
-            ),
+            ("HTTPS_PROXY".to_string(), "http://127.0.0.1:8888".to_string()),
+            ("SSL_CERT_FILE".to_string(), "/tmp/ca-bundle.crt".to_string()),
             ("NO_PROXY".to_string(), "localhost".to_string()),
         ]);
         let inherited = inherited_upstream_proxy_env(&env);
         assert_eq!(inherited.len(), 3);
-        assert_eq!(
-            inherited.get("NO_PROXY").map(String::as_str),
-            Some("localhost")
-        );
+        assert_eq!(inherited.get("NO_PROXY").map(String::as_str), Some("localhost"));
         assert!(inherited_upstream_proxy_env(&BTreeMap::new()).is_empty());
     }
 

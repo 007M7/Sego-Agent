@@ -56,17 +56,12 @@ pub fn compress_summary(
     }
 
     let selected = select_line_indexes(&normalized.lines, budget);
-    let mut compressed_lines = selected
-        .iter()
-        .map(|index| normalized.lines[*index].clone())
-        .collect::<Vec<_>>();
+    let mut compressed_lines =
+        selected.iter().map(|index| normalized.lines[*index].clone()).collect::<Vec<_>>();
     if compressed_lines.is_empty() {
         compressed_lines.push(truncate_line(&normalized.lines[0], budget.max_chars));
     }
-    let omitted_lines = normalized
-        .lines
-        .len()
-        .saturating_sub(compressed_lines.len());
+    let omitted_lines = normalized.lines.len().saturating_sub(compressed_lines.len());
 
     if omitted_lines > 0 {
         let omission_notice = omission_notice(omitted_lines);
@@ -119,10 +114,7 @@ fn normalize_lines(summary: &str, max_line_chars: usize) -> NormalizedSummary {
         lines.push(truncated);
     }
 
-    NormalizedSummary {
-        lines,
-        removed_duplicate_lines,
-    }
+    NormalizedSummary { lines, removed_duplicate_lines }
 }
 
 fn select_line_indexes(lines: &[String], budget: SummaryCompressionBudget) -> Vec<usize> {
@@ -156,11 +148,8 @@ fn select_line_indexes(lines: &[String], budget: SummaryCompressionBudget) -> Ve
 }
 
 fn push_line_with_budget(lines: &mut Vec<String>, line: String, budget: SummaryCompressionBudget) {
-    let candidate = lines
-        .iter()
-        .map(String::as_str)
-        .chain(std::iter::once(line.as_str()))
-        .collect::<Vec<_>>();
+    let candidate =
+        lines.iter().map(String::as_str).chain(std::iter::once(line.as_str())).collect::<Vec<_>>();
 
     if candidate.len() <= budget.max_lines && joined_char_count(&candidate) <= budget.max_chars {
         lines.push(line);
@@ -219,10 +208,7 @@ fn truncate_line(line: &str, max_chars: usize) -> String {
         return "…".to_string();
     }
 
-    let mut truncated = line
-        .chars()
-        .take(max_chars.saturating_sub(1))
-        .collect::<String>();
+    let mut truncated = line.chars().take(max_chars.saturating_sub(1)).collect::<String>();
     truncated.push('…');
     truncated
 }
@@ -245,9 +231,7 @@ mod tests {
 
         // then
         assert_eq!(result.removed_duplicate_lines, 1);
-        assert!(result
-            .summary
-            .contains("- Scope: compact earlier messages."));
+        assert!(result.summary.contains("- Scope: compact earlier messages."));
         assert!(!result.summary.contains("  compact   earlier"));
     }
 
@@ -268,21 +252,13 @@ mod tests {
         // when
         let result = compress_summary(
             &summary,
-            SummaryCompressionBudget {
-                max_chars: 120,
-                max_lines: 3,
-                max_line_chars: 80,
-            },
+            SummaryCompressionBudget { max_chars: 120, max_lines: 3, max_line_chars: 80 },
         );
 
         // then
         assert!(result.summary.contains("Conversation summary:"));
-        assert!(result
-            .summary
-            .contains("- Scope: 18 earlier messages compacted."));
-        assert!(result
-            .summary
-            .contains("- Current work: finish summary compression."));
+        assert!(result.summary.contains("- Scope: 18 earlier messages compacted."));
+        assert!(result.summary.contains("- Current work: finish summary compression."));
         assert!(result.omitted_lines > 0);
     }
 

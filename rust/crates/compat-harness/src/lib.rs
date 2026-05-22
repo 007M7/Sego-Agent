@@ -13,9 +13,7 @@ pub struct UpstreamPaths {
 impl UpstreamPaths {
     #[must_use]
     pub fn from_repo_root(repo_root: impl Into<PathBuf>) -> Self {
-        Self {
-            repo_root: repo_root.into(),
-        }
+        Self { repo_root: repo_root.into() }
     }
 
     #[must_use]
@@ -24,9 +22,8 @@ impl UpstreamPaths {
             .as_ref()
             .canonicalize()
             .unwrap_or_else(|_| workspace_dir.as_ref().to_path_buf());
-        let primary_repo_root = workspace_dir
-            .parent()
-            .map_or_else(|| PathBuf::from(".."), Path::to_path_buf);
+        let primary_repo_root =
+            workspace_dir.parent().map_or_else(|| PathBuf::from(".."), Path::to_path_buf);
         let repo_root = resolve_upstream_repo_root(&primary_repo_root);
         Self { repo_root }
     }
@@ -117,29 +114,21 @@ pub fn extract_commands(source: &str) -> CommandRegistry {
                 continue;
             }
             if let Some(name) = first_identifier(line) {
-                entries.push(CommandManifestEntry {
-                    name,
-                    source: CommandSource::InternalOnly,
-                });
+                entries.push(CommandManifestEntry { name, source: CommandSource::InternalOnly });
             }
             continue;
         }
 
         if line.starts_with("import ") {
             for imported in imported_symbols(line) {
-                entries.push(CommandManifestEntry {
-                    name: imported,
-                    source: CommandSource::Builtin,
-                });
+                entries
+                    .push(CommandManifestEntry { name: imported, source: CommandSource::Builtin });
             }
         }
 
         if line.contains("feature('") && line.contains("./commands/") {
             if let Some(name) = first_assignment_identifier(line) {
-                entries.push(CommandManifestEntry {
-                    name,
-                    source: CommandSource::FeatureGated,
-                });
+                entries.push(CommandManifestEntry { name, source: CommandSource::FeatureGated });
             }
         }
     }
@@ -156,10 +145,7 @@ pub fn extract_tools(source: &str) -> ToolRegistry {
         if line.starts_with("import ") && line.contains("./tools/") {
             for imported in imported_symbols(line) {
                 if imported.ends_with("Tool") {
-                    entries.push(ToolManifestEntry {
-                        name: imported,
-                        source: ToolSource::Base,
-                    });
+                    entries.push(ToolManifestEntry { name: imported, source: ToolSource::Base });
                 }
             }
         }
@@ -167,10 +153,7 @@ pub fn extract_tools(source: &str) -> ToolRegistry {
         if line.contains("feature('") && line.contains("Tool") {
             if let Some(name) = first_assignment_identifier(line) {
                 if name.ends_with("Tool") || name.ends_with("Tools") {
-                    entries.push(ToolManifestEntry {
-                        name,
-                        source: ToolSource::Conditional,
-                    });
+                    entries.push(ToolManifestEntry { name, source: ToolSource::Conditional });
                 }
             }
         }
@@ -223,11 +206,7 @@ fn imported_symbols(line: &str) -> Vec<String> {
         return Vec::new();
     };
 
-    let before_from = after_import
-        .split(" from ")
-        .next()
-        .unwrap_or_default()
-        .trim();
+    let before_from = after_import.split(" from ").next().unwrap_or_default().trim();
     if before_from.starts_with('{') {
         return before_from
             .trim_matches(|c| c == '{' || c == '}')
@@ -329,11 +308,7 @@ mod tests {
         }
         let commands =
             extract_commands(&fs::read_to_string(paths.commands_path()).expect("commands.ts"));
-        let names: Vec<_> = commands
-            .entries()
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
+        let names: Vec<_> = commands.entries().iter().map(|entry| entry.name.as_str()).collect();
         assert!(names.contains(&"addDir"));
         assert!(names.contains(&"review"));
         assert!(!names.contains(&"INTERNAL_ONLY_COMMANDS"));
@@ -346,11 +321,7 @@ mod tests {
             return;
         }
         let tools = extract_tools(&fs::read_to_string(paths.tools_path()).expect("tools.ts"));
-        let names: Vec<_> = tools
-            .entries()
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
+        let names: Vec<_> = tools.entries().iter().map(|entry| entry.name.as_str()).collect();
         assert!(names.contains(&"AgentTool"));
         assert!(names.contains(&"BashTool"));
     }

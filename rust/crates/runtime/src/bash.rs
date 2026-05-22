@@ -73,11 +73,8 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
 
     if input.run_in_background.unwrap_or(false) {
         let mut child = prepare_command(&input.command, &cwd, &sandbox_status, false);
-        let child = child
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let child =
+            child.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
 
         return Ok(BashCommandOutput {
             stdout: String::new(),

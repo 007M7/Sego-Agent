@@ -5,7 +5,7 @@
 
 use std::fmt::{Display, Formatter};
 
-use super::{LaneEventStats, RecoveryStats, WorkflowSnapshot};
+use super::WorkflowSnapshot;
 use crate::green_contract::GreenLevel;
 
 /// A summary of the session's key metrics.
@@ -57,7 +57,10 @@ pub struct SessionReport {
 impl SessionReport {
     /// Generate a report from a completed workflow snapshot.
     #[must_use]
-    pub fn from_snapshot(snapshot: &WorkflowSnapshot, historical_avg_efficiency: Option<f64>) -> Self {
+    pub fn from_snapshot(
+        snapshot: &WorkflowSnapshot,
+        historical_avg_efficiency: Option<f64>,
+    ) -> Self {
         let mut suggestions = Vec::new();
 
         let event_types: Vec<String> = snapshot.lane_event_stats.keys().cloned().collect();
@@ -107,7 +110,8 @@ impl SessionReport {
 
         if report.recovery_attempts > 0 && report.recovery_successes == report.recovery_attempts {
             suggestions.push(
-                "All recovery attempts succeeded — recovery recipes are working effectively.".to_string(),
+                "All recovery attempts succeeded — recovery recipes are working effectively."
+                    .to_string(),
             );
         }
 
@@ -145,14 +149,8 @@ impl SessionReport {
         lines.push("╔══════════════════════════════════════════════════╗".to_string());
         lines.push("║        🦞 claw Session Report                   ║".to_string());
         lines.push("╠══════════════════════════════════════════════════╣".to_string());
-        lines.push(format!(
-            "║ Session:   {}",
-            self.session_id
-        ));
-        lines.push(format!(
-            "║ Duration:  {}",
-            self.session_summary.duration_display
-        ));
+        lines.push(format!("║ Session:   {}", self.session_id));
+        lines.push(format!("║ Duration:  {}", self.session_summary.duration_display));
         lines.push("║──────────────────────────────────────────────────║".to_string());
         lines.push(format!(
             "║ Events:       {:>3} │ Efficiency:    {:>5.0}%",
@@ -163,10 +161,7 @@ impl SessionReport {
             self.failure_count, self.recovery_successes
         ));
         if let Some(ref level) = self.green_level {
-            lines.push(format!(
-                "║ Green Level:  {:>3} │",
-                level.to_string()
-            ));
+            lines.push(format!("║ Green Level:  {:>3} │", level.to_string()));
         }
         lines.push("║──────────────────────────────────────────────────║".to_string());
         if !self.suggestions.is_empty() {
@@ -215,9 +210,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
     let mut remaining = text;
     while remaining.len() > width {
-        let split_at = remaining[..width]
-            .rfind(' ')
-            .unwrap_or(width);
+        let split_at = remaining[..width].rfind(' ').unwrap_or(width);
         result.push(remaining[..split_at].to_string());
         remaining = remaining[split_at..].trim_start();
     }

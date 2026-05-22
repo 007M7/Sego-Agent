@@ -148,10 +148,7 @@ impl LspRegistry {
 
     /// Find the appropriate server for a file path based on extension.
     pub fn find_server_for_path(&self, path: &str) -> Option<LspServerState> {
-        let ext = std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("");
 
         let language = match ext {
             "rs" => "rust",
@@ -256,11 +253,7 @@ impl LspRegistry {
             }
             // All diagnostics across all servers
             let inner = self.inner.lock().expect("lsp registry lock poisoned");
-            let all_diags: Vec<_> = inner
-                .servers
-                .values()
-                .flat_map(|s| &s.diagnostics)
-                .collect();
+            let all_diags: Vec<_> = inner.servers.values().flat_map(|s| &s.diagnostics).collect();
             return Ok(serde_json::json!({
                 "action": "diagnostics",
                 "diagnostics": all_diags,
@@ -375,9 +368,8 @@ mod tests {
             )
             .unwrap();
 
-        let result = registry
-            .dispatch("diagnostics", Some("src/lib.rs"), None, None, None)
-            .unwrap();
+        let result =
+            registry.dispatch("diagnostics", Some("src/lib.rs"), None, None, None).unwrap();
         assert_eq!(result["count"], 1);
     }
 
@@ -386,9 +378,8 @@ mod tests {
         let registry = LspRegistry::new();
         registry.register("rust", LspServerStatus::Connected, None, vec![]);
 
-        let result = registry
-            .dispatch("hover", Some("src/main.rs"), Some(10), Some(5), None)
-            .unwrap();
+        let result =
+            registry.dispatch("hover", Some("src/main.rs"), Some(10), Some(5), None).unwrap();
         assert_eq!(result["action"], "hover");
         assert_eq!(result["language"], "rust");
     }
@@ -398,17 +389,13 @@ mod tests {
         let registry = LspRegistry::new();
         registry.register("rust", LspServerStatus::Disconnected, None, vec![]);
 
-        assert!(registry
-            .dispatch("hover", Some("src/main.rs"), Some(1), Some(0), None)
-            .is_err());
+        assert!(registry.dispatch("hover", Some("src/main.rs"), Some(1), Some(0), None).is_err());
     }
 
     #[test]
     fn rejects_unknown_action() {
         let registry = LspRegistry::new();
-        assert!(registry
-            .dispatch("unknown_action", Some("file.rs"), None, None, None)
-            .is_err());
+        assert!(registry.dispatch("unknown_action", Some("file.rs"), None, None, None).is_err());
     }
 
     #[test]
@@ -464,10 +451,8 @@ mod tests {
         ];
 
         // when
-        let rendered: Vec<_> = cases
-            .into_iter()
-            .map(|(status, expected)| (status.to_string(), expected))
-            .collect();
+        let rendered: Vec<_> =
+            cases.into_iter().map(|(status, expected)| (status.to_string(), expected)).collect();
 
         // then
         assert_eq!(
@@ -572,18 +557,9 @@ mod tests {
     fn find_server_for_all_extensions() {
         // given
         let registry = LspRegistry::new();
-        for language in [
-            "rust",
-            "typescript",
-            "javascript",
-            "python",
-            "go",
-            "java",
-            "c",
-            "cpp",
-            "ruby",
-            "lua",
-        ] {
+        for language in
+            ["rust", "typescript", "javascript", "python", "go", "java", "c", "cpp", "ruby", "lua"]
+        {
             registry.register(language, LspServerStatus::Connected, None, vec![]);
         }
         let cases = [
@@ -608,23 +584,13 @@ mod tests {
         let resolved: Vec<_> = cases
             .into_iter()
             .map(|(path, expected)| {
-                (
-                    path,
-                    registry
-                        .find_server_for_path(path)
-                        .map(|server| server.language),
-                    expected,
-                )
+                (path, registry.find_server_for_path(path).map(|server| server.language), expected)
             })
             .collect();
 
         // then
         for (path, actual, expected) in resolved {
-            assert_eq!(
-                actual.as_deref(),
-                Some(expected),
-                "unexpected mapping for {path}"
-            );
+            assert_eq!(actual.as_deref(), Some(expected), "unexpected mapping for {path}");
         }
     }
 
@@ -723,12 +689,8 @@ mod tests {
 
         // then
         assert_eq!(diagnostics.len(), 2);
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message == "warn"));
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message == "err"));
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.message == "warn"));
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.message == "err"));
     }
 
     #[test]

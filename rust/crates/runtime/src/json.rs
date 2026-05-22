@@ -19,9 +19,7 @@ pub struct JsonError {
 impl JsonError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+        Self { message: message.into() }
     }
 }
 
@@ -42,11 +40,7 @@ impl JsonValue {
             Self::Number(value) => value.to_string(),
             Self::String(value) => render_string(value),
             Self::Array(values) => {
-                let rendered = values
-                    .iter()
-                    .map(Self::render)
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let rendered = values.iter().map(Self::render).collect::<Vec<_>>().join(",");
                 format!("[{rendered}]")
             }
             Self::Object(entries) => {
@@ -151,11 +145,7 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(source: &'a str) -> Self {
-        Self {
-            chars: source.chars().collect(),
-            index: 0,
-            _source: source,
-        }
+        Self { chars: source.chars().collect(), index: 0, _source: source }
     }
 
     fn parse_value(&mut self) -> Result<JsonValue, JsonError> {
@@ -176,9 +166,7 @@ impl<'a> Parser<'a> {
     fn parse_literal(&mut self, expected: &str, value: JsonValue) -> Result<JsonValue, JsonError> {
         for expected_char in expected.chars() {
             if self.next() != Some(expected_char) {
-                return Err(JsonError::new(format!(
-                    "invalid literal: expected {expected}"
-                )));
+                return Err(JsonError::new(format!("invalid literal: expected {expected}")));
             }
         }
         Ok(value)
@@ -220,8 +208,7 @@ impl<'a> Parser<'a> {
                 return Err(JsonError::new("unexpected end of input in unicode escape"));
             };
             value = (value << 4)
-                | ch.to_digit(16)
-                    .ok_or_else(|| JsonError::new("invalid unicode escape"))?;
+                | ch.to_digit(16).ok_or_else(|| JsonError::new("invalid unicode escape"))?;
         }
         char::from_u32(value).ok_or_else(|| JsonError::new("invalid unicode scalar value"))
     }
@@ -281,20 +268,14 @@ impl<'a> Parser<'a> {
             return Err(JsonError::new("invalid number"));
         }
 
-        value
-            .parse::<i64>()
-            .map_err(|_| JsonError::new("number out of range"))
+        value.parse::<i64>().map_err(|_| JsonError::new("number out of range"))
     }
 
     fn expect(&mut self, expected: char) -> Result<(), JsonError> {
         match self.next() {
             Some(actual) if actual == expected => Ok(()),
-            Some(actual) => Err(JsonError::new(format!(
-                "expected '{expected}', found '{actual}'"
-            ))),
-            None => Err(JsonError::new(format!(
-                "expected '{expected}', found end of input"
-            ))),
+            Some(actual) => Err(JsonError::new(format!("expected '{expected}', found '{actual}'"))),
+            None => Err(JsonError::new(format!("expected '{expected}', found end of input"))),
         }
     }
 
@@ -339,10 +320,7 @@ mod tests {
         object.insert("flag".to_string(), JsonValue::Bool(true));
         object.insert(
             "items".to_string(),
-            JsonValue::Array(vec![
-                JsonValue::Number(4),
-                JsonValue::String("ok".to_string()),
-            ]),
+            JsonValue::Array(vec![JsonValue::Number(4), JsonValue::String("ok".to_string())]),
         );
 
         let rendered = JsonValue::Object(object).render();

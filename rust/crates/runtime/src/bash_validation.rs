@@ -204,29 +204,14 @@ fn validate_git_read_only(command: &str) -> ValidationResult {
 
 /// Patterns that indicate potentially destructive commands.
 const DESTRUCTIVE_PATTERNS: &[(&str, &str)] = &[
-    (
-        "rm -rf /",
-        "Recursive forced deletion at root — this will destroy the system",
-    ),
+    ("rm -rf /", "Recursive forced deletion at root — this will destroy the system"),
     ("rm -rf ~", "Recursive forced deletion of home directory"),
-    (
-        "rm -rf *",
-        "Recursive forced deletion of all files in current directory",
-    ),
+    ("rm -rf *", "Recursive forced deletion of all files in current directory"),
     ("rm -rf .", "Recursive forced deletion of current directory"),
-    (
-        "mkfs",
-        "Filesystem creation will destroy existing data on the device",
-    ),
-    (
-        "dd if=",
-        "Direct disk write — can overwrite partitions or devices",
-    ),
+    ("mkfs", "Filesystem creation will destroy existing data on the device"),
+    ("dd if=", "Direct disk write — can overwrite partitions or devices"),
     ("> /dev/sd", "Writing to raw disk device"),
-    (
-        "chmod -R 777",
-        "Recursively setting world-writable permissions",
-    ),
+    ("chmod -R 777", "Recursively setting world-writable permissions"),
     ("chmod -R 000", "Recursively removing all permissions"),
     (":(){ :|:& };:", "Fork bomb — will crash the system"),
 ];
@@ -630,9 +615,7 @@ fn extract_first_command(command: &str) -> String {
             let before_eq = &next[..eq_pos];
             // Valid env var name: alphanumeric + underscore, no spaces.
             if !before_eq.is_empty()
-                && before_eq
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && before_eq.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             {
                 // Skip past the value (might be quoted).
                 let after_eq = &next[eq_pos + 1..];
@@ -647,11 +630,7 @@ fn extract_first_command(command: &str) -> String {
         break;
     }
 
-    remaining
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string()
+    remaining.split_whitespace().next().unwrap_or("").to_string()
 }
 
 /// Extract the command following "sudo" (skip sudo flags).
@@ -741,10 +720,7 @@ mod tests {
 
     #[test]
     fn allows_read_commands_in_read_only() {
-        assert_eq!(
-            validate_read_only("ls -la", PermissionMode::ReadOnly),
-            ValidationResult::Allow
-        );
+        assert_eq!(validate_read_only("ls -la", PermissionMode::ReadOnly), ValidationResult::Allow);
         assert_eq!(
             validate_read_only("cat /etc/hosts", PermissionMode::ReadOnly),
             ValidationResult::Allow
@@ -889,14 +865,8 @@ mod tests {
     fn classifies_read_only_commands() {
         assert_eq!(classify_command("ls -la"), CommandIntent::ReadOnly);
         assert_eq!(classify_command("cat file.txt"), CommandIntent::ReadOnly);
-        assert_eq!(
-            classify_command("grep -r pattern ."),
-            CommandIntent::ReadOnly
-        );
-        assert_eq!(
-            classify_command("find . -name '*.rs'"),
-            CommandIntent::ReadOnly
-        );
+        assert_eq!(classify_command("grep -r pattern ."), CommandIntent::ReadOnly);
+        assert_eq!(classify_command("find . -name '*.rs'"), CommandIntent::ReadOnly);
     }
 
     #[test]
@@ -908,56 +878,35 @@ mod tests {
 
     #[test]
     fn classifies_destructive_commands() {
-        assert_eq!(
-            classify_command("rm -rf /tmp/x"),
-            CommandIntent::Destructive
-        );
-        assert_eq!(
-            classify_command("shred /dev/sda"),
-            CommandIntent::Destructive
-        );
+        assert_eq!(classify_command("rm -rf /tmp/x"), CommandIntent::Destructive);
+        assert_eq!(classify_command("shred /dev/sda"), CommandIntent::Destructive);
     }
 
     #[test]
     fn classifies_network_commands() {
-        assert_eq!(
-            classify_command("curl https://example.com"),
-            CommandIntent::Network
-        );
+        assert_eq!(classify_command("curl https://example.com"), CommandIntent::Network);
         assert_eq!(classify_command("wget file.zip"), CommandIntent::Network);
     }
 
     #[test]
     fn classifies_sed_inplace_as_write() {
-        assert_eq!(
-            classify_command("sed -i 's/old/new/' file.txt"),
-            CommandIntent::Write
-        );
+        assert_eq!(classify_command("sed -i 's/old/new/' file.txt"), CommandIntent::Write);
     }
 
     #[test]
     fn classifies_sed_stdout_as_read_only() {
-        assert_eq!(
-            classify_command("sed 's/old/new/' file.txt"),
-            CommandIntent::ReadOnly
-        );
+        assert_eq!(classify_command("sed 's/old/new/' file.txt"), CommandIntent::ReadOnly);
     }
 
     #[test]
     fn classifies_git_status_as_read_only() {
         assert_eq!(classify_command("git status"), CommandIntent::ReadOnly);
-        assert_eq!(
-            classify_command("git log --oneline"),
-            CommandIntent::ReadOnly
-        );
+        assert_eq!(classify_command("git log --oneline"), CommandIntent::ReadOnly);
     }
 
     #[test]
     fn classifies_git_push_as_write() {
-        assert_eq!(
-            classify_command("git push origin main"),
-            CommandIntent::Write
-        );
+        assert_eq!(classify_command("git push origin main"), CommandIntent::Write);
     }
 
     // --- validate_command (full pipeline) ---

@@ -10,12 +10,7 @@ pub enum EnforcementResult {
     /// Tool execution is allowed.
     Allowed,
     /// Tool execution was denied due to insufficient permissions.
-    Denied {
-        tool: String,
-        active_mode: String,
-        required_mode: String,
-        reason: String,
-    },
+    Denied { tool: String, active_mode: String, required_mode: String, reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,11 +131,8 @@ impl PermissionEnforcer {
 
 /// Simple workspace boundary check via string prefix.
 fn is_within_workspace(path: &str, workspace_root: &str) -> bool {
-    let normalized = if path.starts_with('/') {
-        path.to_owned()
-    } else {
-        format!("{workspace_root}/{path}")
-    };
+    let normalized =
+        if path.starts_with('/') { path.to_owned() } else { format!("{workspace_root}/{path}") };
 
     let root = if workspace_root.ends_with('/') {
         workspace_root.to_owned()
@@ -153,13 +145,8 @@ fn is_within_workspace(path: &str, workspace_root: &str) -> bool {
 
 /// Conservative heuristic: is this bash command read-only?
 fn is_read_only_command(command: &str) -> bool {
-    let first_token = command
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .rsplit('/')
-        .next()
-        .unwrap_or("");
+    let first_token =
+        command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
 
     matches!(
         first_token,
@@ -276,14 +263,8 @@ mod tests {
     #[test]
     fn read_only_allows_read_commands() {
         let enforcer = make_enforcer(PermissionMode::ReadOnly);
-        assert_eq!(
-            enforcer.check_bash("cat src/main.rs"),
-            EnforcementResult::Allowed
-        );
-        assert_eq!(
-            enforcer.check_bash("grep -r 'pattern' ."),
-            EnforcementResult::Allowed
-        );
+        assert_eq!(enforcer.check_bash("cat src/main.rs"), EnforcementResult::Allowed);
+        assert_eq!(enforcer.check_bash("grep -r 'pattern' ."), EnforcementResult::Allowed);
         assert_eq!(enforcer.check_bash("ls -la"), EnforcementResult::Allowed);
     }
 
@@ -348,10 +329,8 @@ mod tests {
         ];
 
         // when
-        let active_modes: Vec<_> = modes
-            .into_iter()
-            .map(|mode| make_enforcer(mode).active_mode())
-            .collect();
+        let active_modes: Vec<_> =
+            modes.into_iter().map(|mode| make_enforcer(mode).active_mode()).collect();
 
         // then
         assert_eq!(active_modes, modes);
@@ -383,12 +362,7 @@ mod tests {
 
         // then
         match result {
-            EnforcementResult::Denied {
-                tool,
-                active_mode,
-                required_mode,
-                reason,
-            } => {
+            EnforcementResult::Denied { tool, active_mode, required_mode, reason } => {
                 assert_eq!(tool, "write_file");
                 assert_eq!(active_mode, "read-only");
                 assert_eq!(required_mode, "workspace-write");
@@ -504,12 +478,7 @@ mod tests {
 
         // then
         match result {
-            EnforcementResult::Denied {
-                tool,
-                active_mode,
-                required_mode,
-                reason,
-            } => {
+            EnforcementResult::Denied { tool, active_mode, required_mode, reason } => {
                 assert_eq!(tool, "bash");
                 assert_eq!(active_mode, "prompt");
                 assert_eq!(required_mode, "danger-full-access");
@@ -529,12 +498,7 @@ mod tests {
 
         // then
         match result {
-            EnforcementResult::Denied {
-                tool,
-                active_mode,
-                required_mode,
-                reason,
-            } => {
+            EnforcementResult::Denied { tool, active_mode, required_mode, reason } => {
                 assert_eq!(tool, "write_file");
                 assert_eq!(active_mode, "read-only");
                 assert_eq!(required_mode, "workspace-write");

@@ -28,12 +28,12 @@ impl ProviderClient {
                 Some(auth) => AnthropicClient::from_auth(auth),
                 None => AnthropicClient::from_env()?,
             })),
-            ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::xai(),
-            )?)),
-            ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::openai(),
-            )?)),
+            ProviderKind::Xai => {
+                Ok(Self::Xai(OpenAiCompatClient::from_env(OpenAiCompatConfig::xai())?))
+            }
+            ProviderKind::OpenAi => {
+                Ok(Self::OpenAi(OpenAiCompatClient::from_env(OpenAiCompatConfig::openai())?))
+            }
         }
     }
 
@@ -85,14 +85,12 @@ impl ProviderClient {
         request: &MessageRequest,
     ) -> Result<MessageStream, ApiError> {
         match self {
-            Self::Anthropic(client) => client
-                .stream_message(request)
-                .await
-                .map(MessageStream::Anthropic),
-            Self::Xai(client) | Self::OpenAi(client) => client
-                .stream_message(request)
-                .await
-                .map(MessageStream::OpenAiCompat),
+            Self::Anthropic(client) => {
+                client.stream_message(request).await.map(MessageStream::Anthropic)
+            }
+            Self::Xai(client) | Self::OpenAi(client) => {
+                client.stream_message(request).await.map(MessageStream::OpenAiCompat)
+            }
         }
     }
 }
@@ -147,9 +145,6 @@ mod tests {
     #[test]
     fn provider_detection_prefers_model_family() {
         assert_eq!(detect_provider_kind("grok-3"), ProviderKind::Xai);
-        assert_eq!(
-            detect_provider_kind("claude-sonnet-4-6"),
-            ProviderKind::Anthropic
-        );
+        assert_eq!(detect_provider_kind("claude-sonnet-4-6"), ProviderKind::Anthropic);
     }
 }

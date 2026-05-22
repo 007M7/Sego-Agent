@@ -50,9 +50,7 @@ impl InputMessage {
             role: "user".to_string(),
             content: vec![InputContentBlock::ToolResult {
                 tool_use_id: tool_use_id.into(),
-                content: vec![ToolResultContentBlock::Text {
-                    text: content.into(),
-                }],
+                content: vec![ToolResultContentBlock::Text { text: content.into() }],
                 is_error,
             }],
         }

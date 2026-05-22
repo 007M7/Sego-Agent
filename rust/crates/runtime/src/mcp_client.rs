@@ -98,9 +98,9 @@ impl McpClientTransport {
                 headers_helper: config.headers_helper.clone(),
                 auth: McpClientAuth::None,
             }),
-            McpServerConfig::Sdk(config) => Self::Sdk(McpSdkTransport {
-                name: config.name.clone(),
-            }),
+            McpServerConfig::Sdk(config) => {
+                Self::Sdk(McpSdkTransport { name: config.name.clone() })
+            }
             McpServerConfig::ManagedProxy(config) => Self::ManagedProxy(McpManagedProxyTransport {
                 url: config.url.clone(),
                 id: config.id.clone(),
@@ -112,8 +112,7 @@ impl McpClientTransport {
 impl McpStdioTransport {
     #[must_use]
     pub fn resolved_tool_call_timeout_ms(&self) -> u64 {
-        self.tool_call_timeout_ms
-            .unwrap_or(DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS)
+        self.tool_call_timeout_ms.unwrap_or(DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS)
     }
 }
 
@@ -155,18 +154,12 @@ mod tests {
         let bootstrap = McpClientBootstrap::from_scoped_config("stdio-server", &config);
         assert_eq!(bootstrap.normalized_name, "stdio-server");
         assert_eq!(bootstrap.tool_prefix, "mcp__stdio-server__");
-        assert_eq!(
-            bootstrap.signature.as_deref(),
-            Some("stdio:[uvx|mcp-server]")
-        );
+        assert_eq!(bootstrap.signature.as_deref(), Some("stdio:[uvx|mcp-server]"));
         match bootstrap.transport {
             McpClientTransport::Stdio(transport) => {
                 assert_eq!(transport.command, "uvx");
                 assert_eq!(transport.args, vec!["mcp-server"]);
-                assert_eq!(
-                    transport.env.get("TOKEN").map(String::as_str),
-                    Some("secret")
-                );
+                assert_eq!(transport.env.get("TOKEN").map(String::as_str), Some("secret"));
                 assert_eq!(transport.tool_call_timeout_ms, Some(15_000));
             }
             other => panic!("expected stdio transport, got {other:?}"),
@@ -222,9 +215,7 @@ mod tests {
         };
         let sdk = ScopedMcpServerConfig {
             scope: ConfigSource::Local,
-            config: McpServerConfig::Sdk(McpSdkServerConfig {
-                name: "sdk-server".to_string(),
-            }),
+            config: McpServerConfig::Sdk(McpSdkServerConfig { name: "sdk-server".to_string() }),
         };
 
         let ws_bootstrap = McpClientBootstrap::from_scoped_config("ws server", &ws);

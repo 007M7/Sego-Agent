@@ -6,10 +6,7 @@ use crate::config::RuntimePluginConfig;
 use crate::mcp_tool_bridge::{McpResourceInfo, McpToolInfo};
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub type ToolInfo = McpToolInfo;
@@ -48,13 +45,8 @@ pub enum PluginState {
     Validated,
     Starting,
     Healthy,
-    Degraded {
-        healthy_servers: Vec<String>,
-        failed_servers: Vec<ServerHealth>,
-    },
-    Failed {
-        reason: String,
-    },
+    Degraded { healthy_servers: Vec<String>, failed_servers: Vec<ServerHealth> },
+    Failed { reason: String },
     ShuttingDown,
     Stopped,
 }
@@ -63,9 +55,7 @@ impl PluginState {
     #[must_use]
     pub fn from_servers(servers: &[ServerHealth]) -> Self {
         if servers.is_empty() {
-            return Self::Failed {
-                reason: "no servers available".to_string(),
-            };
+            return Self::Failed { reason: "no servers available".to_string() };
         }
 
         let healthy_servers = servers
@@ -78,21 +68,15 @@ impl PluginState {
             .filter(|server| server.status == ServerStatus::Failed)
             .cloned()
             .collect::<Vec<_>>();
-        let has_degraded_server = servers
-            .iter()
-            .any(|server| server.status == ServerStatus::Degraded);
+        let has_degraded_server =
+            servers.iter().any(|server| server.status == ServerStatus::Degraded);
 
         if failed_servers.is_empty() && !has_degraded_server {
             Self::Healthy
         } else if healthy_servers.is_empty() {
-            Self::Failed {
-                reason: format!("all {} servers failed", failed_servers.len()),
-            }
+            Self::Failed { reason: format!("all {} servers failed", failed_servers.len()) }
         } else {
-            Self::Degraded {
-                healthy_servers,
-                failed_servers,
-            }
+            Self::Degraded { healthy_servers, failed_servers }
         }
     }
 }
@@ -124,26 +108,14 @@ impl PluginHealthcheck {
     #[must_use]
     pub fn new(plugin_name: impl Into<String>, servers: Vec<ServerHealth>) -> Self {
         let state = PluginState::from_servers(&servers);
-        Self {
-            plugin_name: plugin_name.into(),
-            state,
-            servers,
-            last_check: now_secs(),
-        }
+        Self { plugin_name: plugin_name.into(), state, servers, last_check: now_secs() }
     }
 
     #[must_use]
     pub fn degraded_mode(&self, discovery: &DiscoveryResult) -> Option<DegradedMode> {
         match &self.state {
-            PluginState::Degraded {
-                healthy_servers,
-                failed_servers,
-            } => Some(DegradedMode {
-                available_tools: discovery
-                    .tools
-                    .iter()
-                    .map(|tool| tool.name.clone())
-                    .collect(),
+            PluginState::Degraded { healthy_servers, failed_servers } => Some(DegradedMode {
+                available_tools: discovery.tools.iter().map(|tool| tool.name.clone()).collect(),
                 unavailable_tools: failed_servers
                     .iter()
                     .flat_map(|server| server.capabilities.iter().cloned())
@@ -180,11 +152,7 @@ impl DegradedMode {
         unavailable_tools: Vec<String>,
         reason: impl Into<String>,
     ) -> Self {
-        Self {
-            available_tools,
-            unavailable_tools,
-            reason: reason.into(),
-        }
+        Self { available_tools, unavailable_tools, reason: reason.into() }
     }
 }
 
@@ -255,10 +223,7 @@ mod tests {
             if self.valid_config {
                 Ok(())
             } else {
-                Err(format!(
-                    "plugin `{}` failed configuration validation",
-                    self.plugin_name
-                ))
+                Err(format!("plugin `{}` failed configuration validation", self.plugin_name))
             }
         }
 
@@ -293,10 +258,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Healthy,
-            capabilities: capabilities
-                .iter()
-                .map(|capability| capability.to_string())
-                .collect(),
+            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
             last_error: None,
         }
     }
@@ -305,10 +267,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Failed,
-            capabilities: capabilities
-                .iter()
-                .map(|capability| capability.to_string())
-                .collect(),
+            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
             last_error: Some(error.to_string()),
         }
     }
@@ -317,10 +276,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Degraded,
-            capabilities: capabilities
-                .iter()
-                .map(|capability| capability.to_string())
-                .collect(),
+            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
             last_error: Some(error.to_string()),
         }
     }
@@ -348,10 +304,7 @@ mod tests {
         let mut lifecycle = MockPluginLifecycle::new(
             "healthy-plugin",
             true,
-            vec![
-                healthy_server("alpha", &["search", "read"]),
-                healthy_server("beta", &["write"]),
-            ],
+            vec![healthy_server("alpha", &["search", "read"]), healthy_server("beta", &["write"])],
             DiscoveryResult {
                 tools: vec![tool("search"), tool("read"), tool("write")],
                 resources: vec![resource("docs", "file:///docs")],
@@ -407,28 +360,16 @@ mod tests {
 
         // then
         match healthcheck.state {
-            PluginState::Degraded {
-                healthy_servers,
-                failed_servers,
-            } => {
-                assert_eq!(
-                    healthy_servers,
-                    vec!["alpha".to_string(), "gamma".to_string()]
-                );
+            PluginState::Degraded { healthy_servers, failed_servers } => {
+                assert_eq!(healthy_servers, vec!["alpha".to_string(), "gamma".to_string()]);
                 assert_eq!(failed_servers.len(), 1);
                 assert_eq!(failed_servers[0].server_name, "beta");
-                assert_eq!(
-                    failed_servers[0].last_error.as_deref(),
-                    Some("connection refused")
-                );
+                assert_eq!(failed_servers[0].last_error.as_deref(), Some("connection refused"));
             }
             other => panic!("expected degraded state, got {other:?}"),
         }
         assert!(discovery.partial);
-        assert_eq!(
-            degraded_mode.available_tools,
-            vec!["search".to_string(), "read".to_string()]
-        );
+        assert_eq!(degraded_mode.available_tools, vec!["search".to_string(), "read".to_string()]);
         assert_eq!(degraded_mode.unavailable_tools, vec!["write".to_string()]);
         assert_eq!(degraded_mode.reason, "2 servers healthy, 1 servers failed");
     }
@@ -456,14 +397,8 @@ mod tests {
 
         // then
         match healthcheck.state {
-            PluginState::Degraded {
-                healthy_servers,
-                failed_servers,
-            } => {
-                assert_eq!(
-                    healthy_servers,
-                    vec!["alpha".to_string(), "beta".to_string()]
-                );
+            PluginState::Degraded { healthy_servers, failed_servers } => {
+                assert_eq!(healthy_servers, vec!["alpha".to_string(), "beta".to_string()]);
                 assert!(failed_servers.is_empty());
             }
             other => panic!("expected degraded state, got {other:?}"),
@@ -480,11 +415,7 @@ mod tests {
                 failed_server("alpha", &["search"], "timeout"),
                 failed_server("beta", &["read"], "handshake failed"),
             ],
-            DiscoveryResult {
-                tools: Vec::new(),
-                resources: Vec::new(),
-                partial: false,
-            },
+            DiscoveryResult { tools: Vec::new(), resources: Vec::new(), partial: false },
             None,
         );
 
@@ -512,11 +443,7 @@ mod tests {
             "shutdown-plugin",
             true,
             vec![healthy_server("alpha", &["search"])],
-            DiscoveryResult {
-                tools: vec![tool("search")],
-                resources: Vec::new(),
-                partial: false,
-            },
+            DiscoveryResult { tools: vec![tool("search")], resources: Vec::new(), partial: false },
             None,
         );
 

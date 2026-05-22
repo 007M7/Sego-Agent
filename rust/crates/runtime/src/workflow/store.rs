@@ -7,13 +7,10 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::{WorkflowSnapshot, report::SessionReport};
-use crate::lane_events::{LaneEvent, LaneEventName, LaneFailureClass};
-use crate::recovery_recipes::RecoveryEvent;
+use super::{report::SessionReport, WorkflowSnapshot};
 
 const WORKFLOW_DIR: &str = ".claw/workflow";
 const SESSIONS_DIR: &str = "sessions";
@@ -83,11 +80,7 @@ impl WorkflowStore {
         let root = workspace_root.as_ref().join(WORKFLOW_DIR);
         let sessions_dir = root.join(SESSIONS_DIR);
         let trends_path = root.join(TRENDS_FILE);
-        Self {
-            root,
-            sessions_dir,
-            trends_path,
-        }
+        Self { root, sessions_dir, trends_path }
     }
 
     /// Ensure the workflow directories exist.
@@ -104,26 +97,25 @@ impl WorkflowStore {
         self.init()?;
         let mut record = BTreeMap::new();
         record.insert("session_id".to_string(), serde_json::json!(snapshot.session_id));
-        record.insert(
-            "started_at".to_string(),
-            serde_json::json!(snapshot.started_at),
-        );
-        record.insert(
-            "finished_at".to_string(),
-            serde_json::json!(snapshot.finished_at),
-        );
+        record.insert("started_at".to_string(), serde_json::json!(snapshot.started_at));
+        record.insert("finished_at".to_string(), serde_json::json!(snapshot.finished_at));
         record.insert("task_description".to_string(), serde_json::json!(snapshot.task_description));
         record.insert("failure_count".to_string(), serde_json::json!(snapshot.failure_count));
         record.insert("efficiency_score".to_string(), serde_json::json!(snapshot.efficiency_score));
-        record.insert("recovery_attempts".to_string(), serde_json::json!(snapshot.recovery_stats.attempts));
-        record.insert("recovery_successes".to_string(), serde_json::json!(snapshot.recovery_stats.successes));
-        record.insert("green_level".to_string(), serde_json::json!(snapshot.green_level.map(|g| g.as_str())));
+        record.insert(
+            "recovery_attempts".to_string(),
+            serde_json::json!(snapshot.recovery_stats.attempts),
+        );
+        record.insert(
+            "recovery_successes".to_string(),
+            serde_json::json!(snapshot.recovery_stats.successes),
+        );
+        record.insert(
+            "green_level".to_string(),
+            serde_json::json!(snapshot.green_level.map(|g| g.as_str())),
+        );
 
-        let timestamp = snapshot
-            .started_at
-            .as_deref()
-            .unwrap_or("unknown")
-            .replace(':', "-");
+        let timestamp = snapshot.started_at.as_deref().unwrap_or("unknown").replace(':', "-");
         let filename = format!("{}.json", timestamp);
         let path = self.sessions_dir.join(&filename);
 
@@ -153,19 +145,17 @@ impl WorkflowStore {
 
         trends.total_sessions += 1;
         trends.average_efficiency =
-            (trends.average_efficiency * n + report.efficiency_score)
-            / (n + 1.0);
-        trends.average_duration_seconds =
-            ((trends.average_duration_seconds as f64 * n + duration_seconds as f64)
-                / (n + 1.0)) as u64;
+            (trends.average_efficiency * n + report.efficiency_score) / (n + 1.0);
+        trends.average_duration_seconds = ((trends.average_duration_seconds as f64 * n
+            + duration_seconds as f64)
+            / (n + 1.0)) as u64;
         trends.total_failures += report.failure_count;
         trends.total_recoveries += report.recovery_successes;
-        trends.improvement_rate =
-            if trends.total_sessions > 1 {
-                (report.efficiency_score - trends.average_efficiency) / trends.average_efficiency
-            } else {
-                0.0
-            };
+        trends.improvement_rate = if trends.total_sessions > 1 {
+            (report.efficiency_score - trends.average_efficiency) / trends.average_efficiency
+        } else {
+            0.0
+        };
 
         // Keep track of recent session IDs
         trends.recent_session_ids.push(report.session_id.clone());
@@ -192,10 +182,7 @@ impl WorkflowStore {
     }
 
     /// Load a specific session by its file path.
-    pub fn load_session(
-        &self,
-        path: &Path,
-    ) -> Result<serde_json::Value, WorkflowStoreError> {
+    pub fn load_session(&self, path: &Path) -> Result<serde_json::Value, WorkflowStoreError> {
         let data = fs::read_to_string(path)?;
         Ok(serde_json::from_str(&data)?)
     }
@@ -206,11 +193,7 @@ impl WorkflowStore {
         count: usize,
     ) -> Result<Vec<serde_json::Value>, WorkflowStoreError> {
         let paths = self.list_sessions()?;
-        let recent: Vec<_> = paths
-            .iter()
-            .rev()
-            .take(count)
-            .collect();
+        let recent: Vec<_> = paths.iter().rev().take(count).collect();
         let mut sessions = Vec::new();
         for path in recent.iter().rev() {
             sessions.push(self.load_session(path)?);
@@ -316,9 +299,6 @@ mod tests {
     }
 
     fn rand_id() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
     }
 }

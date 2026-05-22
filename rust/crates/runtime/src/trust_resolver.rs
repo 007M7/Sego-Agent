@@ -50,10 +50,7 @@ impl TrustConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustDecision {
     NotRequired,
-    Required {
-        policy: TrustPolicy,
-        events: Vec<TrustEvent>,
-    },
+    Required { policy: TrustPolicy, events: Vec<TrustEvent> },
 }
 
 impl TrustDecision {
@@ -91,70 +88,36 @@ impl TrustResolver {
             return TrustDecision::NotRequired;
         }
 
-        let mut events = vec![TrustEvent::TrustRequired {
-            cwd: cwd.to_owned(),
-        }];
+        let mut events = vec![TrustEvent::TrustRequired { cwd: cwd.to_owned() }];
 
-        if let Some(matched_root) = self
-            .config
-            .denied
-            .iter()
-            .find(|root| path_matches(cwd, root))
-        {
+        if let Some(matched_root) = self.config.denied.iter().find(|root| path_matches(cwd, root)) {
             let reason = format!("cwd matches denied trust root: {}", matched_root.display());
-            events.push(TrustEvent::TrustDenied {
-                cwd: cwd.to_owned(),
-                reason,
-            });
-            return TrustDecision::Required {
-                policy: TrustPolicy::Deny,
-                events,
-            };
+            events.push(TrustEvent::TrustDenied { cwd: cwd.to_owned(), reason });
+            return TrustDecision::Required { policy: TrustPolicy::Deny, events };
         }
 
-        if self
-            .config
-            .allowlisted
-            .iter()
-            .any(|root| path_matches(cwd, root))
-        {
+        if self.config.allowlisted.iter().any(|root| path_matches(cwd, root)) {
             events.push(TrustEvent::TrustResolved {
                 cwd: cwd.to_owned(),
                 policy: TrustPolicy::AutoTrust,
             });
-            return TrustDecision::Required {
-                policy: TrustPolicy::AutoTrust,
-                events,
-            };
+            return TrustDecision::Required { policy: TrustPolicy::AutoTrust, events };
         }
 
-        TrustDecision::Required {
-            policy: TrustPolicy::RequireApproval,
-            events,
-        }
+        TrustDecision::Required { policy: TrustPolicy::RequireApproval, events }
     }
 
     #[must_use]
     pub fn trusts(&self, cwd: &str) -> bool {
-        !self
-            .config
-            .denied
-            .iter()
-            .any(|root| path_matches(cwd, root))
-            && self
-                .config
-                .allowlisted
-                .iter()
-                .any(|root| path_matches(cwd, root))
+        !self.config.denied.iter().any(|root| path_matches(cwd, root))
+            && self.config.allowlisted.iter().any(|root| path_matches(cwd, root))
     }
 }
 
 #[must_use]
 pub fn detect_trust_prompt(screen_text: &str) -> bool {
     let lowered = screen_text.to_ascii_lowercase();
-    TRUST_PROMPT_CUES
-        .iter()
-        .any(|needle| lowered.contains(needle))
+    TRUST_PROMPT_CUES.iter().any(|needle| lowered.contains(needle))
 }
 
 #[must_use]
@@ -221,9 +184,7 @@ mod tests {
         assert_eq!(
             decision.events(),
             &[
-                TrustEvent::TrustRequired {
-                    cwd: "/tmp/worktrees/repo-a".to_string(),
-                },
+                TrustEvent::TrustRequired { cwd: "/tmp/worktrees/repo-a".to_string() },
                 TrustEvent::TrustResolved {
                     cwd: "/tmp/worktrees/repo-a".to_string(),
                     policy: TrustPolicy::AutoTrust,
@@ -247,9 +208,7 @@ mod tests {
         assert_eq!(decision.policy(), Some(TrustPolicy::RequireApproval));
         assert_eq!(
             decision.events(),
-            &[TrustEvent::TrustRequired {
-                cwd: "/tmp/other/repo-b".to_string(),
-            }]
+            &[TrustEvent::TrustRequired { cwd: "/tmp/other/repo-b".to_string() }]
         );
     }
 
@@ -273,9 +232,7 @@ mod tests {
         assert_eq!(
             decision.events(),
             &[
-                TrustEvent::TrustRequired {
-                    cwd: "/tmp/worktrees/repo-c".to_string(),
-                },
+                TrustEvent::TrustRequired { cwd: "/tmp/worktrees/repo-c".to_string() },
                 TrustEvent::TrustDenied {
                     cwd: "/tmp/worktrees/repo-c".to_string(),
                     reason: "cwd matches denied trust root: /tmp/worktrees/repo-c".to_string(),

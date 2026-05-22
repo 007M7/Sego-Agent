@@ -256,9 +256,9 @@ fn detect_scenario(request: &MessageRequest) -> Option<Scenario> {
 fn latest_tool_result(request: &MessageRequest) -> Option<(String, bool)> {
     request.messages.iter().rev().find_map(|message| {
         message.content.iter().rev().find_map(|block| match block {
-            InputContentBlock::ToolResult {
-                content, is_error, ..
-            } => Some((flatten_tool_result_content(content), *is_error)),
+            InputContentBlock::ToolResult { content, is_error, .. } => {
+                Some((flatten_tool_result_content(content), *is_error))
+            }
             _ => None,
         })
     })
@@ -277,12 +277,7 @@ fn tool_results_by_name(request: &MessageRequest) -> HashMap<String, (String, bo
     let mut results = HashMap::new();
     for message in request.messages.iter().rev() {
         for block in message.content.iter().rev() {
-            if let InputContentBlock::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            } = block
-            {
+            if let InputContentBlock::ToolResult { tool_use_id, content, is_error } = block {
                 let tool_name = tool_names_by_id
                     .get(tool_use_id)
                     .cloned()
@@ -338,11 +333,7 @@ fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
                 "read_file roundtrip complete: {}",
                 extract_read_content(&tool_output)
             )),
-            None => tool_use_sse(
-                "toolu_read_fixture",
-                "read_file",
-                &[r#"{"path":"fixture.txt"}"#],
-            ),
+            None => tool_use_sse("toolu_read_fixture", "read_file", &[r#"{"path":"fixture.txt"}"#]),
         },
         Scenario::GrepChunkAssembly => match latest_tool_result(request) {
             Some((tool_output, _)) => final_text_sse(&format!(
@@ -382,10 +373,7 @@ fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
         },
         Scenario::MultiToolTurnRoundtrip => {
             let tool_results = tool_results_by_name(request);
-            match (
-                tool_results.get("read_file"),
-                tool_results.get("grep_search"),
-            ) {
+            match (tool_results.get("read_file"), tool_results.get("grep_search")) {
                 (Some((read_output, _)), Some((grep_output, _))) => final_text_sse(&format!(
                     "multi-tool roundtrip complete: {} / {} occurrences",
                     extract_read_content(read_output),
@@ -410,10 +398,9 @@ fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
             }
         }
         Scenario::BashStdoutRoundtrip => match latest_tool_result(request) {
-            Some((tool_output, _)) => final_text_sse(&format!(
-                "bash completed: {}",
-                extract_bash_stdout(&tool_output)
-            )),
+            Some((tool_output, _)) => {
+                final_text_sse(&format!("bash completed: {}", extract_bash_stdout(&tool_output)))
+            }
             None => tool_use_sse(
                 "toolu_bash_stdout",
                 "bash",
@@ -477,10 +464,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
         Scenario::ReadFileRoundtrip => match latest_tool_result(request) {
             Some((tool_output, _)) => text_message_response(
                 "msg_read_file_final",
-                &format!(
-                    "read_file roundtrip complete: {}",
-                    extract_read_content(&tool_output)
-                ),
+                &format!("read_file roundtrip complete: {}", extract_read_content(&tool_output)),
             ),
             None => tool_message_response(
                 "msg_read_file_tool",
@@ -492,10 +476,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
         Scenario::GrepChunkAssembly => match latest_tool_result(request) {
             Some((tool_output, _)) => text_message_response(
                 "msg_grep_final",
-                &format!(
-                    "grep_search matched {} occurrences",
-                    extract_num_matches(&tool_output)
-                ),
+                &format!("grep_search matched {} occurrences", extract_num_matches(&tool_output)),
             ),
             None => tool_message_response(
                 "msg_grep_tool",
@@ -530,10 +511,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
         },
         Scenario::MultiToolTurnRoundtrip => {
             let tool_results = tool_results_by_name(request);
-            match (
-                tool_results.get("read_file"),
-                tool_results.get("grep_search"),
-            ) {
+            match (tool_results.get("read_file"), tool_results.get("grep_search")) {
                 (Some((read_output, _)), Some((grep_output, _))) => text_message_response(
                     "msg_multi_tool_final",
                     &format!(
@@ -610,10 +588,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
         Scenario::PluginToolRoundtrip => match latest_tool_result(request) {
             Some((tool_output, _)) => text_message_response(
                 "msg_plugin_tool_final",
-                &format!(
-                    "plugin tool completed: {}",
-                    extract_plugin_message(&tool_output)
-                ),
+                &format!("plugin tool completed: {}", extract_plugin_message(&tool_output)),
             ),
             None => tool_message_response(
                 "msg_plugin_tool_start",
@@ -671,9 +646,7 @@ fn text_message_response(id: &str, text: &str) -> MessageResponse {
         id: id.to_string(),
         kind: "message".to_string(),
         role: "assistant".to_string(),
-        content: vec![OutputContentBlock::Text {
-            text: text.to_string(),
-        }],
+        content: vec![OutputContentBlock::Text { text: text.to_string() }],
         model: DEFAULT_MODEL.to_string(),
         stop_reason: Some("end_turn".to_string()),
         stop_sequence: None,
@@ -697,9 +670,7 @@ fn text_message_response_with_usage(
         id: id.to_string(),
         kind: "message".to_string(),
         role: "assistant".to_string(),
-        content: vec![OutputContentBlock::Text {
-            text: text.to_string(),
-        }],
+        content: vec![OutputContentBlock::Text { text: text.to_string() }],
         model: DEFAULT_MODEL.to_string(),
         stop_reason: Some("end_turn".to_string()),
         stop_sequence: None,
@@ -719,14 +690,7 @@ fn tool_message_response(
     tool_name: &str,
     input: Value,
 ) -> MessageResponse {
-    tool_message_response_many(
-        id,
-        &[ToolUseMessage {
-            tool_id,
-            tool_name,
-            input,
-        }],
-    )
+    tool_message_response_many(id, &[ToolUseMessage { tool_id, tool_name, input }])
 }
 
 struct ToolUseMessage<'a> {
@@ -829,11 +793,7 @@ fn streaming_text_sse() -> String {
 }
 
 fn tool_use_sse(tool_id: &str, tool_name: &str, partial_json_chunks: &[&str]) -> String {
-    tool_uses_sse(&[ToolUseSse {
-        tool_id,
-        tool_name,
-        partial_json_chunks,
-    }])
+    tool_uses_sse(&[ToolUseSse { tool_id, tool_name, partial_json_chunks }])
 }
 
 struct ToolUseSse<'a> {
@@ -844,10 +804,9 @@ struct ToolUseSse<'a> {
 
 fn tool_uses_sse(tool_uses: &[ToolUseSse<'_>]) -> String {
     let mut body = String::new();
-    let message_id = tool_uses.first().map_or_else(
-        || "msg_tool_use".to_string(),
-        |tool_use| format!("msg_{}", tool_use.tool_id),
-    );
+    let message_id = tool_uses
+        .first()
+        .map_or_else(|| "msg_tool_use".to_string(), |tool_use| format!("msg_{}", tool_use.tool_id));
     append_sse(
         &mut body,
         "message_start",
@@ -1088,24 +1047,14 @@ fn extract_num_matches(tool_output: &str) -> usize {
 fn extract_file_path(tool_output: &str) -> String {
     serde_json::from_str::<Value>(tool_output)
         .ok()
-        .and_then(|value| {
-            value
-                .get("filePath")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        .and_then(|value| value.get("filePath").and_then(Value::as_str).map(ToOwned::to_owned))
         .unwrap_or_else(|| tool_output.trim().to_string())
 }
 
 fn extract_bash_stdout(tool_output: &str) -> String {
     serde_json::from_str::<Value>(tool_output)
         .ok()
-        .and_then(|value| {
-            value
-                .get("stdout")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        .and_then(|value| value.get("stdout").and_then(Value::as_str).map(ToOwned::to_owned))
         .unwrap_or_else(|| tool_output.trim().to_string())
 }
 

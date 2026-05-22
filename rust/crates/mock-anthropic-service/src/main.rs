@@ -9,9 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bind" => {
-                bind_addr = args
-                    .next()
-                    .ok_or_else(|| "missing value for --bind".to_string())?;
+                bind_addr = args.next().ok_or_else(|| "missing value for --bind".to_string())?;
             }
             flag if flag.starts_with("--bind=") => {
                 bind_addr = flag[7..].to_string();

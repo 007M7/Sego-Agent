@@ -222,15 +222,9 @@ pub struct TerminalRenderer {
 impl Default for TerminalRenderer {
     fn default() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let syntax_theme = ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .unwrap_or_default();
-        Self {
-            syntax_set,
-            syntax_theme,
-            color_theme: ColorTheme::default(),
-        }
+        let syntax_theme =
+            ThemeSet::load_defaults().themes.remove("base16-ocean.dark").unwrap_or_default();
+        Self { syntax_set, syntax_theme, color_theme: ColorTheme::default() }
     }
 }
 
@@ -352,18 +346,14 @@ impl TerminalRenderer {
                 state.append_raw(output, &math);
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
-                state.link_stack.push(LinkState {
-                    destination: dest_url.to_string(),
-                    text: String::new(),
-                });
+                state
+                    .link_stack
+                    .push(LinkState { destination: dest_url.to_string(), text: String::new() });
             }
             Event::End(TagEnd::Link) => {
                 if let Some(link) = state.link_stack.pop() {
-                    let label = if link.text.is_empty() {
-                        link.destination.clone()
-                    } else {
-                        link.text
-                    };
+                    let label =
+                        if link.text.is_empty() { link.destination.clone() } else { link.text };
                     let rendered = format!(
                         "{}",
                         format!("[{label}]({})", link.destination)
@@ -374,10 +364,8 @@ impl TerminalRenderer {
                 }
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                let rendered = format!(
-                    "{}",
-                    format!("[image:{dest_url}]").with(self.color_theme.link)
-                );
+                let rendered =
+                    format!("{}", format!("[image:{dest_url}]").with(self.color_theme.link));
                 state.append_raw(output, &rendered);
             }
             Event::Start(Tag::Table(..)) => state.table = Some(TableState::default()),
@@ -452,27 +440,18 @@ impl TerminalRenderer {
     }
 
     fn start_code_block(&self, code_language: &str, output: &mut String) {
-        let label = if code_language.is_empty() {
-            "code".to_string()
-        } else {
-            code_language.to_string()
-        };
+        let label =
+            if code_language.is_empty() { "code".to_string() } else { code_language.to_string() };
         let _ = writeln!(
             output,
             "{}",
-            format!("╭─ {label}")
-                .bold()
-                .with(self.color_theme.code_block_border)
+            format!("╭─ {label}").bold().with(self.color_theme.code_block_border)
         );
     }
 
     fn finish_code_block(&self, code_buffer: &str, code_language: &str, output: &mut String) {
         output.push_str(&self.highlight_code(code_buffer, code_language));
-        let _ = write!(
-            output,
-            "{}",
-            "╰─".bold().with(self.color_theme.code_block_border)
-        );
+        let _ = write!(output, "{}", "╰─".bold().with(self.color_theme.code_block_border));
         output.push_str("\n\n");
     }
 
@@ -623,11 +602,7 @@ impl MarkdownStreamState {
 
 fn apply_code_block_background(line: &str) -> String {
     let trimmed = line.trim_end_matches('\n');
-    let trailing_newline = if trimmed.len() == line.len() {
-        ""
-    } else {
-        "\n"
-    };
+    let trailing_newline = if trimmed.len() == line.len() { "" } else { "\n" };
     let with_background = trimmed.replace("\u{1b}[0m", "\u{1b}[0;48;5;236m");
     format!("\u{1b}[48;5;236m{with_background}\u{1b}[0m{trailing_newline}")
 }
@@ -762,17 +737,13 @@ mod tests {
         let mut state = MarkdownStreamState::default();
 
         assert_eq!(state.push(&renderer, "# Heading"), None);
-        let flushed = state
-            .push(&renderer, "\n\nParagraph\n\n")
-            .expect("completed block");
+        let flushed = state.push(&renderer, "\n\nParagraph\n\n").expect("completed block");
         let plain_text = strip_ansi(&flushed);
         assert!(plain_text.contains("Heading"));
         assert!(plain_text.contains("Paragraph"));
 
         assert_eq!(state.push(&renderer, "```rust\nfn main() {}\n"), None);
-        let code = state
-            .push(&renderer, "```\n")
-            .expect("closed code fence flushes");
+        let code = state.push(&renderer, "```\n").expect("closed code fence flushes");
         assert!(strip_ansi(&code).contains("fn main()"));
     }
 
@@ -781,12 +752,8 @@ mod tests {
         let terminal_renderer = TerminalRenderer::new();
         let mut spinner = Spinner::new();
         let mut out = Vec::new();
-        spinner
-            .tick("Working", terminal_renderer.color_theme(), &mut out)
-            .expect("tick succeeds");
-        spinner
-            .tick("Working", terminal_renderer.color_theme(), &mut out)
-            .expect("tick succeeds");
+        spinner.tick("Working", terminal_renderer.color_theme(), &mut out).expect("tick succeeds");
+        spinner.tick("Working", terminal_renderer.color_theme(), &mut out).expect("tick succeeds");
 
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("Working"));

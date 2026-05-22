@@ -152,16 +152,9 @@ impl OAuthAuthorizationRequest {
             ("scope", self.scopes.join(" ")),
             ("state", self.state.clone()),
             ("code_challenge", self.code_challenge.clone()),
-            (
-                "code_challenge_method",
-                self.code_challenge_method.as_str().to_string(),
-            ),
+            ("code_challenge_method", self.code_challenge_method.as_str().to_string()),
         ];
-        params.extend(
-            self.extra_params
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.clone())),
-        );
+        params.extend(self.extra_params.iter().map(|(key, value)| (key.as_str(), value.clone())));
         let query = params
             .into_iter()
             .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(&value)))
@@ -170,11 +163,7 @@ impl OAuthAuthorizationRequest {
         format!(
             "{}{}{}",
             self.authorize_url,
-            if self.authorize_url.contains('?') {
-                '&'
-            } else {
-                '?'
-            },
+            if self.authorize_url.contains('?') { '&' } else { '?' },
             query
         )
     }
@@ -299,9 +288,7 @@ pub fn clear_oauth_credentials() -> io::Result<()> {
 }
 
 pub fn parse_oauth_callback_request_target(target: &str) -> Result<OAuthCallbackParams, String> {
-    let (path, query) = target
-        .split_once('?')
-        .map_or((target, ""), |(path, query)| (path, query));
+    let (path, query) = target.split_once('?').map_or((target, ""), |(path, query)| (path, query));
     if path != "/callback" {
         return Err(format!("unexpected callback path: {path}"));
     }
@@ -311,9 +298,7 @@ pub fn parse_oauth_callback_request_target(target: &str) -> Result<OAuthCallback
 pub fn parse_oauth_callback_query(query: &str) -> Result<OAuthCallbackParams, String> {
     let mut params = BTreeMap::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-        let (key, value) = pair
-            .split_once('=')
-            .map_or((pair, ""), |(key, value)| (key, value));
+        let (key, value) = pair.split_once('=').map_or((pair, ""), |(key, value)| (key, value));
         params.insert(percent_decode(key)?, percent_decode(value)?);
     }
     Ok(OAuthCallbackParams {
@@ -483,10 +468,7 @@ mod tests {
         std::env::temp_dir().join(format!(
             "runtime-oauth-test-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos()
         ))
     }
 
@@ -560,10 +542,7 @@ mod tests {
             scopes: vec!["scope:a".to_string()],
         };
         save_oauth_credentials(&token_set).expect("save credentials");
-        assert_eq!(
-            load_oauth_credentials().expect("load credentials"),
-            Some(token_set)
-        );
+        assert_eq!(load_oauth_credentials().expect("load credentials"), Some(token_set));
         let saved = std::fs::read_to_string(&path).expect("read saved file");
         assert!(saved.contains("\"other\": \"value\""));
         assert!(saved.contains("\"oauth\""));

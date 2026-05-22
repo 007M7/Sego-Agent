@@ -10,10 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,10 +89,8 @@ impl TeamRegistry {
 
     pub fn delete(&self, team_id: &str) -> Result<Team, String> {
         let mut inner = self.inner.lock().expect("team registry lock poisoned");
-        let team = inner
-            .teams
-            .get_mut(team_id)
-            .ok_or_else(|| format!("team not found: {team_id}"))?;
+        let team =
+            inner.teams.get_mut(team_id).ok_or_else(|| format!("team not found: {team_id}"))?;
         team.status = TeamStatus::Deleted;
         team.updated_at = now_secs();
         Ok(team.clone())
@@ -175,29 +170,19 @@ impl CronRegistry {
 
     pub fn list(&self, enabled_only: bool) -> Vec<CronEntry> {
         let inner = self.inner.lock().expect("cron registry lock poisoned");
-        inner
-            .entries
-            .values()
-            .filter(|e| !enabled_only || e.enabled)
-            .cloned()
-            .collect()
+        inner.entries.values().filter(|e| !enabled_only || e.enabled).cloned().collect()
     }
 
     pub fn delete(&self, cron_id: &str) -> Result<CronEntry, String> {
         let mut inner = self.inner.lock().expect("cron registry lock poisoned");
-        inner
-            .entries
-            .remove(cron_id)
-            .ok_or_else(|| format!("cron not found: {cron_id}"))
+        inner.entries.remove(cron_id).ok_or_else(|| format!("cron not found: {cron_id}"))
     }
 
     /// Disable a cron entry without removing it.
     pub fn disable(&self, cron_id: &str) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("cron registry lock poisoned");
-        let entry = inner
-            .entries
-            .get_mut(cron_id)
-            .ok_or_else(|| format!("cron not found: {cron_id}"))?;
+        let entry =
+            inner.entries.get_mut(cron_id).ok_or_else(|| format!("cron not found: {cron_id}"))?;
         entry.enabled = false;
         entry.updated_at = now_secs();
         Ok(())
@@ -206,10 +191,8 @@ impl CronRegistry {
     /// Record a cron run.
     pub fn record_run(&self, cron_id: &str) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("cron registry lock poisoned");
-        let entry = inner
-            .entries
-            .get_mut(cron_id)
-            .ok_or_else(|| format!("cron not found: {cron_id}"))?;
+        let entry =
+            inner.entries.get_mut(cron_id).ok_or_else(|| format!("cron not found: {cron_id}"))?;
         entry.last_run_at = Some(now_secs());
         entry.run_count += 1;
         entry.updated_at = now_secs();
@@ -295,9 +278,7 @@ mod tests {
         let registry = CronRegistry::new();
         let c1 = registry.create("* * * * *", "Task 1", None);
         let c2 = registry.create("0 * * * *", "Task 2", None);
-        registry
-            .disable(&c1.cron_id)
-            .expect("disable should succeed");
+        registry.disable(&c1.cron_id).expect("disable should succeed");
 
         let all = registry.list(false);
         assert_eq!(all.len(), 2);
@@ -311,9 +292,7 @@ mod tests {
     fn deletes_cron_entry() {
         let registry = CronRegistry::new();
         let entry = registry.create("* * * * *", "To delete", None);
-        let deleted = registry
-            .delete(&entry.cron_id)
-            .expect("delete should succeed");
+        let deleted = registry.delete(&entry.cron_id).expect("delete should succeed");
         assert_eq!(deleted.cron_id, entry.cron_id);
         assert!(registry.get(&entry.cron_id).is_none());
         assert!(registry.is_empty());
@@ -351,10 +330,8 @@ mod tests {
         ];
 
         // when
-        let rendered: Vec<_> = cases
-            .into_iter()
-            .map(|(status, expected)| (status.to_string(), expected))
-            .collect();
+        let rendered: Vec<_> =
+            cases.into_iter().map(|(status, expected)| (status.to_string(), expected)).collect();
 
         // then
         assert_eq!(
@@ -420,12 +397,8 @@ mod tests {
         let registry = CronRegistry::new();
         let first = registry.create("* * * * *", "Task 1", None);
         let second = registry.create("0 * * * *", "Task 2", None);
-        registry
-            .disable(&first.cron_id)
-            .expect("disable should succeed");
-        registry
-            .disable(&second.cron_id)
-            .expect("disable should succeed");
+        registry.disable(&first.cron_id).expect("disable should succeed");
+        registry.disable(&second.cron_id).expect("disable should succeed");
 
         // when
         let enabled_only = registry.list(true);
@@ -475,12 +448,8 @@ mod tests {
         let entry = registry.create("*/5 * * * *", "Recurring", None);
 
         // when
-        registry
-            .record_run(&entry.cron_id)
-            .expect("first run should succeed");
-        registry
-            .record_run(&entry.cron_id)
-            .expect("second run should succeed");
+        registry.record_run(&entry.cron_id).expect("first run should succeed");
+        registry.record_run(&entry.cron_id).expect("second run should succeed");
         let fetched = registry.get(&entry.cron_id).expect("entry should exist");
 
         // then
@@ -496,9 +465,7 @@ mod tests {
         let entry = registry.create("0 0 * * *", "Nightly", None);
 
         // when
-        registry
-            .disable(&entry.cron_id)
-            .expect("disable should succeed");
+        registry.disable(&entry.cron_id).expect("disable should succeed");
         let fetched = registry.get(&entry.cron_id).expect("entry should exist");
 
         // then

@@ -12,10 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,9 +159,7 @@ impl WorkerRegistry {
         inner.counter += 1;
         let ts = now_secs();
         let worker_id = format!("worker_{:08x}_{}", ts, inner.counter);
-        let trust_auto_resolve = trusted_roots
-            .iter()
-            .any(|root| path_matches_allowlist(cwd, root));
+        let trust_auto_resolve = trusted_roots.iter().any(|root| path_matches_allowlist(cwd, root));
         let mut worker = Worker {
             worker_id: worker_id.clone(),
             cwd: cwd.to_owned(),
@@ -218,10 +213,7 @@ impl WorkerRegistry {
                 WorkerEventKind::TrustRequired,
                 WorkerStatus::TrustRequired,
                 Some("trust prompt detected".to_string()),
-                Some(WorkerEventPayload::TrustPrompt {
-                    cwd: worker.cwd.clone(),
-                    resolution: None,
-                }),
+                Some(WorkerEventPayload::TrustPrompt { cwd: worker.cwd.clone(), resolution: None }),
             );
 
             if worker.trust_auto_resolve {
@@ -257,7 +249,9 @@ impl WorkerRegistry {
             let prompt_preview = prompt_preview(worker.last_prompt.as_deref().unwrap_or_default());
             let message = match observation.target {
                 WorkerPromptTarget::Shell => {
-                    format!("worker prompt landed in shell instead of coding agent: {prompt_preview}")
+                    format!(
+                        "worker prompt landed in shell instead of coding agent: {prompt_preview}"
+                    )
                 }
                 WorkerPromptTarget::WrongTarget => format!(
                     "worker prompt landed in the wrong target instead of {}: {}",
@@ -312,7 +306,9 @@ impl WorkerRegistry {
             worker.last_error = None;
         }
 
-        if detect_ready_for_prompt(screen_text, &lowered) && worker.status != WorkerStatus::ReadyForPrompt {
+        if detect_ready_for_prompt(screen_text, &lowered)
+            && worker.status != WorkerStatus::ReadyForPrompt
+        {
             worker.status = WorkerStatus::ReadyForPrompt;
             worker.prompt_in_flight = false;
             if matches!(
@@ -394,19 +390,14 @@ impl WorkerRegistry {
             worker,
             WorkerEventKind::Running,
             WorkerStatus::Running,
-            Some(format!(
-                "prompt dispatched to worker: {}",
-                prompt_preview(&next_prompt)
-            )),
+            Some(format!("prompt dispatched to worker: {}", prompt_preview(&next_prompt))),
             None,
         );
         Ok(worker.clone())
     }
 
     pub fn await_ready(&self, worker_id: &str) -> Result<WorkerReadySnapshot, String> {
-        let worker = self
-            .get(worker_id)
-            .ok_or_else(|| format!("worker not found: {worker_id}"))?;
+        let worker = self.get(worker_id).ok_or_else(|| format!("worker not found: {worker_id}"))?;
 
         Ok(WorkerReadySnapshot {
             worker_id: worker.worker_id.clone(),
@@ -546,14 +537,7 @@ fn push_event(
     let timestamp = now_secs();
     let seq = worker.events.len() as u64 + 1;
     worker.updated_at = timestamp;
-    worker.events.push(WorkerEvent {
-        seq,
-        kind,
-        status,
-        detail,
-        payload,
-        timestamp,
-    });
+    worker.events.push(WorkerEvent { seq, kind, status, detail, payload, timestamp });
 }
 
 fn path_matches_allowlist(cwd: &str, trusted_root: &str) -> bool {
@@ -579,22 +563,14 @@ fn detect_trust_prompt(lowered: &str) -> bool {
 }
 
 fn detect_ready_for_prompt(screen_text: &str, lowered: &str) -> bool {
-    if [
-        "ready for input",
-        "ready for your input",
-        "ready for prompt",
-        "send a message",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
+    if ["ready for input", "ready for your input", "ready for prompt", "send a message"]
+        .iter()
+        .any(|needle| lowered.contains(needle))
     {
         return true;
     }
 
-    let Some(last_non_empty) = screen_text
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
+    let Some(last_non_empty) = screen_text.lines().rev().find(|line| !line.trim().is_empty())
     else {
         return false;
     };
@@ -615,15 +591,9 @@ fn detect_ready_for_prompt(screen_text: &str, lowered: &str) -> bool {
 }
 
 fn detect_running_cue(lowered: &str) -> bool {
-    [
-        "thinking",
-        "working",
-        "running tests",
-        "inspecting",
-        "analyzing",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
+    ["thinking", "working", "running tests", "inspecting", "analyzing"]
+        .iter()
+        .any(|needle| lowered.contains(needle))
 }
 
 fn is_shell_prompt(trimmed: &str) -> bool {
@@ -743,11 +713,8 @@ mod tests {
     #[test]
     fn allowlisted_trust_prompt_auto_resolves_then_reaches_ready_state() {
         let registry = WorkerRegistry::new();
-        let worker = registry.create(
-            "/tmp/worktrees/repo-a",
-            &["/tmp/worktrees".to_string()],
-            true,
-        );
+        let worker =
+            registry.create("/tmp/worktrees/repo-a", &["/tmp/worktrees".to_string()], true);
 
         let after_trust = registry
             .observe(
@@ -860,16 +827,10 @@ mod tests {
             .expect("misdelivery observe should succeed");
         assert_eq!(recovered.status, WorkerStatus::ReadyForPrompt);
         assert_eq!(
-            recovered
-                .last_error
-                .expect("misdelivery error should exist")
-                .kind,
+            recovered.last_error.expect("misdelivery error should exist").kind,
             WorkerFailureKind::PromptDelivery
         );
-        assert_eq!(
-            recovered.replay_prompt.as_deref(),
-            Some("Implement worker handshake")
-        );
+        assert_eq!(recovered.replay_prompt.as_deref(), Some("Implement worker handshake"));
         let misdelivery = recovered
             .events
             .iter()
@@ -901,9 +862,8 @@ mod tests {
             })
         );
 
-        let replayed = registry
-            .send_prompt(&worker.worker_id, None)
-            .expect("replay send should succeed");
+        let replayed =
+            registry.send_prompt(&worker.worker_id, None).expect("replay send should succeed");
         assert_eq!(replayed.status, WorkerStatus::Running);
         assert!(replayed.replay_prompt.is_none());
         assert_eq!(replayed.prompt_delivery_attempts, 2);
@@ -928,10 +888,7 @@ mod tests {
             .expect("wrong target should be detected");
 
         assert_eq!(recovered.status, WorkerStatus::ReadyForPrompt);
-        assert_eq!(
-            recovered.replay_prompt.as_deref(),
-            Some("Run the worker bootstrap tests")
-        );
+        assert_eq!(recovered.replay_prompt.as_deref(), Some("Run the worker bootstrap tests"));
         assert!(recovered
             .last_error
             .expect("wrong target error should exist")
@@ -958,9 +915,7 @@ mod tests {
         let registry = WorkerRegistry::new();
         let worker = registry.create("/tmp/repo-d", &[], false);
 
-        let initial = registry
-            .await_ready(&worker.worker_id)
-            .expect("await should succeed");
+        let initial = registry.await_ready(&worker.worker_id).expect("await should succeed");
         assert!(!initial.ready);
         assert!(!initial.blocked);
 
@@ -970,21 +925,15 @@ mod tests {
                 "Do you trust the files in this folder?\n1. Yes, proceed\n2. No",
             )
             .expect("trust observe should succeed");
-        let blocked = registry
-            .await_ready(&worker.worker_id)
-            .expect("await should succeed");
+        let blocked = registry.await_ready(&worker.worker_id).expect("await should succeed");
         assert!(!blocked.ready);
         assert!(blocked.blocked);
 
-        registry
-            .resolve_trust(&worker.worker_id)
-            .expect("manual trust resolution should succeed");
+        registry.resolve_trust(&worker.worker_id).expect("manual trust resolution should succeed");
         registry
             .observe(&worker.worker_id, "Ready for your input\n>")
             .expect("ready observe should succeed");
-        let ready = registry
-            .await_ready(&worker.worker_id)
-            .expect("await should succeed");
+        let ready = registry.await_ready(&worker.worker_id).expect("await should succeed");
         assert!(ready.ready);
         assert!(!ready.blocked);
         assert!(ready.last_error.is_none());
@@ -1001,22 +950,15 @@ mod tests {
             .send_prompt(&worker.worker_id, Some("Run tests"))
             .expect("prompt send should succeed");
 
-        let restarted = registry
-            .restart(&worker.worker_id)
-            .expect("restart should succeed");
+        let restarted = registry.restart(&worker.worker_id).expect("restart should succeed");
         assert_eq!(restarted.status, WorkerStatus::Spawning);
         assert_eq!(restarted.prompt_delivery_attempts, 0);
         assert!(restarted.last_prompt.is_none());
         assert!(!restarted.prompt_in_flight);
 
-        let finished = registry
-            .terminate(&worker.worker_id)
-            .expect("terminate should succeed");
+        let finished = registry.terminate(&worker.worker_id).expect("terminate should succeed");
         assert_eq!(finished.status, WorkerStatus::Finished);
-        assert!(finished
-            .events
-            .iter()
-            .any(|event| event.kind == WorkerEventKind::Finished));
+        assert!(finished.events.iter().any(|event| event.kind == WorkerEventKind::Finished));
     }
 
     #[test]
@@ -1038,10 +980,7 @@ mod tests {
         let error = failed.last_error.expect("provider error should exist");
         assert_eq!(error.kind, WorkerFailureKind::Provider);
         assert!(error.message.contains("provider degraded"));
-        assert!(failed
-            .events
-            .iter()
-            .any(|event| event.kind == WorkerEventKind::Failed));
+        assert!(failed.events.iter().any(|event| event.kind == WorkerEventKind::Failed));
     }
 
     #[test]
@@ -1061,9 +1000,6 @@ mod tests {
 
         assert_eq!(finished.status, WorkerStatus::Finished);
         assert!(finished.last_error.is_none());
-        assert!(finished
-            .events
-            .iter()
-            .any(|event| event.kind == WorkerEventKind::Finished));
+        assert!(finished.events.iter().any(|event| event.kind == WorkerEventKind::Finished));
     }
 }

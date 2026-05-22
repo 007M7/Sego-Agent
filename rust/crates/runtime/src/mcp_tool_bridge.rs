@@ -131,9 +131,8 @@ impl McpToolRegistry {
 
     pub fn read_resource(&self, server_name: &str, uri: &str) -> Result<McpResourceInfo, String> {
         let inner = self.inner.lock().expect("mcp registry lock poisoned");
-        let state = inner
-            .get(server_name)
-            .ok_or_else(|| format!("server '{}' not found", server_name))?;
+        let state =
+            inner.get(server_name).ok_or_else(|| format!("server '{}' not found", server_name))?;
 
         if state.status != McpConnectionStatus::Connected {
             return Err(format!(
@@ -184,10 +183,7 @@ impl McpToolRegistry {
                         let mut manager = manager
                             .lock()
                             .map_err(|_| "mcp server manager lock poisoned".to_string())?;
-                        manager
-                            .discover_tools()
-                            .await
-                            .map_err(|error| error.to_string())?;
+                        manager.discover_tools().await.map_err(|error| error.to_string())?;
                         let response = manager
                             .call_tool(&qualified_tool_name, arguments)
                             .await
@@ -236,9 +232,8 @@ impl McpToolRegistry {
         arguments: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let inner = self.inner.lock().expect("mcp registry lock poisoned");
-        let state = inner
-            .get(server_name)
-            .ok_or_else(|| format!("server '{}' not found", server_name))?;
+        let state =
+            inner.get(server_name).ok_or_else(|| format!("server '{}' not found", server_name))?;
 
         if state.status != McpConnectionStatus::Connected {
             return Err(format!(
@@ -248,10 +243,7 @@ impl McpToolRegistry {
         }
 
         if !state.tools.iter().any(|t| t.name == tool_name) {
-            return Err(format!(
-                "tool '{}' not found on server '{}'",
-                tool_name, server_name
-            ));
+            return Err(format!("tool '{}' not found on server '{}'", tool_name, server_name));
         }
 
         drop(inner);
@@ -440,10 +432,7 @@ mod tests {
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env: BTreeMap::from([
                     ("MCP_SERVER_LABEL".to_string(), server_name.to_string()),
-                    (
-                        "MCP_LOG_PATH".to_string(),
-                        log_path.to_string_lossy().into_owned(),
-                    ),
+                    ("MCP_LOG_PATH".to_string(), log_path.to_string_lossy().into_owned()),
                 ]),
                 tool_call_timeout_ms: Some(1_000),
             }),
@@ -500,13 +489,7 @@ mod tests {
     #[test]
     fn rejects_resource_listing_for_disconnected_server() {
         let registry = McpToolRegistry::new();
-        registry.register_server(
-            "srv",
-            McpConnectionStatus::Disconnected,
-            vec![],
-            vec![],
-            None,
-        );
+        registry.register_server("srv", McpConnectionStatus::Disconnected, vec![], vec![], None);
         assert!(registry.list_resources("srv").is_err());
     }
 
@@ -526,9 +509,7 @@ mod tests {
             None,
         );
 
-        let resource = registry
-            .read_resource("srv", "res://data")
-            .expect("should find");
+        let resource = registry.read_resource("srv", "res://data").expect("should find");
         assert_eq!(resource.name, "Data");
 
         assert!(registry.read_resource("srv", "res://missing").is_err());
@@ -540,11 +521,7 @@ mod tests {
         registry.register_server(
             "srv",
             McpConnectionStatus::Connected,
-            vec![McpToolInfo {
-                name: "greet".into(),
-                description: None,
-                input_schema: None,
-            }],
+            vec![McpToolInfo { name: "greet".into(), description: None, input_schema: None }],
             vec![],
             None,
         );
@@ -555,9 +532,7 @@ mod tests {
         assert!(error.contains("MCP server manager is not configured"));
 
         // Unknown tool should fail
-        assert!(registry
-            .call_tool("srv", "missing", &serde_json::json!({}))
-            .is_err());
+        assert!(registry.call_tool("srv", "missing", &serde_json::json!({})).is_err());
     }
 
     #[test]
@@ -587,32 +562,18 @@ mod tests {
             vec![],
             Some("bridge test server".into()),
         );
-        registry
-            .set_manager(Arc::clone(&manager))
-            .expect("manager should only be set once");
+        registry.set_manager(Arc::clone(&manager)).expect("manager should only be set once");
 
         let result = registry
             .call_tool("alpha", "echo", &serde_json::json!({"text": "hello"}))
             .expect("should return live MCP result");
 
-        assert_eq!(
-            result["structuredContent"]["server"],
-            serde_json::json!("alpha")
-        );
-        assert_eq!(
-            result["structuredContent"]["echoed"],
-            serde_json::json!("hello")
-        );
-        assert_eq!(
-            result["content"][0]["text"],
-            serde_json::json!("alpha:hello")
-        );
+        assert_eq!(result["structuredContent"]["server"], serde_json::json!("alpha"));
+        assert_eq!(result["structuredContent"]["echoed"], serde_json::json!("hello"));
+        assert_eq!(result["content"][0]["text"], serde_json::json!("alpha:hello"));
 
         let log = fs::read_to_string(&log_path).expect("read log");
-        assert_eq!(
-            log.lines().collect::<Vec<_>>(),
-            vec!["initialize", "tools/list", "tools/call"]
-        );
+        assert_eq!(log.lines().collect::<Vec<_>>(), vec!["initialize", "tools/list", "tools/call"]);
 
         cleanup_script(&script_path);
     }
@@ -623,34 +584,20 @@ mod tests {
         registry.register_server(
             "srv",
             McpConnectionStatus::AuthRequired,
-            vec![McpToolInfo {
-                name: "greet".into(),
-                description: None,
-                input_schema: None,
-            }],
+            vec![McpToolInfo { name: "greet".into(), description: None, input_schema: None }],
             vec![],
             None,
         );
 
-        assert!(registry
-            .call_tool("srv", "greet", &serde_json::json!({}))
-            .is_err());
+        assert!(registry.call_tool("srv", "greet", &serde_json::json!({})).is_err());
     }
 
     #[test]
     fn sets_auth_and_disconnects() {
         let registry = McpToolRegistry::new();
-        registry.register_server(
-            "srv",
-            McpConnectionStatus::AuthRequired,
-            vec![],
-            vec![],
-            None,
-        );
+        registry.register_server("srv", McpConnectionStatus::AuthRequired, vec![], vec![], None);
 
-        registry
-            .set_auth_status("srv", McpConnectionStatus::Connected)
-            .expect("should succeed");
+        registry.set_auth_status("srv", McpConnectionStatus::Connected).expect("should succeed");
         let state = registry.get_server("srv").unwrap();
         assert_eq!(state.status, McpConnectionStatus::Connected);
 
@@ -665,12 +612,8 @@ mod tests {
         assert!(registry.list_resources("missing").is_err());
         assert!(registry.read_resource("missing", "uri").is_err());
         assert!(registry.list_tools("missing").is_err());
-        assert!(registry
-            .call_tool("missing", "tool", &serde_json::json!({}))
-            .is_err());
-        assert!(registry
-            .set_auth_status("missing", McpConnectionStatus::Connected)
-            .is_err());
+        assert!(registry.call_tool("missing", "tool", &serde_json::json!({})).is_err());
+        assert!(registry.set_auth_status("missing", McpConnectionStatus::Connected).is_err());
     }
 
     #[test]
@@ -685,10 +628,8 @@ mod tests {
         ];
 
         // when
-        let rendered: Vec<_> = cases
-            .into_iter()
-            .map(|(status, expected)| (status.to_string(), expected))
-            .collect();
+        let rendered: Vec<_> =
+            cases.into_iter().map(|(status, expected)| (status.to_string(), expected)).collect();
 
         // then
         assert_eq!(
@@ -707,20 +648,8 @@ mod tests {
     fn list_servers_returns_all_registered() {
         // given
         let registry = McpToolRegistry::new();
-        registry.register_server(
-            "alpha",
-            McpConnectionStatus::Connected,
-            vec![],
-            vec![],
-            None,
-        );
-        registry.register_server(
-            "beta",
-            McpConnectionStatus::Connecting,
-            vec![],
-            vec![],
-            None,
-        );
+        registry.register_server("alpha", McpConnectionStatus::Connected, vec![], vec![], None);
+        registry.register_server("beta", McpConnectionStatus::Connecting, vec![], vec![], None);
 
         // when
         let servers = registry.list_servers();
@@ -759,13 +688,7 @@ mod tests {
     fn list_tools_rejects_disconnected_server() {
         // given
         let registry = McpToolRegistry::new();
-        registry.register_server(
-            "srv",
-            McpConnectionStatus::AuthRequired,
-            vec![],
-            vec![],
-            None,
-        );
+        registry.register_server("srv", McpConnectionStatus::AuthRequired, vec![], vec![], None);
 
         // when
         let result = registry.list_tools("srv");
@@ -785,10 +708,7 @@ mod tests {
         let result = registry.list_tools("missing");
 
         // then
-        assert_eq!(
-            result.expect_err("missing server should fail"),
-            "server 'missing' not found"
-        );
+        assert_eq!(result.expect_err("missing server should fail"), "server 'missing' not found");
     }
 
     #[test]
@@ -830,14 +750,11 @@ mod tests {
             None,
         );
         registry
-            .set_manager(Arc::new(Mutex::new(McpServerManager::from_servers(
-                &servers,
-            ))))
+            .set_manager(Arc::new(Mutex::new(McpServerManager::from_servers(&servers))))
             .expect("manager should only be set once");
 
-        let result = registry
-            .call_tool("srv", "echo", &arguments)
-            .expect("tool should return live payload");
+        let result =
+            registry.call_tool("srv", "echo", &arguments).expect("tool should return live payload");
 
         assert_eq!(result["structuredContent"]["server"], "srv");
         assert_eq!(result["structuredContent"]["echoed"], "world");
@@ -856,11 +773,7 @@ mod tests {
         registry.register_server(
             "srv",
             McpConnectionStatus::Connected,
-            vec![McpToolInfo {
-                name: "inspect".into(),
-                description: None,
-                input_schema: None,
-            }],
+            vec![McpToolInfo { name: "inspect".into(), description: None, input_schema: None }],
             vec![],
             Some("Inspector".into()),
         );
@@ -890,13 +803,7 @@ mod tests {
         let registry = McpToolRegistry::new();
 
         // when
-        registry.register_server(
-            "alpha",
-            McpConnectionStatus::Connected,
-            vec![],
-            vec![],
-            None,
-        );
+        registry.register_server("alpha", McpConnectionStatus::Connected, vec![], vec![], None);
         registry.register_server("beta", McpConnectionStatus::Connected, vec![], vec![], None);
         let after_create = registry.len();
         registry.disconnect("alpha");

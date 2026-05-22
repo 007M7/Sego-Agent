@@ -14,10 +14,7 @@ pub struct CompactionConfig {
 
 impl Default for CompactionConfig {
     fn default() -> Self {
-        Self {
-            preserve_recent_messages: 4,
-            max_estimated_tokens: 10_000,
-        }
+        Self { preserve_recent_messages: 4, max_estimated_tokens: 10_000 }
     }
 }
 
@@ -43,10 +40,7 @@ pub fn should_compact(session: &Session, config: CompactionConfig) -> bool {
     let compactable = &session.messages[start..];
 
     compactable.len() > config.preserve_recent_messages
-        && compactable
-            .iter()
-            .map(estimate_message_tokens)
-            .sum::<usize>()
+        && compactable.iter().map(estimate_message_tokens).sum::<usize>()
             >= config.max_estimated_tokens
 }
 
@@ -73,10 +67,7 @@ pub fn get_compact_continuation_message(
     suppress_follow_up_questions: bool,
     recent_messages_preserved: bool,
 ) -> String {
-    let mut base = format!(
-        "{COMPACT_CONTINUATION_PREAMBLE}{}",
-        format_compact_summary(summary)
-    );
+    let mut base = format!("{COMPACT_CONTINUATION_PREAMBLE}{}", format_compact_summary(summary));
 
     if recent_messages_preserved {
         base.push_str("\n\n");
@@ -103,15 +94,9 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
         };
     }
 
-    let existing_summary = session
-        .messages
-        .first()
-        .and_then(extract_existing_compacted_summary);
+    let existing_summary = session.messages.first().and_then(extract_existing_compacted_summary);
     let compacted_prefix_len = usize::from(existing_summary.is_some());
-    let keep_from = session
-        .messages
-        .len()
-        .saturating_sub(config.preserve_recent_messages);
+    let keep_from = session.messages.len().saturating_sub(config.preserve_recent_messages);
     let removed = &session.messages[compacted_prefix_len..keep_from];
     let preserved = session.messages[keep_from..].to_vec();
     let summary =
@@ -139,28 +124,14 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
 }
 
 fn compacted_summary_prefix_len(session: &Session) -> usize {
-    usize::from(
-        session
-            .messages
-            .first()
-            .and_then(extract_existing_compacted_summary)
-            .is_some(),
-    )
+    usize::from(session.messages.first().and_then(extract_existing_compacted_summary).is_some())
 }
 
 fn summarize_messages(messages: &[ConversationMessage]) -> String {
-    let user_messages = messages
-        .iter()
-        .filter(|message| message.role == MessageRole::User)
-        .count();
-    let assistant_messages = messages
-        .iter()
-        .filter(|message| message.role == MessageRole::Assistant)
-        .count();
-    let tool_messages = messages
-        .iter()
-        .filter(|message| message.role == MessageRole::Tool)
-        .count();
+    let user_messages = messages.iter().filter(|message| message.role == MessageRole::User).count();
+    let assistant_messages =
+        messages.iter().filter(|message| message.role == MessageRole::Assistant).count();
+    let tool_messages = messages.iter().filter(|message| message.role == MessageRole::Tool).count();
 
     let mut tool_names = messages
         .iter()
@@ -193,11 +164,7 @@ fn summarize_messages(messages: &[ConversationMessage]) -> String {
     let recent_user_requests = collect_recent_role_summaries(messages, MessageRole::User, 3);
     if !recent_user_requests.is_empty() {
         lines.push("- Recent user requests:".to_string());
-        lines.extend(
-            recent_user_requests
-                .into_iter()
-                .map(|request| format!("  - {request}")),
-        );
+        lines.extend(recent_user_requests.into_iter().map(|request| format!("  - {request}")));
     }
 
     let pending_work = infer_pending_work(messages);
@@ -223,12 +190,7 @@ fn summarize_messages(messages: &[ConversationMessage]) -> String {
             MessageRole::Assistant => "assistant",
             MessageRole::Tool => "tool",
         };
-        let content = message
-            .blocks
-            .iter()
-            .map(summarize_block)
-            .collect::<Vec<_>>()
-            .join(" | ");
+        let content = message.blocks.iter().map(summarize_block).collect::<Vec<_>>().join(" | ");
         lines.push(format!("  - {role}: {content}"));
     }
     lines.push("</summary>".to_string());
@@ -249,11 +211,7 @@ fn merge_compact_summaries(existing_summary: Option<&str>, new_summary: &str) ->
 
     if !previous_highlights.is_empty() {
         lines.push("- Previously compacted context:".to_string());
-        lines.extend(
-            previous_highlights
-                .into_iter()
-                .map(|line| format!("  {line}")),
-        );
+        lines.extend(previous_highlights.into_iter().map(|line| format!("  {line}")));
     }
 
     if !new_highlights.is_empty() {
@@ -275,15 +233,9 @@ fn summarize_block(block: &ContentBlock) -> String {
         ContentBlock::Text { text } => text.clone(),
         ContentBlock::ToolUse { name, input, .. } => format!("tool_use {name}({input})"),
         ContentBlock::Thinking { .. } => String::new(),
-        ContentBlock::ToolResult {
-            tool_name,
-            output,
-            is_error,
-            ..
-        } => format!(
-            "tool_result {tool_name}: {}{output}",
-            if *is_error { "error " } else { "" }
-        ),
+        ContentBlock::ToolResult { tool_name, output, is_error, .. } => {
+            format!("tool_result {tool_name}: {}{output}", if *is_error { "error " } else { "" })
+        }
     };
     truncate_summary(&raw, 160)
 }
@@ -407,9 +359,9 @@ fn estimate_message_tokens(message: &ConversationMessage) -> usize {
             ContentBlock::Text { text } => text.len() / 4 + 1,
             ContentBlock::ToolUse { name, input, .. } => (name.len() + input.len()) / 4 + 1,
             ContentBlock::Thinking { .. } => 1,
-            ContentBlock::ToolResult {
-                tool_name, output, ..
-            } => (tool_name.len() + output.len()) / 4 + 1,
+            ContentBlock::ToolResult { tool_name, output, .. } => {
+                (tool_name.len() + output.len()) / 4 + 1
+            }
         })
         .sum()
 }
@@ -542,32 +494,22 @@ mod tests {
         let mut session = Session::new();
         session.messages = vec![
             ConversationMessage::user_text("one ".repeat(200)),
-            ConversationMessage::assistant(vec![ContentBlock::Text {
-                text: "two ".repeat(200),
-            }]),
+            ConversationMessage::assistant(vec![ContentBlock::Text { text: "two ".repeat(200) }]),
             ConversationMessage::tool_result("1", "bash", "ok ".repeat(200), false),
             ConversationMessage {
                 role: MessageRole::Assistant,
-                blocks: vec![ContentBlock::Text {
-                    text: "recent".to_string(),
-                }],
+                blocks: vec![ContentBlock::Text { text: "recent".to_string() }],
                 usage: None,
             },
         ];
 
         let result = compact_session(
             &session,
-            CompactionConfig {
-                preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
-            },
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 },
         );
 
         assert_eq!(result.removed_message_count, 2);
-        assert_eq!(
-            result.compacted_session.messages[0].role,
-            MessageRole::System
-        );
+        assert_eq!(result.compacted_session.messages[0].role, MessageRole::System);
         assert!(matches!(
             &result.compacted_session.messages[0].blocks[0],
             ContentBlock::Text { text } if text.contains("Summary:")
@@ -576,10 +518,7 @@ mod tests {
         assert!(result.formatted_summary.contains("Key timeline:"));
         assert!(should_compact(
             &session,
-            CompactionConfig {
-                preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
-            }
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 }
         ));
         assert!(
             estimate_session_tokens(&result.compacted_session) < estimate_session_tokens(&session)
@@ -599,10 +538,7 @@ mod tests {
                 text: "Next: preserve prior summary context during auto compact.".to_string(),
             }]),
         ];
-        let config = CompactionConfig {
-            preserve_recent_messages: 2,
-            max_estimated_tokens: 1,
-        };
+        let config = CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 };
 
         let first = compact_session(&initial_session, config);
         let mut follow_up_messages = first.compacted_session.messages.clone();
@@ -617,15 +553,9 @@ mod tests {
         second_session.messages = follow_up_messages;
         let second = compact_session(&second_session, config);
 
-        assert!(second
-            .formatted_summary
-            .contains("Previously compacted context:"));
-        assert!(second
-            .formatted_summary
-            .contains("Scope: 2 earlier messages compacted"));
-        assert!(second
-            .formatted_summary
-            .contains("Newly compacted context:"));
+        assert!(second.formatted_summary.contains("Previously compacted context:"));
+        assert!(second.formatted_summary.contains("Scope: 2 earlier messages compacted"));
+        assert!(second.formatted_summary.contains("Newly compacted context:"));
         assert!(second
             .formatted_summary
             .contains("Also update rust/crates/runtime/src/conversation.rs"));
@@ -654,25 +584,18 @@ mod tests {
                 usage: None,
             },
             ConversationMessage::user_text("tiny"),
-            ConversationMessage::assistant(vec![ContentBlock::Text {
-                text: "recent".to_string(),
-            }]),
+            ConversationMessage::assistant(vec![ContentBlock::Text { text: "recent".to_string() }]),
         ];
 
         assert!(!should_compact(
             &session,
-            CompactionConfig {
-                preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
-            }
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 }
         ));
     }
 
     #[test]
     fn truncates_long_blocks_in_summary() {
-        let summary = super::summarize_block(&ContentBlock::Text {
-            text: "x".repeat(400),
-        });
+        let summary = super::summarize_block(&ContentBlock::Text { text: "x".repeat(400) });
         assert!(summary.ends_with('…'));
         assert!(summary.chars().count() <= 161);
     }
