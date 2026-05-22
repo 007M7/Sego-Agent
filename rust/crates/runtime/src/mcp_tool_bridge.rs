@@ -103,13 +103,13 @@ impl McpToolRegistry {
         );
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_server(&self, server_name: &str) -> Option<McpServerState> {
         let inner = self.inner.lock().expect("mcp registry lock poisoned");
         inner.get(server_name).cloned()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn list_servers(&self) -> Vec<McpServerState> {
         let inner = self.inner.lock().expect("mcp registry lock poisoned");
         inner.values().cloned().collect()
@@ -278,7 +278,7 @@ impl McpToolRegistry {
     }
 
     /// Disconnect / remove a server.
-    #[must_use] 
+    #[must_use]
     pub fn disconnect(&self, server_name: &str) -> Option<McpServerState> {
         let mut inner = self.inner.lock().expect("mcp registry lock poisoned");
         inner.remove(server_name)

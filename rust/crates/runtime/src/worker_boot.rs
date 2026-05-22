@@ -692,10 +692,14 @@ fn looks_like_cwd_label(candidate: &str) -> bool {
 
 fn cwd_matches_observed_target(expected_cwd: &str, observed_cwd: &str) -> bool {
     let expected = normalize_path(expected_cwd);
-    let expected_base = expected
-        .file_name().map_or_else(|| expected.to_string_lossy().into_owned(), |segment| segment.to_string_lossy().into_owned());
-    let observed_base = Path::new(observed_cwd)
-        .file_name().map_or_else(|| observed_cwd.trim_matches(':').to_string(), |segment| segment.to_string_lossy().into_owned());
+    let expected_base = expected.file_name().map_or_else(
+        || expected.to_string_lossy().into_owned(),
+        |segment| segment.to_string_lossy().into_owned(),
+    );
+    let observed_base = Path::new(observed_cwd).file_name().map_or_else(
+        || observed_cwd.trim_matches(':').to_string(),
+        |segment| segment.to_string_lossy().into_owned(),
+    );
 
     expected.to_string_lossy().ends_with(observed_cwd)
         || observed_cwd.ends_with(expected.to_string_lossy().as_ref())

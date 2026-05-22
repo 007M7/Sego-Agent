@@ -99,8 +99,14 @@ impl CommunityLearning {
         let _ = self.save_config();
 
         // Extract model family (strip version specifics)
-        let model_family =
-            model.split('/').next_back().unwrap_or(model).split('@').next().unwrap_or(model).to_string();
+        let model_family = model
+            .split('/')
+            .next_back()
+            .unwrap_or(model)
+            .split('@')
+            .next()
+            .unwrap_or(model)
+            .to_string();
 
         // Extract only domain from API base URL (strip path and credentials)
         let api_domain = api_base_url

@@ -60,7 +60,7 @@ impl TeamRegistry {
         Self::default()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn create(&self, name: &str, task_ids: Vec<String>) -> Team {
         let mut inner = self.inner.lock().expect("team registry lock poisoned");
         inner.counter += 1;
@@ -78,13 +78,13 @@ impl TeamRegistry {
         team
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, team_id: &str) -> Option<Team> {
         let inner = self.inner.lock().expect("team registry lock poisoned");
         inner.teams.get(team_id).cloned()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn list(&self) -> Vec<Team> {
         let inner = self.inner.lock().expect("team registry lock poisoned");
         inner.teams.values().cloned().collect()
@@ -99,7 +99,7 @@ impl TeamRegistry {
         Ok(team.clone())
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn remove(&self, team_id: &str) -> Option<Team> {
         let mut inner = self.inner.lock().expect("team registry lock poisoned");
         inner.teams.remove(team_id)
@@ -167,13 +167,13 @@ impl CronRegistry {
         entry
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, cron_id: &str) -> Option<CronEntry> {
         let inner = self.inner.lock().expect("cron registry lock poisoned");
         inner.entries.get(cron_id).cloned()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn list(&self, enabled_only: bool) -> Vec<CronEntry> {
         let inner = self.inner.lock().expect("cron registry lock poisoned");
         inner.entries.values().filter(|e| !enabled_only || e.enabled).cloned().collect()

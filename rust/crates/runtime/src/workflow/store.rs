@@ -112,7 +112,9 @@ impl WorkflowStore {
         );
         record.insert(
             "green_level".to_string(),
-            serde_json::json!(snapshot.green_level.map(super::super::green_contract::GreenLevel::as_str)),
+            serde_json::json!(snapshot
+                .green_level
+                .map(super::super::green_contract::GreenLevel::as_str)),
         );
 
         let timestamp = snapshot.started_at.as_deref().unwrap_or("unknown").replace(':', "-");

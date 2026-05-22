@@ -4592,7 +4592,10 @@ impl runtime::HookProgressReporter for CliHookProgressReporter {
     fn on_event(&mut self, event: &runtime::HookProgressEvent) {
         match event {
             runtime::HookProgressEvent::Started { event, tool_name, command } => {
-                eprintln!("[hook {event_name}] {tool_name}: {command}", event_name = event.as_str());
+                eprintln!(
+                    "[hook {event_name}] {tool_name}: {command}",
+                    event_name = event.as_str()
+                );
             }
             runtime::HookProgressEvent::Completed { event, tool_name, command } => eprintln!(
                 "[hook done {event_name}] {tool_name}: {command}",
@@ -5486,10 +5489,8 @@ impl CliToolExecutor {
     fn execute_search_tool(&self, value: serde_json::Value) -> Result<String, ToolError> {
         let input: ToolSearchRequest = serde_json::from_value(value)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
-        let (pending_mcp_servers, mcp_degraded) = self
-            .mcp_state
-            .as_ref()
-            .map_or((None, None), |state| {
+        let (pending_mcp_servers, mcp_degraded) =
+            self.mcp_state.as_ref().map_or((None, None), |state| {
                 let state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (state.pending_servers(), state.degraded_report())
             });

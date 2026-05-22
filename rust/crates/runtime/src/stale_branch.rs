@@ -32,12 +32,12 @@ pub enum StaleBranchAction {
     MergeForward,
 }
 
-#[must_use] 
+#[must_use]
 pub fn check_freshness(branch: &str, main_ref: &str) -> BranchFreshness {
     check_freshness_in(branch, main_ref, Path::new("."))
 }
 
-#[must_use] 
+#[must_use]
 pub fn apply_policy(freshness: &BranchFreshness, policy: StaleBranchPolicy) -> StaleBranchAction {
     match freshness {
         BranchFreshness::Fresh => StaleBranchAction::Noop,

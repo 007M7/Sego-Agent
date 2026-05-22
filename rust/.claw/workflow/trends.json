@@ -1,0 +1,15 @@
+{
+  "total_sessions": 4,
+  "average_efficiency": 100.0,
+  "average_duration_seconds": 0,
+  "total_failures": 0,
+  "total_recoveries": 0,
+  "most_common_failure": null,
+  "improvement_rate": 0.0,
+  "recent_session_ids": [
+    "session-1779267189738-0",
+    "session-1779267189738-0",
+    "session-1779267260465-0",
+    "session-1779267260465-0"
+  ]
+}

@@ -24,7 +24,7 @@ mod ansi {
     pub const WHITE: &str = "\x1b[37m";
 }
 
-use ansi::{CYAN, RESET, GREEN, RED, DIM, BOLD, YELLOW, WHITE};
+use ansi::{BOLD, CYAN, DIM, GREEN, RED, RESET, WHITE, YELLOW};
 
 // ---------------------------------------------------------------------------
 // Spinner frames
