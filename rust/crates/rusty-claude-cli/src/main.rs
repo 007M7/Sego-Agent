@@ -5064,7 +5064,7 @@ impl ApiClient for AnthropicRuntimeClient {
         if let Some(progress_reporter) = &self.progress_reporter {
             progress_reporter.mark_model_phase();
         }
-        // Context window preflight check
+        // Context window preflight check with automatic max_tokens reduction
         let estimated_chars: usize = request.messages.iter()
             .flat_map(|m| m.blocks.iter())
             .map(|b| match b {
@@ -5075,15 +5075,32 @@ impl ApiClient for AnthropicRuntimeClient {
             })
             .sum();
         let estimated_tokens = (estimated_chars / 4) as u32;
-        let max_out = max_tokens_for_model(&self.model);
-        if let Some(warning) = check_context_preflight(&self.model, estimated_tokens, max_out) {
+        let context_limit = context_window_limit(&self.model);
+        let requested_max = max_tokens_for_model(&self.model);
+        // Auto-reduce max_tokens if estimated input + requested output exceeds context window
+        let safe_max_tokens = if estimated_tokens + requested_max > context_limit {
+            let reduced = context_limit.saturating_sub(estimated_tokens).max(1024);
             if self.emit_output {
-                eprintln!("{warning}");
+                eprintln!(
+                    "⚠ Context: estimated {} input tokens + {} output exceeds {} limit. Reducing max_tokens to ~{}.",
+                    estimated_tokens, requested_max, context_limit, reduced
+                );
             }
-        }
+            reduced
+        } else if estimated_tokens + requested_max > context_limit * 90 / 100 {
+            if self.emit_output {
+                eprintln!(
+                    "⚠ Approaching context limit: ~{} / {} tokens. Consider /compact soon.",
+                    estimated_tokens + requested_max, context_limit
+                );
+            }
+            requested_max
+        } else {
+            requested_max
+        };
         let message_request = MessageRequest {
             model: self.model.clone(),
-            max_tokens: max_tokens_for_model(&self.model),
+            max_tokens: safe_max_tokens,
             messages: convert_messages(&request.messages),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: self
