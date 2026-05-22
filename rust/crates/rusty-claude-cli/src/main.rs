@@ -50,7 +50,8 @@ use runtime::{
     ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry,
+    PhaseStatus, ProgressUI, ProjectContext, PromptCacheEvent,
     ResolvedPermissionMode, ReviewStatus, RuntimeError, Session, TokenUsage, ToolError,
     ToolExecutor, UsageTracker,
 };
@@ -2192,16 +2193,22 @@ impl LiveCli {
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
-        let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
-        spinner.tick("🦀 Thinking...", TerminalRenderer::new().color_theme(), &mut stdout)?;
+        let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
+        ui.add_phase("thinking", "Thinking");
+        ui.add_phase("exec", "Executing");
+        let _ = ui.start();
+        let thinking_phase = 0usize;
+        let exec_phase = 1usize;
+        ui.phase_idx(thinking_phase).start();
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        ui.phase_idx(exec_phase).complete("Done", "");
         hook_abort_monitor.stop();
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                spinner.finish("✨ Done", TerminalRenderer::new().color_theme(), &mut stdout)?;
+                ui.finish("Done")?;
                 println!();
                 if let Some(event) = summary.auto_compaction {
                     println!("{}", format_auto_compaction_notice(event.removed_message_count));
@@ -2225,11 +2232,8 @@ impl LiveCli {
                         detail: error.to_string(),
                     },
                 ));
-                spinner.fail(
-                    "❌ Request failed",
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                ui.phase_idx(thinking_phase).fail("Request failed", &error.to_string());
+                let _ = ui.finish("Failed");
                 Err(Box::new(error))
             }
         }
