@@ -753,7 +753,16 @@ fn filter_tool_specs(
     tool_registry: &GlobalToolRegistry,
     allowed_tools: Option<&AllowedToolSet>,
 ) -> Vec<ToolDefinition> {
-    tool_registry.definitions(allowed_tools)
+    // Token-saving: by default, only send essential tools (~15 instead of 54)
+    // Use --allowedTools all for full toolset
+    if let Some(ref set) = allowed_tools {
+        if set.contains("all") {
+            return tool_registry.definitions(None);
+        }
+        return tool_registry.definitions(allowed_tools);
+    }
+    let lite: &AllowedToolSet = &LITE_TOOLS;
+    tool_registry.definitions(Some(lite))
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
@@ -5100,6 +5109,19 @@ const READ_DISPLAY_MAX_LINES: usize = 40;
 const READ_DISPLAY_MAX_CHARS: usize = 3_000;
 const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 15;
 const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 1_500;
+
+/// Default token-saving tool set — only the 15 most-used tools
+static LITE_TOOLS: std::sync::LazyLock<AllowedToolSet> = std::sync::LazyLock::new(|| {
+    [
+        "bash", "read", "write", "edit", "grep", "glob",
+        "web_search", "web_fetch", "agent", "todo_write",
+        "task", "ask_user_question", "skill", "notebook_edit",
+        "enter_plan_mode", "exit_plan_mode",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+});
 
 fn extract_tool_path(parsed: &serde_json::Value) -> String {
     parsed
