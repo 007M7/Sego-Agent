@@ -5092,10 +5092,10 @@ fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
 
 const DISPLAY_TRUNCATION_NOTICE: &str =
     "\x1b[2m… output truncated for display; full result preserved in session.\x1b[0m";
-const READ_DISPLAY_MAX_LINES: usize = 80;
-const READ_DISPLAY_MAX_CHARS: usize = 6_000;
-const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 60;
-const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 4_000;
+const READ_DISPLAY_MAX_LINES: usize = 40;
+const READ_DISPLAY_MAX_CHARS: usize = 3_000;
+const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 15;
+const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 1_500;
 
 fn extract_tool_path(parsed: &serde_json::Value) -> String {
     parsed
@@ -5140,40 +5140,42 @@ fn first_visible_line(text: &str) -> &str {
 fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     use std::fmt::Write as _;
 
-    let mut lines = vec![format!("{icon} \x1b[38;5;245mbash\x1b[0m")];
+    let exit_code = parsed.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
+    let status = if exit_code == 0 { "" } else { &" \x1b[38;5;203merror\x1b[0m" };
+    let mut header = format!("{icon} \x1b[38;5;245mbash\x1b[0m{status}");
+
     if let Some(task_id) = parsed.get("backgroundTaskId").and_then(|value| value.as_str()) {
-        write!(&mut lines[0], " backgrounded ({task_id})").expect("write to string");
-    } else if let Some(status) = parsed
-        .get("returnCodeInterpretation")
-        .and_then(|value| value.as_str())
-        .filter(|status| !status.is_empty())
-    {
-        write!(&mut lines[0], " {status}").expect("write to string");
+        write!(&mut header, " backgrounded ({task_id})").expect("write");
     }
 
-    if let Some(stdout) = parsed.get("stdout").and_then(|value| value.as_str()) {
-        if !stdout.trim().is_empty() {
-            lines.push(truncate_output_for_display(
-                stdout,
-                TOOL_OUTPUT_DISPLAY_MAX_LINES,
-                TOOL_OUTPUT_DISPLAY_MAX_CHARS,
-            ));
-        }
-    }
-    if let Some(stderr) = parsed.get("stderr").and_then(|value| value.as_str()) {
-        if !stderr.trim().is_empty() {
-            lines.push(format!(
-                "\x1b[38;5;203m{}\x1b[0m",
-                truncate_output_for_display(
-                    stderr,
-                    TOOL_OUTPUT_DISPLAY_MAX_LINES,
-                    TOOL_OUTPUT_DISPLAY_MAX_CHARS,
-                )
-            ));
+    let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = parsed.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Clean one-liner: show first non-empty line of output as preview
+    let preview_line = stdout.lines().chain(stderr.lines())
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    let preview = truncate_for_summary(preview_line.trim(), 100);
+
+    let mut lines = vec![header];
+
+    if !stdout.trim().is_empty() {
+        let trimmed = stdout.trim();
+        let line_count = stdout.lines().count();
+        if line_count <= 3 && trimmed.len() < 200 {
+            // Short output: show inline
+            lines.push(format!("\x1b[2m{}\x1b[0m", trimmed));
+        } else if !preview.is_empty() {
+            lines.push(format!("\x1b[2m{}\x1b[0m", preview));
         }
     }
 
-    lines.join("\n\n")
+    if !stderr.trim().is_empty() {
+        let stderr_preview = truncate_for_summary(stderr.trim(), 80);
+        lines.push(format!("\x1b[38;5;203m{}\x1b[0m", stderr_preview));
+    }
+
+    lines.join("\n")
 }
 
 fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
