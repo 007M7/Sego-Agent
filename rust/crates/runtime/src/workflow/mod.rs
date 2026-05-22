@@ -1,7 +1,7 @@
 //! Built-in workflow recording and analysis system.
 //!
 //! Every session automatically records structured Lane Events.
-//! At session end, a SessionReport is generated with failure
+//! At session end, a `SessionReport` is generated with failure
 //! analysis, recovery tracking, and efficiency scoring.
 
 mod report;

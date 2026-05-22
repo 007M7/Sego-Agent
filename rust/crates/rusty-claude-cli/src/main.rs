@@ -39,21 +39,20 @@ use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials, community_learning::CommunityLearning, evaluate, format_usd,
-    generate_pkce_pair, generate_state,
-    load_system_prompt,
-    parse_oauth_callback_request_target, pricing_for_model, resolve_sandbox_status,
-    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
-    DiffScope, LaneBlocker, LaneContext, LaneEvent, LaneEventBlocker,
-    LaneEventName, LaneEventStatus, LaneFailureClass, ReviewStatus,
+    clear_oauth_credentials,
+    community_learning::CommunityLearning,
+    evaluate, format_usd, generate_pkce_pair, generate_state,
     green_contract::GreenLevel,
-    McpServerManager,
-    McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
+    load_system_prompt, parse_oauth_callback_request_target, pricing_for_model,
+    resolve_sandbox_status, save_oauth_credentials,
+    workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
+    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
+    ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
+    LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
+    McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
-    workflow::{SessionReport, WorkflowStore, WorkflowSnapshot},
+    ResolvedPermissionMode, ReviewStatus, RuntimeError, Session, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -85,7 +84,11 @@ fn context_window_limit(model: &str) -> u32 {
     }
 }
 
-fn check_context_preflight(model: &str, estimated_input_tokens: u32, requested_output: u32) -> Option<String> {
+fn check_context_preflight(
+    model: &str,
+    estimated_input_tokens: u32,
+    requested_output: u32,
+) -> Option<String> {
     let limit = context_window_limit(model);
     let total = estimated_input_tokens + requested_output;
     if total > limit {
@@ -103,9 +106,8 @@ fn check_context_preflight(model: &str, estimated_input_tokens: u32, requested_o
 }
 fn default_date() -> String {
     std::env::var("ANTHROPIC_DATE").unwrap_or_else(|_| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         let secs = now.as_secs();
         // Simple date calculation from Unix epoch
         let days_since_epoch = secs / 86400;
@@ -114,7 +116,9 @@ fn default_date() -> String {
         let mut year = 1970i64;
         loop {
             let year_days = if is_leap(year) { 366 } else { 365 };
-            if days < year_days { break; }
+            if days < year_days {
+                break;
+            }
             days -= year_days;
             year += 1;
         }
@@ -188,40 +192,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Skills { args } => LiveCli::print_skills(args.as_deref())?,
         CliAction::PrintSystemPrompt { cwd, date } => print_system_prompt(cwd, date),
         CliAction::Version => print_version(),
-        CliAction::ResumeSession {
-            session_path,
-            commands,
-        } => resume_session(&session_path, &commands),
-        CliAction::Status {
-            model,
-            permission_mode,
-            output_format,
-        } => print_status_snapshot(&model, permission_mode, output_format)?,
+        CliAction::ResumeSession { session_path, commands } => {
+            resume_session(&session_path, &commands);
+        }
+        CliAction::Status { model, permission_mode, output_format } => {
+            print_status_snapshot(&model, permission_mode, output_format)?;
+        }
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
-        CliAction::Prompt {
-            prompt,
-            model,
-            output_format,
-            allowed_tools,
-            permission_mode,
-        } => LiveCli::new(model, true, allowed_tools, permission_mode)?
-            .run_turn_with_output(&prompt, output_format)?,
+        CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
+            LiveCli::new(model, true, allowed_tools, permission_mode)?
+                .run_turn_with_output(&prompt, output_format)?;
+        }
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
-        CliAction::Repl {
-            model,
-            allowed_tools,
-            permission_mode,
-        } => run_repl(model, allowed_tools, permission_mode)?,
+        CliAction::Repl { model, allowed_tools, permission_mode } => {
+            run_repl(model, allowed_tools, permission_mode)?;
+        }
         CliAction::Help => print_help(),
-        CliAction::Review {
-            last_n,
-            output_format,
-        } => print_workflow_review(last_n, output_format)?,
+        CliAction::Review { last_n, output_format } => {
+            print_workflow_review(last_n, output_format)?;
+        }
         CliAction::Learn { output_format } => print_workflow_learn(output_format)?,
         CliAction::Doctor { output_format } => print_doctor(output_format)?,
-        CliAction::Telemetry { action, output_format } => print_telemetry(action.as_deref(), output_format)?,
+        CliAction::Telemetry { action, output_format } => {
+            print_telemetry(action.as_deref(), output_format)?;
+        }
     }
     Ok(())
 }
@@ -329,9 +325,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 1;
             }
             "--model" => {
-                let value = args
-                    .get(index + 1)
-                    .ok_or_else(|| "missing value for --model".to_string())?;
+                let value =
+                    args.get(index + 1).ok_or_else(|| "missing value for --model".to_string())?;
                 model = resolve_model_alias(value).to_string();
                 index += 2;
             }
@@ -436,16 +431,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
     if rest.is_empty() {
         let permission_mode = permission_mode_override.unwrap_or_else(default_permission_mode);
-        return Ok(CliAction::Repl {
-            model,
-            allowed_tools,
-            permission_mode,
-        });
+        return Ok(CliAction::Repl { model, allowed_tools, permission_mode });
     }
     if rest.first().map(String::as_str) == Some("--resume") {
         return parse_resume_args(&rest[1..]);
     }
-    if let Some(action) = parse_single_word_command_alias(&rest, &model, permission_mode_override, output_format)
+    if let Some(action) =
+        parse_single_word_command_alias(&rest, &model, permission_mode_override, output_format)
     {
         return action;
     }
@@ -455,15 +447,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     match rest[0].as_str() {
         "dump-manifests" => Ok(CliAction::DumpManifests),
         "bootstrap-plan" => Ok(CliAction::BootstrapPlan),
-        "agents" => Ok(CliAction::Agents {
-            args: join_optional_args(&rest[1..]),
-        }),
-        "mcp" => Ok(CliAction::Mcp {
-            args: join_optional_args(&rest[1..]),
-        }),
-        "skills" => Ok(CliAction::Skills {
-            args: join_optional_args(&rest[1..]),
-        }),
+        "agents" => Ok(CliAction::Agents { args: join_optional_args(&rest[1..]) }),
+        "mcp" => Ok(CliAction::Mcp { args: join_optional_args(&rest[1..]) }),
+        "skills" => Ok(CliAction::Skills { args: join_optional_args(&rest[1..]) }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
@@ -473,13 +459,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             if prompt.trim().is_empty() {
                 return Err("prompt subcommand requires a prompt string".to_string());
             }
-            Ok(CliAction::Prompt {
-                prompt,
-                model,
-                output_format,
-                allowed_tools,
-                permission_mode,
-            })
+            Ok(CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode })
         }
         other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
         _other => Ok(CliAction::Prompt {
@@ -510,25 +490,15 @@ fn parse_single_word_command_alias(
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
             output_format,
         })),
-        "sandbox" => Some(Ok(CliAction::Sandbox {
-            output_format,
-        })),
-        "review" => Some(Ok(CliAction::Review {
-            last_n: None,
-            output_format: CliOutputFormat::Text,
-        })),
-        "learn" => Some(Ok(CliAction::Learn {
-            output_format: CliOutputFormat::Text,
-        })),
-        "doctor" => Some(Ok(CliAction::Doctor {
-            output_format: CliOutputFormat::Text,
-        })),
+        "sandbox" => Some(Ok(CliAction::Sandbox { output_format })),
+        "review" => {
+            Some(Ok(CliAction::Review { last_n: None, output_format: CliOutputFormat::Text }))
+        }
+        "learn" => Some(Ok(CliAction::Learn { output_format: CliOutputFormat::Text })),
+        "doctor" => Some(Ok(CliAction::Doctor { output_format: CliOutputFormat::Text })),
         "telemetry" => {
-            let action = rest.get(1).map(|s| s.to_string());
-            Some(Ok(CliAction::Telemetry {
-                action,
-                output_format: CliOutputFormat::Text,
-            }))
+            let action = rest.get(1).cloned();
+            Some(Ok(CliAction::Telemetry { action, output_format: CliOutputFormat::Text }))
         }
         other => bare_slash_command_guidance(other).map(Err),
     }
@@ -550,9 +520,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
     ) {
         return None;
     }
-    let slash_command = slash_command_specs()
-        .iter()
-        .find(|spec| spec.name == command_name)?;
+    let slash_command = slash_command_specs().iter().find(|spec| spec.name == command_name)?;
     let guidance = if slash_command.resume_supported {
         format!(
             "`claw {command_name}` is a slash command. Use `claw --resume SESSION.jsonl /{command_name}` or start `sego` and run `/{command_name}`."
@@ -633,7 +601,7 @@ fn format_unknown_slash_command(name: &str) -> String {
 }
 
 fn render_suggestion_line(label: &str, suggestions: &[String]) -> Option<String> {
-    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", "),))
+    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", ")))
 }
 
 fn suggest_slash_commands(input: &str) -> Vec<String> {
@@ -675,11 +643,7 @@ fn ranked_suggestions<'a>(input: &str, candidates: &'a [&'a str]) -> Vec<&'a str
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| left.cmp(right).then_with(|| left.1.cmp(right.1)));
-    ranked
-        .into_iter()
-        .map(|(_, candidate)| candidate)
-        .take(3)
-        .collect()
+    ranked.into_iter().map(|(_, candidate)| candidate).take(3).collect()
 }
 
 fn levenshtein_distance(left: &str, right: &str) -> usize {
@@ -781,11 +745,7 @@ fn default_permission_mode() -> PermissionMode {
 fn config_permission_mode_for_current_dir() -> Option<PermissionMode> {
     let cwd = env::current_dir().ok()?;
     let loader = ConfigLoader::default_for(&cwd);
-    loader
-        .load()
-        .ok()?
-        .permission_mode()
-        .map(permission_mode_from_resolved)
+    loader.load().ok()?.permission_mode().map(permission_mode_from_resolved)
 }
 
 fn filter_tool_specs(
@@ -803,16 +763,14 @@ fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--cwd" => {
-                let value = args
-                    .get(index + 1)
-                    .ok_or_else(|| "missing value for --cwd".to_string())?;
+                let value =
+                    args.get(index + 1).ok_or_else(|| "missing value for --cwd".to_string())?;
                 cwd = PathBuf::from(value);
                 index += 2;
             }
             "--date" => {
-                let value = args
-                    .get(index + 1)
-                    .ok_or_else(|| "missing value for --date".to_string())?;
+                let value =
+                    args.get(index + 1).ok_or_else(|| "missing value for --date".to_string())?;
                 date.clone_from(value);
                 index += 2;
             }
@@ -860,34 +818,23 @@ fn parse_resume_args(args: &[String]) -> Result<CliAction, String> {
         commands.push(current_command);
     }
 
-    Ok(CliAction::ResumeSession {
-        session_path,
-        commands,
-    })
+    Ok(CliAction::ResumeSession { session_path, commands })
 }
 
 fn resume_command_can_absorb_token(current_command: &str, token: &str) -> bool {
-    matches!(
-        SlashCommand::parse(current_command),
-        Ok(Some(SlashCommand::Export { path: None }))
-    ) && !looks_like_slash_command_token(token)
+    matches!(SlashCommand::parse(current_command), Ok(Some(SlashCommand::Export { path: None })))
+        && !looks_like_slash_command_token(token)
 }
 
 fn looks_like_slash_command_token(token: &str) -> bool {
     let trimmed = token.trim_start();
     let Some(name) = trimmed.strip_prefix('/').and_then(|value| {
-        value
-            .split_whitespace()
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        value.split_whitespace().next().map(str::trim).filter(|value| !value.is_empty())
     }) else {
         return false;
     };
 
-    slash_command_specs()
-        .iter()
-        .any(|spec| spec.name == name || spec.aliases.contains(&name))
+    slash_command_specs().iter().any(|spec| spec.name == name || spec.aliases.contains(&name))
 }
 
 fn dump_manifests() {
@@ -949,9 +896,8 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
 
     let callback = wait_for_oauth_callback(callback_port)?;
     if let Some(error) = callback.error {
-        let description = callback
-            .error_description
-            .unwrap_or_else(|| "authorization failed".to_string());
+        let description =
+            callback.error_description.unwrap_or_else(|| "authorization failed".to_string());
         return Err(io::Error::other(format!("{error}: {description}")).into());
     }
     let code = callback.code.ok_or_else(|| {
@@ -1000,10 +946,7 @@ fn open_browser(url: &str) -> io::Result<()> {
             Err(error) => return Err(error),
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "no supported browser opener command found",
-    ))
+    Err(io::Error::new(io::ErrorKind::NotFound, "no supported browser opener command found"))
 }
 
 fn wait_for_oauth_callback(
@@ -1018,10 +961,7 @@ fn wait_for_oauth_callback(
         io::Error::new(io::ErrorKind::InvalidData, "missing callback request line")
     })?;
     let target = request_line.split_whitespace().nth(1).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "missing callback request target",
-        )
+        io::Error::new(io::ErrorKind::InvalidData, "missing callback request target")
     })?;
     let callback = parse_oauth_callback_request_target(target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -1097,10 +1037,7 @@ fn resume_session(session_path: &Path, commands: &[String]) {
             }
         };
         match run_resume_command(&resolved_path, &session, &command) {
-            Ok(ResumeCommandOutcome {
-                session: next_session,
-                message,
-            }) => {
+            Ok(ResumeCommandOutcome { session: next_session, message }) => {
                 session = next_session;
                 if let Some(message) = message {
                     println!("{message}");
@@ -1174,11 +1111,7 @@ impl GitWorkspaceSummary {
             if self.conflicted_files > 0 {
                 details.push(format!("{} conflicted", self.conflicted_files));
             }
-            format!(
-                "dirty · {} files · {}",
-                self.changed_files,
-                details.join(", ")
-            )
+            format!("dirty · {} files · {}", self.changed_files, details.join(", "))
         }
     }
 }
@@ -1221,24 +1154,12 @@ fn format_model_switch_report(previous: &str, next: &str, message_count: usize) 
 fn format_permissions_report(mode: &str) -> String {
     let modes = [
         ("read-only", "Read/search tools only", mode == "read-only"),
-        (
-            "workspace-write",
-            "Edit files inside the workspace",
-            mode == "workspace-write",
-        ),
-        (
-            "danger-full-access",
-            "Unrestricted tool access",
-            mode == "danger-full-access",
-        ),
+        ("workspace-write", "Edit files inside the workspace", mode == "workspace-write"),
+        ("danger-full-access", "Unrestricted tool access", mode == "danger-full-access"),
     ]
     .into_iter()
     .map(|(name, description, is_current)| {
-        let marker = if is_current {
-            "● current"
-        } else {
-            "○ available"
-        };
+        let marker = if is_current { "● current" } else { "○ available" };
         format!("  {name:<18} {marker:<11} {description}")
     })
     .collect::<Vec<_>>()
@@ -1407,11 +1328,7 @@ fn resolve_git_branch_for(cwd: &Path) -> Option<String> {
 }
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+    let output = std::process::Command::new("git").args(args).current_dir(cwd).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1449,17 +1366,13 @@ fn run_resume_command(
     command: &SlashCommand,
 ) -> Result<ResumeCommandOutcome, Box<dyn std::error::Error>> {
     match command {
-        SlashCommand::Help => Ok(ResumeCommandOutcome {
-            session: session.clone(),
-            message: Some(render_repl_help()),
-        }),
+        SlashCommand::Help => {
+            Ok(ResumeCommandOutcome { session: session.clone(), message: Some(render_repl_help()) })
+        }
         SlashCommand::Compact => {
             let result = runtime::compact_session(
                 session,
-                CompactionConfig {
-                    max_estimated_tokens: 0,
-                    ..CompactionConfig::default()
-                },
+                CompactionConfig { max_estimated_tokens: 0, ..CompactionConfig::default() },
             );
             let removed = result.removed_message_count;
             let kept = result.compacted_session.messages.len();
@@ -1553,10 +1466,9 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_memory_report()?),
         }),
-        SlashCommand::Init => Ok(ResumeCommandOutcome {
-            session: session.clone(),
-            message: Some(init_claude_md()?),
-        }),
+        SlashCommand::Init => {
+            Ok(ResumeCommandOutcome { session: session.clone(), message: Some(init_claude_md()?) })
+        }
         SlashCommand::Diff => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_diff_report_for(
@@ -1764,10 +1676,8 @@ impl BuiltRuntime {
     }
 
     fn with_hook_abort_signal(mut self, hook_abort_signal: runtime::HookAbortSignal) -> Self {
-        let runtime = self
-            .runtime
-            .take()
-            .expect("runtime should exist before installing hook abort signal");
+        let runtime =
+            self.runtime.take().expect("runtime should exist before installing hook abort signal");
         self.runtime = Some(runtime.with_hook_abort_signal(hook_abort_signal));
         self
     }
@@ -1783,10 +1693,7 @@ impl BuiltRuntime {
     fn shutdown_mcp(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if self.mcp_active {
             if let Some(mcp_state) = &self.mcp_state {
-                mcp_state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .shutdown()?;
+                mcp_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shutdown()?;
             }
             self.mcp_active = false;
         }
@@ -1798,17 +1705,13 @@ impl Deref for BuiltRuntime {
     type Target = ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>;
 
     fn deref(&self) -> &Self::Target {
-        self.runtime
-            .as_ref()
-            .expect("runtime should exist while built runtime is alive")
+        self.runtime.as_ref().expect("runtime should exist while built runtime is alive")
     }
 }
 
 impl DerefMut for BuiltRuntime {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.runtime
-            .as_mut()
-            .expect("runtime should exist while built runtime is alive")
+        self.runtime.as_mut().expect("runtime should exist while built runtime is alive")
     }
 }
 
@@ -1859,20 +1762,12 @@ impl RuntimeMcpState {
             .failed_servers
             .iter()
             .map(|failure| failure.server_name.clone())
-            .chain(
-                discovery
-                    .unsupported_servers
-                    .iter()
-                    .map(|server| server.server_name.clone()),
-            )
+            .chain(discovery.unsupported_servers.iter().map(|server| server.server_name.clone()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let available_tools = discovery
-            .tools
-            .iter()
-            .map(|tool| tool.qualified_name.clone())
-            .collect::<Vec<_>>();
+        let available_tools =
+            discovery.tools.iter().map(|tool| tool.qualified_name.clone()).collect::<Vec<_>>();
         let failed_server_names = pending_servers.iter().cloned().collect::<BTreeSet<_>>();
         let working_servers = manager
             .server_names()
@@ -1893,21 +1788,19 @@ impl RuntimeMcpState {
                     true,
                 ),
             })
-            .chain(discovery.unsupported_servers.iter().map(|server| {
-                runtime::McpFailedServer {
-                    server_name: server.server_name.clone(),
-                    phase: runtime::McpLifecyclePhase::ServerRegistration,
-                    error: runtime::McpErrorSurface::new(
-                        runtime::McpLifecyclePhase::ServerRegistration,
-                        Some(server.server_name.clone()),
-                        server.reason.clone(),
-                        std::collections::BTreeMap::from([(
-                            "transport".to_string(),
-                            format!("{:?}", server.transport).to_ascii_lowercase(),
-                        )]),
-                        false,
-                    ),
-                }
+            .chain(discovery.unsupported_servers.iter().map(|server| runtime::McpFailedServer {
+                server_name: server.server_name.clone(),
+                phase: runtime::McpLifecyclePhase::ServerRegistration,
+                error: runtime::McpErrorSurface::new(
+                    runtime::McpLifecyclePhase::ServerRegistration,
+                    Some(server.server_name.clone()),
+                    server.reason.clone(),
+                    std::collections::BTreeMap::from([(
+                        "transport".to_string(),
+                        format!("{:?}", server.transport).to_ascii_lowercase(),
+                    )]),
+                    false,
+                ),
             }))
             .collect::<Vec<_>>();
         let degraded_report = (!failed_servers.is_empty()).then(|| {
@@ -1919,15 +1812,7 @@ impl RuntimeMcpState {
             )
         });
 
-        Ok(Some((
-            Self {
-                runtime,
-                manager,
-                pending_servers,
-                degraded_report,
-            },
-            discovery,
-        )))
+        Ok(Some((Self { runtime, manager, pending_servers, degraded_report }, discovery)))
     }
 
     fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -1964,9 +1849,7 @@ impl RuntimeMcpState {
         }
 
         let result = response.result.ok_or_else(|| {
-            ToolError::new(format!(
-                "MCP tool `{qualified_tool_name}` returned no result payload"
-            ))
+            ToolError::new(format!("MCP tool `{qualified_tool_name}` returned no result payload"))
         })?;
         serde_json::to_string_pretty(&result).map_err(|error| ToolError::new(error.to_string()))
     }
@@ -1988,10 +1871,7 @@ impl RuntimeMcpState {
         let mut failures = Vec::new();
 
         for server_name in self.server_names() {
-            match self
-                .runtime
-                .block_on(self.manager.list_resources(&server_name))
-            {
+            match self.runtime.block_on(self.manager.list_resources(&server_name)) {
                 Ok(result) => resources.push(json!({
                     "server": server_name,
                     "resources": result.resources,
@@ -2035,21 +1915,15 @@ impl RuntimeMcpState {
 fn build_runtime_mcp_state(
     runtime_config: &runtime::RuntimeConfig,
 ) -> Result<
-    (
-        Option<Arc<Mutex<RuntimeMcpState>>>,
-        Vec<RuntimeToolDefinition>,
-    ),
+    (Option<Arc<Mutex<RuntimeMcpState>>>, Vec<RuntimeToolDefinition>),
     Box<dyn std::error::Error>,
 > {
     let Some((mcp_state, discovery)) = RuntimeMcpState::new(runtime_config)? else {
         return Ok((None, Vec::new()));
     };
 
-    let mut runtime_tools = discovery
-        .tools
-        .iter()
-        .map(mcp_runtime_tool_definition)
-        .collect::<Vec<_>>();
+    let mut runtime_tools =
+        discovery.tools.iter().map(mcp_runtime_tool_definition).collect::<Vec<_>>();
     if !mcp_state.server_names().is_empty() {
         runtime_tools.extend(mcp_wrapper_tool_definitions());
     }
@@ -2155,9 +2029,7 @@ struct HookAbortMonitor {
 impl HookAbortMonitor {
     fn spawn(abort_signal: runtime::HookAbortSignal) -> Self {
         Self::spawn_with_waiter(abort_signal, move |stop_rx, abort_signal| {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build()
             else {
                 return;
             };
@@ -2186,10 +2058,7 @@ impl HookAbortMonitor {
         let (stop_tx, stop_rx) = mpsc::channel();
         let join_handle = thread::spawn(move || wait_for_interrupt(stop_rx, abort_signal));
 
-        Self {
-            stop_tx: Some(stop_tx),
-            join_handle: Some(join_handle),
-        }
+        Self { stop_tx: Some(stop_tx), join_handle: Some(join_handle) }
     }
 
     fn stop(mut self) {
@@ -2247,19 +2116,14 @@ impl LiveCli {
     }
 
     fn startup_banner(&self) -> String {
-        let cwd = env::current_dir().map_or_else(
-            |_| "<unknown>".to_string(),
-            |path| path.display().to_string(),
-        );
+        let cwd = env::current_dir()
+            .map_or_else(|_| "<unknown>".to_string(), |path| path.display().to_string());
         let status = status_context(None).ok();
-        let git_branch = status
+        let git_branch =
+            status.as_ref().and_then(|context| context.git_branch.as_deref()).unwrap_or("unknown");
+        let workspace = status
             .as_ref()
-            .and_then(|context| context.git_branch.as_deref())
-            .unwrap_or("unknown");
-        let workspace = status.as_ref().map_or_else(
-            || "unknown".to_string(),
-            |context| context.git_summary.headline(),
-        );
+            .map_or_else(|| "unknown".to_string(), |context| context.git_summary.headline());
         let session_path = self.session.path.strip_prefix(Path::new(&cwd)).map_or_else(
             |_| self.session.path.display().to_string(),
             |path| path.display().to_string(),
@@ -2294,10 +2158,7 @@ impl LiveCli {
         Ok(slash_command_completion_candidates_with_sessions(
             &self.model,
             Some(&self.session.id),
-            list_managed_sessions()?
-                .into_iter()
-                .map(|session| session.id)
-                .collect(),
+            list_managed_sessions()?.into_iter().map(|session| session.id).collect(),
         ))
     }
 
@@ -2333,28 +2194,17 @@ impl LiveCli {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
-        spinner.tick(
-            "🦀 Thinking...",
-            TerminalRenderer::new().color_theme(),
-            &mut stdout,
-        )?;
+        spinner.tick("🦀 Thinking...", TerminalRenderer::new().color_theme(), &mut stdout)?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
         hook_abort_monitor.stop();
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                spinner.finish(
-                    "✨ Done",
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                spinner.finish("✨ Done", TerminalRenderer::new().color_theme(), &mut stdout)?;
                 println!();
                 if let Some(event) = summary.auto_compaction {
-                    println!(
-                        "{}",
-                        format_auto_compaction_notice(event.removed_message_count)
-                    );
+                    println!("{}", format_auto_compaction_notice(event.removed_message_count));
                 }
                 // Record workflow: successful turn
                 self.workflow.record_event(LaneEvent::new(
@@ -2635,11 +2485,7 @@ impl LiveCli {
         // Community learning: anonymous telemetry (opt-in only)
         if self.community.is_enabled() {
             let base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
-            let _ = self.community.collect_report(
-                &self.workflow,
-                &self.model,
-                &base_url,
-            );
+            let _ = self.community.collect_report(&self.workflow, &self.model, &base_url);
         }
         Ok(())
     }
@@ -2667,9 +2513,7 @@ impl LiveCli {
     fn print_sandbox_status() {
         let cwd = env::current_dir().expect("current dir");
         let loader = ConfigLoader::default_for(&cwd);
-        let runtime_config = loader
-            .load()
-            .unwrap_or_else(|_| runtime::RuntimeConfig::empty());
+        let runtime_config = loader.load().unwrap_or_else(|_| runtime::RuntimeConfig::empty());
         println!(
             "{}",
             format_sandbox_report(&resolve_sandbox_status(runtime_config.sandbox(), &cwd))
@@ -2719,10 +2563,7 @@ impl LiveCli {
         )?;
         self.replace_runtime(runtime)?;
         self.model.clone_from(&model);
-        println!(
-            "{}",
-            format_model_switch_report(&previous, &model, message_count)
-        );
+        println!("{}", format_model_switch_report(&previous, &model, message_count));
         Ok(true)
     }
 
@@ -2731,10 +2572,7 @@ impl LiveCli {
         mode: Option<String>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let Some(mode) = mode else {
-            println!(
-                "{}",
-                format_permissions_report(self.permission_mode.as_str())
-            );
+            println!("{}", format_permissions_report(self.permission_mode.as_str()));
             return Ok(false);
         };
 
@@ -2764,10 +2602,7 @@ impl LiveCli {
             None,
         )?;
         self.replace_runtime(runtime)?;
-        println!(
-            "{}",
-            format_permissions_switch_report(&previous, normalized)
-        );
+        println!("{}", format_permissions_switch_report(&previous, normalized));
         Ok(true)
     }
 
@@ -2836,10 +2671,7 @@ impl LiveCli {
             None,
         )?;
         self.replace_runtime(runtime)?;
-        self.session = SessionHandle {
-            id: session_id,
-            path: handle.path,
-        };
+        self.session = SessionHandle { id: session_id, path: handle.path };
         println!(
             "{}",
             format_resume_report(
@@ -2933,10 +2765,7 @@ impl LiveCli {
                     None,
                 )?;
                 self.replace_runtime(runtime)?;
-                self.session = SessionHandle {
-                    id: session_id,
-                    path: handle.path,
-                };
+                self.session = SessionHandle { id: session_id, path: handle.path };
                 println!(
                     "Session switched\n  Active session   {}\n  File             {}\n  Messages         {}",
                     self.session.id,
@@ -2949,10 +2778,7 @@ impl LiveCli {
                 let forked = self.runtime.fork_session(target.map(ToOwned::to_owned));
                 let parent_session_id = self.session.id.clone();
                 let handle = create_managed_session_handle(&forked.session_id)?;
-                let branch_name = forked
-                    .fork
-                    .as_ref()
-                    .and_then(|fork| fork.branch_name.clone());
+                let branch_name = forked.fork.as_ref().and_then(|fork| fork.branch_name.clone());
                 let forked = forked.with_persistence_path(handle.path.clone());
                 let message_count = forked.messages.len();
                 forked.save_to_path(&handle.path)?;
@@ -3112,10 +2938,7 @@ impl LiveCli {
             return Ok(());
         }
 
-        println!(
-            "{}",
-            format_commit_preflight_report(branch.as_deref(), summary)
-        );
+        println!("{}", format_commit_preflight_report(branch.as_deref(), summary));
         Ok(())
     }
 
@@ -3148,15 +2971,9 @@ fn create_managed_session_handle(
 }
 
 fn resolve_session_reference(reference: &str) -> Result<SessionHandle, Box<dyn std::error::Error>> {
-    if SESSION_REFERENCE_ALIASES
-        .iter()
-        .any(|alias| reference.eq_ignore_ascii_case(alias))
-    {
+    if SESSION_REFERENCE_ALIASES.iter().any(|alias| reference.eq_ignore_ascii_case(alias)) {
         let latest = latest_managed_session()?;
-        return Ok(SessionHandle {
-            id: latest.id,
-            path: latest.path,
-        });
+        return Ok(SessionHandle { id: latest.id, path: latest.path });
     }
 
     let direct = PathBuf::from(reference);
@@ -3192,11 +3009,9 @@ fn resolve_managed_session_path(session_id: &str) -> Result<PathBuf, Box<dyn std
 }
 
 fn is_managed_session_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|extension| {
-            extension == PRIMARY_SESSION_EXTENSION || extension == LEGACY_SESSION_EXTENSION
-        })
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|extension| {
+        extension == PRIMARY_SESSION_EXTENSION || extension == LEGACY_SESSION_EXTENSION
+    })
 }
 
 fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::error::Error>> {
@@ -3217,20 +3032,11 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
         let (id, message_count, parent_session_id, branch_name) =
             match Session::load_from_path(&path) {
                 Ok(session) => {
-                    let parent_session_id = session
-                        .fork
-                        .as_ref()
-                        .map(|fork| fork.parent_session_id.clone());
-                    let branch_name = session
-                        .fork
-                        .as_ref()
-                        .and_then(|fork| fork.branch_name.clone());
-                    (
-                        session.session_id,
-                        session.messages.len(),
-                        parent_session_id,
-                        branch_name,
-                    )
+                    let parent_session_id =
+                        session.fork.as_ref().map(|fork| fork.parent_session_id.clone());
+                    let branch_name =
+                        session.fork.as_ref().and_then(|fork| fork.branch_name.clone());
+                    (session.session_id, session.messages.len(), parent_session_id, branch_name)
                 }
                 Err(_) => (
                     path.file_stem()
@@ -3261,10 +3067,7 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
 }
 
 fn latest_managed_session() -> Result<ManagedSessionSummary, Box<dyn std::error::Error>> {
-    list_managed_sessions()?
-        .into_iter()
-        .next()
-        .ok_or_else(|| format_no_managed_sessions().into())
+    list_managed_sessions()?.into_iter().next().ok_or_else(|| format_no_managed_sessions().into())
 }
 
 fn format_missing_session_reference(reference: &str) -> String {
@@ -3281,24 +3084,15 @@ fn format_no_managed_sessions() -> String {
 
 fn render_session_list(active_session_id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let sessions = list_managed_sessions()?;
-    let mut lines = vec![
-        "Sessions".to_string(),
-        format!("  Directory         {}", sessions_dir()?.display()),
-    ];
+    let mut lines =
+        vec!["Sessions".to_string(), format!("  Directory         {}", sessions_dir()?.display())];
     if sessions.is_empty() {
         lines.push("  No managed sessions saved yet.".to_string());
         return Ok(lines.join("\n"));
     }
     for session in sessions {
-        let marker = if session.id == active_session_id {
-            "● current"
-        } else {
-            "○ saved"
-        };
-        let lineage = match (
-            session.branch_name.as_deref(),
-            session.parent_session_id.as_deref(),
-        ) {
+        let marker = if session.id == active_session_id { "● current" } else { "○ saved" };
+        let lineage = match (session.branch_name.as_deref(), session.parent_session_id.as_deref()) {
             (Some(branch_name), Some(parent_session_id)) => {
                 format!(" branch={branch_name} from={parent_session_id}")
             }
@@ -3323,10 +3117,8 @@ fn format_session_modified_age(modified_epoch_millis: u128) -> String {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map_or(modified_epoch_millis, |duration| duration.as_millis());
-    let delta_seconds = now
-        .saturating_sub(modified_epoch_millis)
-        .checked_div(1_000)
-        .unwrap_or_default();
+    let delta_seconds =
+        now.saturating_sub(modified_epoch_millis).checked_div(1_000).unwrap_or_default();
     match delta_seconds {
         0..=4 => "just-now".to_string(),
         5..=59 => format!("{delta_seconds}s-ago"),
@@ -3350,10 +3142,8 @@ fn session_clear_backup_path(session_path: &Path) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map_or(0, |duration| duration.as_millis());
-    let file_name = session_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("session.jsonl");
+    let file_name =
+        session_path.file_name().and_then(|value| value.to_str()).unwrap_or("session.jsonl");
     session_path.with_file_name(format!("{file_name}.before-clear-{timestamp}.bak"))
 }
 
@@ -3499,10 +3289,10 @@ fn format_status_report(
             context.git_summary.staged_files,
             context.git_summary.unstaged_files,
             context.git_summary.untracked_files,
-            context.session_path.as_ref().map_or_else(
-                || "live-repl".to_string(),
-                |path| path.display().to_string()
-            ),
+            context
+                .session_path
+                .as_ref()
+                .map_or_else(|| "live-repl".to_string(), |path| path.display().to_string()),
             context.loaded_config_files,
             context.discovered_config_files,
             context.memory_file_count,
@@ -3552,10 +3342,7 @@ fn format_sandbox_report(status: &runtime::SandboxStatus) -> String {
         } else {
             status.container_markers.join(", ")
         },
-        status
-            .fallback_reason
-            .clone()
-            .unwrap_or_else(|| "<none>".to_string()),
+        status.fallback_reason.clone().unwrap_or_else(|| "<none>".to_string()),
     )
 }
 
@@ -3608,25 +3395,14 @@ fn print_workflow_review(
 
             for session in &sessions {
                 let session_id = session["session_id"].as_str().unwrap_or("unknown");
-                let efficiency = session["efficiency_score"]
-                    .as_f64()
-                    .unwrap_or(0.0);
+                let efficiency = session["efficiency_score"].as_f64().unwrap_or(0.0);
                 let failures = session["failure_count"].as_u64().unwrap_or(0);
                 let recoveries = session["recovery_successes"].as_u64().unwrap_or(0);
-                let green = session["green_level"]
-                    .as_str()
-                    .unwrap_or("not set");
-                let task = session["task_description"]
-                    .as_str()
-                    .unwrap_or("untitled");
+                let green = session["green_level"].as_str().unwrap_or("not set");
+                let task = session["task_description"].as_str().unwrap_or("untitled");
 
-                println!(
-                    "  {session_id}  {:>5.0}%  {task}",
-                    efficiency
-                );
-                println!(
-                    "    failures={failures}  recoveries={recoveries}  green={green}"
-                );
+                println!("  {session_id}  {efficiency:>5.0}%  {task}");
+                println!("    failures={failures}  recoveries={recoveries}  green={green}");
                 println!();
             }
 
@@ -3635,18 +3411,9 @@ fn print_workflow_review(
                 if trends.total_sessions > 1 {
                     println!("📈 Historical Trends");
                     println!("  Total sessions:     {}", trends.total_sessions);
-                    println!(
-                        "  Average efficiency: {:.0}%",
-                        trends.average_efficiency
-                    );
-                    println!(
-                        "  Improvement rate:   {:.0}%",
-                        trends.improvement_rate * 100.0
-                    );
-                    println!(
-                        "  Total recoveries:   {}",
-                        trends.total_recoveries
-                    );
+                    println!("  Average efficiency: {:.0}%", trends.average_efficiency);
+                    println!("  Improvement rate:   {:.0}%", trends.improvement_rate * 100.0);
+                    println!("  Total recoveries:   {}", trends.total_recoveries);
                     if let Some(ref failure_type) = trends.most_common_failure {
                         println!("  Most common failure: {failure_type}");
                     }
@@ -3662,9 +3429,7 @@ fn print_workflow_review(
     Ok(())
 }
 
-fn print_workflow_learn(
-    output_format: CliOutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_workflow_learn(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let store = WorkflowStore::new(&cwd);
     let trends = store.load_trends()?;
@@ -3699,7 +3464,7 @@ fn print_workflow_learn(
             println!(
                 "  Recovery rate:       {:.0}%",
                 if trends.total_failures > 0 {
-                    trends.total_recoveries as f64 / trends.total_failures as f64 * 100.0
+                    f64::from(trends.total_recoveries) / f64::from(trends.total_failures) * 100.0
                 } else {
                     100.0
                 }
@@ -3710,7 +3475,10 @@ fn print_workflow_learn(
             let mut suggestions = Vec::new();
 
             if trends.improvement_rate > 0.05 {
-                suggestions.push("↑ Your efficiency is trending upward. Current practices are working well.".to_string());
+                suggestions.push(
+                    "↑ Your efficiency is trending upward. Current practices are working well."
+                        .to_string(),
+                );
             } else if trends.improvement_rate < -0.05 {
                 suggestions.push("↓ Efficiency has been declining. Review recent sessions for new failure patterns.".to_string());
             }
@@ -3727,15 +3495,14 @@ fn print_workflow_learn(
 
             if trends.total_recoveries > 0 {
                 let recovery_rate = if trends.total_failures > 0 {
-                    trends.total_recoveries as f64 / trends.total_failures as f64 * 100.0
+                    f64::from(trends.total_recoveries) / f64::from(trends.total_failures) * 100.0
                 } else {
                     100.0
                 };
                 let recoveries = trends.total_recoveries;
                 let total = trends.total_failures;
                 suggestions.push(format!(
-                    "Recovery system: {recoveries} recoveries from {total} failures ({rate:.0}% success rate).",
-                    rate = recovery_rate
+                    "Recovery system: {recoveries} recoveries from {total} failures ({recovery_rate:.0}% success rate)."
                 ));
             }
 
@@ -3746,7 +3513,9 @@ fn print_workflow_learn(
             }
 
             if suggestions.is_empty() {
-                suggestions.push(String::from("Keep using claw consistently. More data enables deeper insights."));
+                suggestions.push(String::from(
+                    "Keep using claw consistently. More data enables deeper insights.",
+                ));
             }
 
             println!("💡 Suggestions:");
@@ -3762,9 +3531,7 @@ fn print_workflow_learn(
                     for session in &recent {
                         let id = session["session_id"].as_str().unwrap_or("unknown");
                         let efficiency = session["efficiency_score"].as_f64().unwrap_or(0.0);
-                        let task = session["task_description"]
-                            .as_str()
-                            .unwrap_or("untitled");
+                        let task = session["task_description"].as_str().unwrap_or("untitled");
                         println!("  {id}  {efficiency:.0}%  {task}");
                     }
                 }
@@ -3774,9 +3541,7 @@ fn print_workflow_learn(
     Ok(())
 }
 
-fn print_doctor(
-    output_format: CliOutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let loader = ConfigLoader::default_for(&cwd);
     let runtime_config = loader.load().unwrap_or_else(|_| runtime::RuntimeConfig::empty());
@@ -3812,8 +3577,11 @@ fn print_doctor(
             println!("    In container:   {}", sandbox.in_container);
             println!();
             println!("  Config files:     {} loaded", runtime_config.loaded_entries().len());
-            if let Some(status) = status_context(None).ok() {
-                println!("  Git branch:       {}", status.git_branch.as_deref().unwrap_or("unknown"));
+            if let Ok(status) = status_context(None) {
+                println!(
+                    "  Git branch:       {}",
+                    status.git_branch.as_deref().unwrap_or("unknown")
+                );
                 println!("  Git state:        {}", status.git_summary.headline());
             }
             println!();
@@ -3843,7 +3611,9 @@ fn print_telemetry(
             community.disable();
             match output_format {
                 CliOutputFormat::Text => println!("Community learning telemetry: DISABLED"),
-                CliOutputFormat::Json => println!("{}", serde_json::json!({"telemetry": "disabled"})),
+                CliOutputFormat::Json => {
+                    println!("{}", serde_json::json!({"telemetry": "disabled"}));
+                }
             }
         }
         "export" => {
@@ -3884,9 +3654,7 @@ fn print_sandbox_status_snapshot(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let loader = ConfigLoader::default_for(&cwd);
-    let runtime_config = loader
-        .load()
-        .unwrap_or_else(|_| runtime::RuntimeConfig::empty());
+    let runtime_config = loader.load().unwrap_or_else(|_| runtime::RuntimeConfig::empty());
     let sandbox = resolve_sandbox_status(runtime_config.sandbox(), &cwd);
     match output_format {
         CliOutputFormat::Json => {
@@ -3940,10 +3708,7 @@ fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::er
         } else {
             "missing"
         };
-        lines.push(format!(
-            "  {source:<7} {status:<7} {}",
-            entry.path.display()
-        ));
+        lines.push(format!("  {source:<7} {status:<7} {}", entry.path.display()));
     }
 
     if let Some(section) = section {
@@ -3952,9 +3717,9 @@ fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::er
             "env" => runtime_config.get("env"),
             "hooks" => runtime_config.get("hooks"),
             "model" => runtime_config.get("model"),
-            "plugins" => runtime_config
-                .get("plugins")
-                .or_else(|| runtime_config.get("enabledPlugins")),
+            "plugins" => {
+                runtime_config.get("plugins").or_else(|| runtime_config.get("enabledPlugins"))
+            }
             other => {
                 lines.push(format!(
                     "  Unsupported config section '{other}'. Use env, hooks, model, or plugins."
@@ -4006,17 +3771,9 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
         lines.push("Discovered files".to_string());
         for (index, file) in project_context.instruction_files.iter().enumerate() {
             let preview = file.content.lines().next().unwrap_or("").trim();
-            let preview = if preview.is_empty() {
-                "<empty>"
-            } else {
-                preview
-            };
-            lines.push(format!("  {}. {}", index + 1, file.path.display(),));
-            lines.push(format!(
-                "     lines={} preview={}",
-                file.content.lines().count(),
-                preview
-            ));
+            let preview = if preview.is_empty() { "<empty>" } else { preview };
+            lines.push(format!("  {}. {}", index + 1, file.path.display()));
+            lines.push(format!("     lines={} preview={}", file.content.lines().count(), preview));
         }
     }
     Ok(lines.join(
@@ -4073,10 +3830,7 @@ fn run_git_diff_command_in(
     cwd: &Path,
     args: &[&str],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()?;
+    let output = std::process::Command::new("git").args(args).current_dir(cwd).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!("git {} failed: {stderr}", args.join(" ")).into());
@@ -4087,10 +3841,7 @@ fn run_git_diff_command_in(
 fn render_teleport_report(target: &str) -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
 
-    let file_list = Command::new("rg")
-        .args(["--files"])
-        .current_dir(&cwd)
-        .output()?;
+    let file_list = Command::new("rg").args(["--files"]).current_dir(&cwd).output()?;
     let file_matches = if file_list.status.success() {
         String::from_utf8(file_list.stdout)?
             .lines()
@@ -4151,12 +3902,9 @@ fn render_last_tool_debug_report(session: &Session) -> Result<String, Box<dyn st
 
     let tool_result = session.messages.iter().rev().find_map(|message| {
         message.blocks.iter().rev().find_map(|block| match block {
-            ContentBlock::ToolResult {
-                tool_use_id,
-                tool_name,
-                output,
-                is_error,
-            } if tool_use_id == &last_tool_use.0 => {
+            ContentBlock::ToolResult { tool_use_id, tool_name, output, is_error }
+                if tool_use_id == &last_tool_use.0 =>
+            {
                 Some((tool_name.clone(), output.clone(), *is_error))
             }
             _ => None,
@@ -4176,10 +3924,7 @@ fn render_last_tool_debug_report(session: &Session) -> Result<String, Box<dyn st
         Some((tool_name, output, is_error)) => {
             lines.push("  Result".to_string());
             lines.push(format!("    name           {tool_name}"));
-            lines.push(format!(
-                "    status         {}",
-                if is_error { "error" } else { "ok" }
-            ));
+            lines.push(format!("    status         {}", if is_error { "error" } else { "ok" }));
             lines.push(indent_block(&output, 4));
         }
         None => lines.push("  Result           missing tool result".to_string()),
@@ -4190,11 +3935,7 @@ fn render_last_tool_debug_report(session: &Session) -> Result<String, Box<dyn st
 
 fn indent_block(value: &str, spaces: usize) -> String {
     let indent = " ".repeat(spaces);
-    value
-        .lines()
-        .map(|line| format!("{indent}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    value.lines().map(|line| format!("{indent}{line}")).collect::<Vec<_>>().join("\n")
 }
 
 fn validate_no_args(
@@ -4252,10 +3993,7 @@ fn format_issue_report(context: Option<&str>) -> String {
 }
 
 fn git_output(args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(env::current_dir()?)
-        .output()?;
+    let output = Command::new("git").args(args).current_dir(env::current_dir()?).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!("git {} failed: {stderr}", args.join(" ")).into());
@@ -4264,10 +4002,7 @@ fn git_output(args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
 }
 
 fn git_status_ok(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(env::current_dir()?)
-        .output()?;
+    let output = Command::new("git").args(args).current_dir(env::current_dir()?).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!("git {} failed: {stderr}", args.join(" ")).into());
@@ -4276,11 +4011,7 @@ fn git_status_ok(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn command_exists(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    Command::new("which").arg(name).output().is_ok_and(|output| output.status.success())
 }
 
 fn write_temp_text_file(
@@ -4335,9 +4066,7 @@ fn sanitize_generated_message(value: &str) -> String {
 
 fn parse_titled_body(value: &str) -> Option<(String, String)> {
     let normalized = sanitize_generated_message(value);
-    let title = normalized
-        .lines()
-        .find_map(|line| line.strip_prefix("TITLE:").map(str::trim))?;
+    let title = normalized.lines().find_map(|line| line.strip_prefix("TITLE:").map(str::trim))?;
     let body_start = normalized.find("BODY:")?;
     let body = normalized[body_start + "BODY:".len()..].trim();
     Some((title.to_string(), body.to_string()))
@@ -4368,12 +4097,7 @@ fn render_export_text(session: &Session) -> String {
                 ContentBlock::ToolUse { id, name, input } => {
                     lines.push(format!("[tool_use id={id} name={name}] {input}"));
                 }
-                ContentBlock::ToolResult {
-                    tool_use_id,
-                    tool_name,
-                    output,
-                    is_error,
-                } => {
+                ContentBlock::ToolResult { tool_use_id, tool_name, output, is_error } => {
                     lines.push(format!(
                         "[tool_result id={tool_use_id} name={tool_name} error={is_error}] {output}"
                     ));
@@ -4397,28 +4121,16 @@ fn default_export_filename(session: &Session) -> String {
             }),
             _ => None,
         })
-        .map_or("conversation", |text| {
-            text.lines().next().unwrap_or("conversation")
-        })
+        .map_or("conversation", |text| text.lines().next().unwrap_or("conversation"))
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|part| !part.is_empty())
         .take(8)
         .collect::<Vec<_>>()
         .join("-");
-    let fallback = if stem.is_empty() {
-        "conversation"
-    } else {
-        &stem
-    };
+    let fallback = if stem.is_empty() { "conversation" } else { &stem };
     format!("{fallback}.txt")
 }
 
@@ -4429,24 +4141,17 @@ fn resolve_export_path(
     let cwd = env::current_dir()?;
     let file_name =
         requested_path.map_or_else(|| default_export_filename(session), ToOwned::to_owned);
-    let final_name = if Path::new(&file_name)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
-    {
-        file_name
-    } else {
-        format!("{file_name}.txt")
-    };
+    let final_name =
+        if Path::new(&file_name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
+            file_name
+        } else {
+            format!("{file_name}.txt")
+        };
     Ok(cwd.join(final_name))
 }
 
 fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Ok(load_system_prompt(
-        env::current_dir()?,
-        default_date(),
-        env::consts::OS,
-        "unknown",
-    )?)
+    Ok(load_system_prompt(env::current_dir()?, default_date(), env::consts::OS, "unknown")?)
 }
 
 fn build_runtime_plugin_state() -> Result<RuntimePluginState, Box<dyn std::error::Error>> {
@@ -4472,12 +4177,7 @@ fn build_runtime_plugin_state_with_loader(
     let (mcp_state, runtime_tools) = build_runtime_mcp_state(runtime_config)?;
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_registry.aggregated_tools()?)?
         .with_runtime_tools(runtime_tools)?;
-    Ok(RuntimePluginState {
-        feature_config,
-        tool_registry,
-        plugin_registry,
-        mcp_state,
-    })
+    Ok(RuntimePluginState { feature_config, tool_registry, plugin_registry, mcp_state })
 }
 
 fn build_plugin_manager(
@@ -4588,11 +4288,8 @@ impl InternalPromptProgressReporter {
 
     fn mark_model_phase(&self) {
         let snapshot = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .expect("internal prompt progress state poisoned");
+            let mut state =
+                self.shared.state.lock().expect("internal prompt progress state poisoned");
             state.step += 1;
             state.phase = if state.step == 1 {
                 "analyzing request".to_string()
@@ -4613,11 +4310,8 @@ impl InternalPromptProgressReporter {
     fn mark_tool_phase(&self, name: &str, input: &str) {
         let detail = describe_tool_progress(name, input);
         let snapshot = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .expect("internal prompt progress state poisoned");
+            let mut state =
+                self.shared.state.lock().expect("internal prompt progress state poisoned");
             state.step += 1;
             state.phase = format!("running {name}");
             state.detail = Some(detail);
@@ -4638,11 +4332,8 @@ impl InternalPromptProgressReporter {
         }
         let detail = truncate_for_summary(first_visible_line(trimmed), 120);
         let snapshot = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .expect("internal prompt progress state poisoned");
+            let mut state =
+                self.shared.state.lock().expect("internal prompt progress state poisoned");
             if state.saw_final_text {
                 return;
             }
@@ -4671,11 +4362,7 @@ impl InternalPromptProgressReporter {
     }
 
     fn snapshot(&self) -> InternalPromptProgressState {
-        self.shared
-            .state
-            .lock()
-            .expect("internal prompt progress state poisoned")
-            .clone()
+        self.shared.state.lock().expect("internal prompt progress state poisoned").clone()
     }
 
     fn elapsed(&self) -> Duration {
@@ -4683,11 +4370,8 @@ impl InternalPromptProgressReporter {
     }
 
     fn write_line(&self, line: &str) {
-        let _guard = self
-            .shared
-            .output_lock
-            .lock()
-            .expect("internal prompt progress output lock poisoned");
+        let _guard =
+            self.shared.output_lock.lock().expect("internal prompt progress output lock poisoned");
         let mut stdout = io::stdout();
         let _ = writeln!(stdout, "{line}");
         let _ = stdout.flush();
@@ -4721,14 +4405,12 @@ impl InternalPromptProgressRun {
 
     fn finish_success(&mut self) {
         self.stop_heartbeat();
-        self.reporter
-            .emit(InternalPromptProgressEvent::Complete, None);
+        self.reporter.emit(InternalPromptProgressEvent::Complete, None);
     }
 
     fn finish_failure(&mut self, error: &str) {
         self.stop_heartbeat();
-        self.reporter
-            .emit(InternalPromptProgressEvent::Failed, Some(error));
+        self.reporter.emit(InternalPromptProgressEvent::Failed, Some(error));
     }
 
     fn stop_heartbeat(&mut self) {
@@ -4760,20 +4442,13 @@ fn format_internal_prompt_progress_line(
         format!("current step {}", snapshot.step)
     };
     let mut status_bits = vec![step_label, format!("phase {}", snapshot.phase)];
-    if let Some(detail) = snapshot
-        .detail
-        .as_deref()
-        .filter(|detail| !detail.is_empty())
-    {
+    if let Some(detail) = snapshot.detail.as_deref().filter(|detail| !detail.is_empty()) {
         status_bits.push(detail.to_string());
     }
     let status = status_bits.join(" · ");
     match event {
         InternalPromptProgressEvent::Started => {
-            format!(
-                "🧭 {} status · planning started · {status}",
-                snapshot.command_label
-            )
+            format!("🧭 {} status · planning started · {status}", snapshot.command_label)
         }
         InternalPromptProgressEvent::Update => {
             format!("… {} status · {status}", snapshot.command_label)
@@ -4799,10 +4474,8 @@ fn describe_tool_progress(name: &str, input: &str) -> String {
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
     match name {
         "bash" | "Bash" => {
-            let command = parsed
-                .get("command")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
+            let command =
+                parsed.get("command").and_then(|value| value.as_str()).unwrap_or_default();
             if command.is_empty() {
                 "running shell command".to_string()
             } else {
@@ -4813,34 +4486,21 @@ fn describe_tool_progress(name: &str, input: &str) -> String {
         "write_file" | "Write" => format!("writing {}", extract_tool_path(&parsed)),
         "edit_file" | "Edit" => format!("editing {}", extract_tool_path(&parsed)),
         "glob_search" | "Glob" => {
-            let pattern = parsed
-                .get("pattern")
-                .and_then(|value| value.as_str())
-                .unwrap_or("?");
-            let scope = parsed
-                .get("path")
-                .and_then(|value| value.as_str())
-                .unwrap_or(".");
+            let pattern = parsed.get("pattern").and_then(|value| value.as_str()).unwrap_or("?");
+            let scope = parsed.get("path").and_then(|value| value.as_str()).unwrap_or(".");
             format!("glob `{pattern}` in {scope}")
         }
         "grep_search" | "Grep" => {
-            let pattern = parsed
-                .get("pattern")
-                .and_then(|value| value.as_str())
-                .unwrap_or("?");
-            let scope = parsed
-                .get("path")
-                .and_then(|value| value.as_str())
-                .unwrap_or(".");
+            let pattern = parsed.get("pattern").and_then(|value| value.as_str()).unwrap_or("?");
+            let scope = parsed.get("path").and_then(|value| value.as_str()).unwrap_or(".");
             format!("grep `{pattern}` in {scope}")
         }
-        "web_search" | "WebSearch" => parsed
-            .get("query")
-            .and_then(|value| value.as_str())
-            .map_or_else(
+        "web_search" | "WebSearch" => {
+            parsed.get("query").and_then(|value| value.as_str()).map_or_else(
                 || "running web search".to_string(),
                 |query| format!("query {}", truncate_for_summary(query, 100)),
-            ),
+            )
+        }
         _ => {
             let summary = summarize_tool_payload(input);
             if summary.is_empty() {
@@ -4894,12 +4554,8 @@ fn build_runtime_with_plugin_state(
     progress_reporter: Option<InternalPromptProgressReporter>,
     runtime_plugin_state: RuntimePluginState,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
-    let RuntimePluginState {
-        feature_config,
-        tool_registry,
-        plugin_registry,
-        mcp_state,
-    } = runtime_plugin_state;
+    let RuntimePluginState { feature_config, tool_registry, plugin_registry, mcp_state } =
+        runtime_plugin_state;
     plugin_registry.initialize()?;
     let policy = permission_policy(permission_mode, &feature_config, &tool_registry)
         .map_err(std::io::Error::other)?;
@@ -4935,27 +4591,14 @@ struct CliHookProgressReporter;
 impl runtime::HookProgressReporter for CliHookProgressReporter {
     fn on_event(&mut self, event: &runtime::HookProgressEvent) {
         match event {
-            runtime::HookProgressEvent::Started {
-                event,
-                tool_name,
-                command,
-            } => eprintln!(
-                "[hook {event_name}] {tool_name}: {command}",
-                event_name = event.as_str()
-            ),
-            runtime::HookProgressEvent::Completed {
-                event,
-                tool_name,
-                command,
-            } => eprintln!(
+            runtime::HookProgressEvent::Started { event, tool_name, command } => {
+                eprintln!("[hook {event_name}] {tool_name}: {command}", event_name = event.as_str());
+            }
+            runtime::HookProgressEvent::Completed { event, tool_name, command } => eprintln!(
                 "[hook done {event_name}] {tool_name}: {command}",
                 event_name = event.as_str()
             ),
-            runtime::HookProgressEvent::Cancelled {
-                event,
-                tool_name,
-                command,
-            } => eprintln!(
+            runtime::HookProgressEvent::Cancelled { event, tool_name, command } => eprintln!(
                 "[hook cancelled {event_name}] {tool_name}: {command}",
                 event_name = event.as_str()
             ),
@@ -5065,7 +4708,9 @@ impl ApiClient for AnthropicRuntimeClient {
             progress_reporter.mark_model_phase();
         }
         // Context window preflight check with automatic max_tokens reduction
-        let estimated_chars: usize = request.messages.iter()
+        let estimated_chars: usize = request
+            .messages
+            .iter()
             .flat_map(|m| m.blocks.iter())
             .map(|b| match b {
                 ContentBlock::Text { text } => text.len(),
@@ -5082,8 +4727,7 @@ impl ApiClient for AnthropicRuntimeClient {
             let reduced = context_limit.saturating_sub(estimated_tokens).max(1024);
             if self.emit_output {
                 eprintln!(
-                    "⚠ Context: estimated {} input tokens + {} output exceeds {} limit. Reducing max_tokens to ~{}.",
-                    estimated_tokens, requested_max, context_limit, reduced
+                    "⚠ Context: estimated {estimated_tokens} input tokens + {requested_max} output exceeds {context_limit} limit. Reducing max_tokens to ~{reduced}."
                 );
             }
             reduced
@@ -5091,7 +4735,8 @@ impl ApiClient for AnthropicRuntimeClient {
             if self.emit_output {
                 eprintln!(
                     "⚠ Approaching context limit: ~{} / {} tokens. Consider /compact soon.",
-                    estimated_tokens + requested_max, context_limit
+                    estimated_tokens + requested_max,
+                    context_limit
                 );
             }
             requested_max
@@ -5118,21 +4763,15 @@ impl ApiClient for AnthropicRuntimeClient {
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
             let mut stdout = io::stdout();
             let mut sink = io::sink();
-            let out: &mut dyn Write = if self.emit_output {
-                &mut stdout
-            } else {
-                &mut sink
-            };
+            let out: &mut dyn Write = if self.emit_output { &mut stdout } else { &mut sink };
             let renderer = TerminalRenderer::new();
             let mut markdown_stream = MarkdownStreamState::default();
             let mut events = Vec::new();
             let mut pending_tool: Option<(String, String, String)> = None;
             let mut saw_stop = false;
 
-            while let Some(event) = stream
-                .next_event()
-                .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?
+            while let Some(event) =
+                stream.next_event().await.map_err(|error| RuntimeError::new(error.to_string()))?
             {
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
@@ -5214,19 +4853,13 @@ impl ApiClient for AnthropicRuntimeClient {
                 events.push(AssistantEvent::MessageStop);
             }
 
-            if events
-                .iter()
-                .any(|event| matches!(event, AssistantEvent::MessageStop))
-            {
+            if events.iter().any(|event| matches!(event, AssistantEvent::MessageStop)) {
                 return Ok(events);
             }
 
             let response = self
                 .client
-                .send_message(&MessageRequest {
-                    stream: false,
-                    ..message_request.clone()
-                })
+                .send_message(&MessageRequest { stream: false, ..message_request.clone() })
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
             let mut events = response_to_events(response, out)?;
@@ -5276,12 +4909,7 @@ fn collect_tool_results(summary: &runtime::TurnSummary) -> Vec<serde_json::Value
         .iter()
         .flat_map(|message| message.blocks.iter())
         .filter_map(|block| match block {
-            ContentBlock::ToolResult {
-                tool_use_id,
-                tool_name,
-                output,
-                is_error,
-            } => Some(json!({
+            ContentBlock::ToolResult { tool_use_id, tool_name, output, is_error } => Some(json!({
                 "tool_use_id": tool_use_id,
                 "tool_name": tool_name,
                 "output": output,
@@ -5374,10 +5002,8 @@ fn slash_command_completion_candidates_with_sessions(
         completions.insert(format!("/session switch {active_session_id}"));
     }
 
-    for session_id in recent_session_ids
-        .into_iter()
-        .filter(|value| !value.trim().is_empty())
-        .take(10)
+    for session_id in
+        recent_session_ids.into_iter().filter(|value| !value.trim().is_empty()).take(10)
     {
         completions.insert(format!("/resume {session_id}"));
         completions.insert(format!("/session switch {session_id}"));
@@ -5425,11 +5051,9 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
         }
         "glob_search" | "Glob" => format_search_start("🔎 Glob", &parsed),
         "grep_search" | "Grep" => format_search_start("🔎 Grep", &parsed),
-        "web_search" | "WebSearch" => parsed
-            .get("query")
-            .and_then(|value| value.as_str())
-            .unwrap_or("?")
-            .to_string(),
+        "web_search" | "WebSearch" => {
+            parsed.get("query").and_then(|value| value.as_str()).unwrap_or("?").to_string()
+        }
         _ => summarize_tool_payload(input),
     };
 
@@ -5440,11 +5064,7 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
-    let icon = if is_error {
-        "\x1b[1;31m✗\x1b[0m"
-    } else {
-        "\x1b[1;32m✓\x1b[0m"
-    };
+    let icon = if is_error { "\x1b[1;31m✗\x1b[0m" } else { "\x1b[1;32m✓\x1b[0m" };
     if is_error {
         let summary = truncate_for_summary(output.trim(), 160);
         return if summary.is_empty() {
@@ -5485,14 +5105,8 @@ fn extract_tool_path(parsed: &serde_json::Value) -> String {
 }
 
 fn format_search_start(label: &str, parsed: &serde_json::Value) -> String {
-    let pattern = parsed
-        .get("pattern")
-        .and_then(|value| value.as_str())
-        .unwrap_or("?");
-    let scope = parsed
-        .get("path")
-        .and_then(|value| value.as_str())
-        .unwrap_or(".");
+    let pattern = parsed.get("pattern").and_then(|value| value.as_str()).unwrap_or("?");
+    let scope = parsed.get("path").and_then(|value| value.as_str()).unwrap_or(".");
     format!("{label} {pattern}\n\x1b[2min {scope}\x1b[0m")
 }
 
@@ -5508,34 +5122,23 @@ fn format_patch_preview(old_value: &str, new_value: &str) -> Option<String> {
 }
 
 fn format_bash_call(parsed: &serde_json::Value) -> String {
-    let command = parsed
-        .get("command")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
+    let command = parsed.get("command").and_then(|value| value.as_str()).unwrap_or_default();
     if command.is_empty() {
         String::new()
     } else {
-        format!(
-            "\x1b[48;5;236;38;5;255m $ {} \x1b[0m",
-            truncate_for_summary(command, 160)
-        )
+        format!("\x1b[48;5;236;38;5;255m $ {} \x1b[0m", truncate_for_summary(command, 160))
     }
 }
 
 fn first_visible_line(text: &str) -> &str {
-    text.lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or(text)
+    text.lines().find(|line| !line.trim().is_empty()).unwrap_or(text)
 }
 
 fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     use std::fmt::Write as _;
 
     let mut lines = vec![format!("{icon} \x1b[38;5;245mbash\x1b[0m")];
-    if let Some(task_id) = parsed
-        .get("backgroundTaskId")
-        .and_then(|value| value.as_str())
-    {
+    if let Some(task_id) = parsed.get("backgroundTaskId").and_then(|value| value.as_str()) {
         write!(&mut lines[0], " backgrounded ({task_id})").expect("write to string");
     } else if let Some(status) = parsed
         .get("returnCodeInterpretation")
@@ -5573,22 +5176,11 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
 fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
     let file = parsed.get("file").unwrap_or(parsed);
     let path = extract_tool_path(file);
-    let start_line = file
-        .get("startLine")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(1);
-    let num_lines = file
-        .get("numLines")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let total_lines = file
-        .get("totalLines")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(num_lines);
-    let content = file
-        .get("content")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
+    let start_line = file.get("startLine").and_then(serde_json::Value::as_u64).unwrap_or(1);
+    let num_lines = file.get("numLines").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let total_lines =
+        file.get("totalLines").and_then(serde_json::Value::as_u64).unwrap_or(num_lines);
+    let content = file.get("content").and_then(|value| value.as_str()).unwrap_or_default();
     let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
 
     format!(
@@ -5602,10 +5194,7 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
 
 fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
     let path = extract_tool_path(parsed);
-    let kind = parsed
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("write");
+    let kind = parsed.get("type").and_then(|value| value.as_str()).unwrap_or("write");
     let line_count = parsed
         .get("content")
         .and_then(|value| value.as_str())
@@ -5638,24 +5227,16 @@ fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String>
 
 fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
     let path = extract_tool_path(parsed);
-    let suffix = if parsed
-        .get("replaceAll")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    let suffix = if parsed.get("replaceAll").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         " (replace all)"
     } else {
         ""
     };
     let preview = format_structured_patch_preview(parsed).or_else(|| {
-        let old_value = parsed
-            .get("oldString")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let new_value = parsed
-            .get("newString")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
+        let old_value =
+            parsed.get("oldString").and_then(|value| value.as_str()).unwrap_or_default();
+        let new_value =
+            parsed.get("newString").and_then(|value| value.as_str()).unwrap_or_default();
         format_patch_preview(old_value, new_value)
     });
 
@@ -5666,20 +5247,12 @@ fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_glob_result(icon: &str, parsed: &serde_json::Value) -> String {
-    let num_files = parsed
-        .get("numFiles")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
+    let num_files = parsed.get("numFiles").and_then(serde_json::Value::as_u64).unwrap_or(0);
     let filenames = parsed
         .get("filenames")
         .and_then(|value| value.as_array())
         .map(|files| {
-            files
-                .iter()
-                .filter_map(|value| value.as_str())
-                .take(8)
-                .collect::<Vec<_>>()
-                .join("\n")
+            files.iter().filter_map(|value| value.as_str()).take(8).collect::<Vec<_>>().join("\n")
         })
         .unwrap_or_default();
     if filenames.is_empty() {
@@ -5690,28 +5263,14 @@ fn format_glob_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
-    let num_matches = parsed
-        .get("numMatches")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let num_files = parsed
-        .get("numFiles")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let content = parsed
-        .get("content")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
+    let num_matches = parsed.get("numMatches").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let num_files = parsed.get("numFiles").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let content = parsed.get("content").and_then(|value| value.as_str()).unwrap_or_default();
     let filenames = parsed
         .get("filenames")
         .and_then(|value| value.as_array())
         .map(|files| {
-            files
-                .iter()
-                .filter_map(|value| value.as_str())
-                .take(8)
-                .collect::<Vec<_>>()
-                .join("\n")
+            files.iter().filter_map(|value| value.as_str()).take(8).collect::<Vec<_>>().join("\n")
         })
         .unwrap_or_default();
     let summary = format!(
@@ -5930,13 +5489,10 @@ impl CliToolExecutor {
         let (pending_mcp_servers, mcp_degraded) = self
             .mcp_state
             .as_ref()
-            .map(|state| {
-                let state = state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .map_or((None, None), |state| {
+                let state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (state.pending_servers(), state.degraded_report())
-            })
-            .unwrap_or((None, None));
+            });
         serde_json::to_string_pretty(&self.tool_registry.search(
             &input.query,
             input.max_results.unwrap_or(5),
@@ -5956,9 +5512,7 @@ impl CliToolExecutor {
                 "runtime tool `{tool_name}` is unavailable without configured MCP servers"
             )));
         };
-        let mut mcp_state = mcp_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mcp_state = mcp_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         match tool_name {
             "MCPTool" => {
@@ -5990,11 +5544,7 @@ impl CliToolExecutor {
 
 impl ToolExecutor for CliToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
-        if self
-            .allowed_tools
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(tool_name))
-        {
+        if self.allowed_tools.as_ref().is_some_and(|allowed| !allowed.contains(tool_name)) {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled by the current --allowedTools setting"
             )));
@@ -6006,9 +5556,7 @@ impl ToolExecutor for CliToolExecutor {
         } else if self.tool_registry.has_runtime_tool(tool_name) {
             self.execute_runtime_tool(tool_name, value)
         } else {
-            self.tool_registry
-                .execute(tool_name, &value)
-                .map_err(ToolError::new)
+            self.tool_registry.execute(tool_name, &value).map_err(ToolError::new)
         };
         match result {
             Ok(output) => {
@@ -6064,14 +5612,12 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
             .iter()
             .filter_map(|block| match block {
                 ContentBlock::Text { text } => Some(InputContentBlock::Text { text: text.clone() }),
-                ContentBlock::ToolUse { id, name, input } => {
-                    Some(InputContentBlock::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: serde_json::from_str(input)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
-                    })
-                }
+                ContentBlock::ToolUse { id, name, input } => Some(InputContentBlock::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: serde_json::from_str(input)
+                        .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+                }),
                 ContentBlock::ToolResult { tool_use_id, output, is_error, .. } => {
                     // DeepSeek: drop tool_results without matching tool_use in previous assistant
                     if role != "assistant" && !pending_tool_use_ids.contains(tool_use_id) {
@@ -6111,11 +5657,16 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                     let next = &messages[j];
                     if next.blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
                         for block in &next.blocks {
-                            if let ContentBlock::ToolResult { tool_use_id, output, is_error, .. } = block {
+                            if let ContentBlock::ToolResult {
+                                tool_use_id, output, is_error, ..
+                            } = block
+                            {
                                 if pending_tool_use_ids.contains(tool_use_id) {
                                     tool_results.push(InputContentBlock::ToolResult {
                                         tool_use_id: tool_use_id.clone(),
-                                        content: vec![ToolResultContentBlock::Text { text: output.clone() }],
+                                        content: vec![ToolResultContentBlock::Text {
+                                            text: output.clone(),
+                                        }],
                                         is_error: *is_error,
                                     });
                                 }
@@ -6151,38 +5702,20 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "sego v{VERSION}")?;
     writeln!(out)?;
     writeln!(out, "Usage:")?;
-    writeln!(
-        out,
-        "  sego [--model MODEL] [--allowedTools TOOL[,TOOL...]]"
-    )?;
+    writeln!(out, "  sego [--model MODEL] [--allowedTools TOOL[,TOOL...]]")?;
     writeln!(out, "      Start the interactive REPL")?;
-    writeln!(
-        out,
-        "  sego [--model MODEL] [--output-format text|json] prompt TEXT"
-    )?;
+    writeln!(out, "  sego [--model MODEL] [--output-format text|json] prompt TEXT")?;
     writeln!(out, "      Send one prompt and exit")?;
-    writeln!(
-        out,
-        "  sego [--model MODEL] [--output-format text|json] TEXT"
-    )?;
+    writeln!(out, "  sego [--model MODEL] [--output-format text|json] TEXT")?;
     writeln!(out, "      Shorthand non-interactive prompt mode")?;
-    writeln!(
-        out,
-        "  sego --resume [SESSION.jsonl|session-id|latest] [/status] [/compact] [...]"
-    )?;
-    writeln!(
-        out,
-        "      Inspect or maintain a saved session without entering the REPL"
-    )?;
+    writeln!(out, "  sego --resume [SESSION.jsonl|session-id|latest] [/status] [/compact] [...]")?;
+    writeln!(out, "      Inspect or maintain a saved session without entering the REPL")?;
     writeln!(out, "  sego help")?;
     writeln!(out, "      Alias for --help")?;
     writeln!(out, "  sego version")?;
     writeln!(out, "      Alias for --version")?;
     writeln!(out, "  sego status")?;
-    writeln!(
-        out,
-        "      Show the current local workspace status snapshot"
-    )?;
+    writeln!(out, "      Show the current local workspace status snapshot")?;
     writeln!(out, "  sego sandbox")?;
     writeln!(out, "      Show the current sandbox isolation snapshot")?;
     writeln!(out, "  sego dump-manifests")?;
@@ -6195,43 +5728,22 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  sego logout")?;
     writeln!(out, "  sego init")?;
     writeln!(out, "  sego review")?;
-    writeln!(
-        out,
-        "      Show workflow analysis for the most recent session"
-    )?;
+    writeln!(out, "      Show workflow analysis for the most recent session")?;
     writeln!(out, "  sego learn")?;
-    writeln!(
-        out,
-        "      Show learning suggestions based on workflow history"
-    )?;
+    writeln!(out, "      Show learning suggestions based on workflow history")?;
     writeln!(out, "  sego doctor")?;
-    writeln!(
-        out,
-        "      Show system diagnostics and health check"
-    )?;
+    writeln!(out, "      Show system diagnostics and health check")?;
     writeln!(out)?;
     writeln!(out, "Flags:")?;
-    writeln!(
-        out,
-        "  --model MODEL              Override the active model"
-    )?;
-    writeln!(
-        out,
-        "  --output-format FORMAT     Non-interactive output format: text or json"
-    )?;
+    writeln!(out, "  --model MODEL              Override the active model")?;
+    writeln!(out, "  --output-format FORMAT     Non-interactive output format: text or json")?;
     writeln!(
         out,
         "  --permission-mode MODE     Set read-only, workspace-write, or danger-full-access"
     )?;
-    writeln!(
-        out,
-        "  --dangerously-skip-permissions  Skip all permission checks"
-    )?;
+    writeln!(out, "  --dangerously-skip-permissions  Skip all permission checks")?;
     writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
-    writeln!(
-        out,
-        "  --version, -V              Print version and build information locally"
-    )?;
+    writeln!(out, "  --version, -V              Print version and build information locally")?;
     writeln!(out)?;
     writeln!(out, "Interactive slash commands:")?;
     writeln!(out, "{}", render_slash_command_help())?;
@@ -6255,25 +5767,13 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "  Use `{LATEST_SESSION_REFERENCE}` with --resume, /resume, or /session switch to target the newest saved session"
     )?;
-    writeln!(
-        out,
-        "  Use /session list in the REPL to browse managed sessions"
-    )?;
+    writeln!(out, "  Use /session list in the REPL to browse managed sessions")?;
     writeln!(out, "Examples:")?;
     writeln!(out, "  sego --model claude-opus \"summarize this repo\"")?;
-    writeln!(
-        out,
-        "  sego --output-format json prompt \"explain src/main.rs\""
-    )?;
-    writeln!(
-        out,
-        "  sego --allowedTools read,glob \"summarize Cargo.toml\""
-    )?;
+    writeln!(out, "  sego --output-format json prompt \"explain src/main.rs\"")?;
+    writeln!(out, "  sego --allowedTools read,glob \"summarize Cargo.toml\"")?;
     writeln!(out, "  sego --resume {LATEST_SESSION_REFERENCE}")?;
-    writeln!(
-        out,
-        "  sego --resume {LATEST_SESSION_REFERENCE} /status /diff /export notes.txt"
-    )?;
+    writeln!(out, "  sego --resume {LATEST_SESSION_REFERENCE} /status /diff /export notes.txt")?;
     writeln!(out, "  sego agents")?;
     writeln!(out, "  sego mcp show my-server")?;
     writeln!(out, "  sego /skills")?;
@@ -6290,7 +5790,7 @@ fn print_help() {
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, describe_tool_progress, filter_tool_specs,
+        create_managed_session_handle, default_model, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
         format_issue_report, format_model_report, format_model_switch_report,
@@ -6306,7 +5806,7 @@ mod tests {
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, default_model,
+        StatusUsage,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -6362,11 +5862,7 @@ mod tests {
             .current_dir(cwd)
             .status()
             .expect("git command should run");
-        assert!(
-            status.success(),
-            "git command failed: git {}",
-            args.join(" ")
-        );
+        assert!(status.success(), "git command failed: git {}", args.join(" "));
     }
 
     fn env_lock() -> MutexGuard<'static, ()> {
@@ -6377,9 +5873,7 @@ mod tests {
     }
 
     fn with_current_dir<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
-        let _guard = cwd_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = cwd_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::env::current_dir().expect("cwd should load");
         std::env::set_current_dir(cwd).expect("cwd should change");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
@@ -6394,11 +5888,8 @@ mod tests {
         fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
         if include_hooks {
             fs::create_dir_all(root.join("hooks")).expect("hooks dir");
-            fs::write(
-                root.join("hooks").join("pre.sh"),
-                "#!/bin/sh\nprintf 'plugin pre hook'\n",
-            )
-            .expect("write hook");
+            fs::write(root.join("hooks").join("pre.sh"), "#!/bin/sh\nprintf 'plugin pre hook'\n")
+                .expect("write hook");
         }
         if include_lifecycle {
             fs::create_dir_all(root.join("lifecycle")).expect("lifecycle dir");
@@ -6518,11 +6009,7 @@ mod tests {
     fn parses_prompt_subcommand() {
         let _guard = env_lock();
         std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
-        let args = vec![
-            "prompt".to_string(),
-            "hello".to_string(),
-            "world".to_string(),
-        ];
+        let args = vec!["prompt".to_string(), "hello".to_string(), "world".to_string()];
         assert_eq!(
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
@@ -6594,10 +6081,7 @@ mod tests {
             parse_args(&["--version".to_string()]).expect("args should parse"),
             CliAction::Version
         );
-        assert_eq!(
-            parse_args(&["-V".to_string()]).expect("args should parse"),
-            CliAction::Version
-        );
+        assert_eq!(parse_args(&["-V".to_string()]).expect("args should parse"), CliAction::Version);
     }
 
     #[test]
@@ -6672,10 +6156,7 @@ mod tests {
             parse_args(&["logout".to_string()]).expect("logout should parse"),
             CliAction::Logout
         );
-        assert_eq!(
-            parse_args(&["init".to_string()]).expect("init should parse"),
-            CliAction::Init
-        );
+        assert_eq!(parse_args(&["init".to_string()]).expect("init should parse"), CliAction::Init);
         assert_eq!(
             parse_args(&["agents".to_string()]).expect("agents should parse"),
             CliAction::Agents { args: None }
@@ -6691,9 +6172,7 @@ mod tests {
         assert_eq!(
             parse_args(&["agents".to_string(), "--help".to_string()])
                 .expect("agents help should parse"),
-            CliAction::Agents {
-                args: Some("--help".to_string())
-            }
+            CliAction::Agents { args: Some("--help".to_string()) }
         );
     }
 
@@ -6701,10 +6180,7 @@ mod tests {
     fn parses_single_word_command_aliases_without_falling_back_to_prompt_mode() {
         let _guard = env_lock();
         std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
-        assert_eq!(
-            parse_args(&["help".to_string()]).expect("help should parse"),
-            CliAction::Help
-        );
+        assert_eq!(parse_args(&["help".to_string()]).expect("help should parse"), CliAction::Help);
         assert_eq!(
             parse_args(&["version".to_string()]).expect("version should parse"),
             CliAction::Version
@@ -6755,9 +6231,7 @@ mod tests {
         assert_eq!(
             parse_args(&["/mcp".to_string(), "show".to_string(), "demo".to_string()])
                 .expect("/mcp show demo should parse"),
-            CliAction::Mcp {
-                args: Some("show demo".to_string())
-            }
+            CliAction::Mcp { args: Some("show demo".to_string()) }
         );
         assert_eq!(
             parse_args(&["/skills".to_string()]).expect("/skills should parse"),
@@ -6766,9 +6240,7 @@ mod tests {
         assert_eq!(
             parse_args(&["/skills".to_string(), "help".to_string()])
                 .expect("/skills help should parse"),
-            CliAction::Skills {
-                args: Some("help".to_string())
-            }
+            CliAction::Skills { args: Some("help".to_string()) }
         );
         assert_eq!(
             parse_args(&[
@@ -6777,9 +6249,7 @@ mod tests {
                 "./fixtures/help-skill".to_string(),
             ])
             .expect("/skills install should parse"),
-            CliAction::Skills {
-                args: Some("install ./fixtures/help-skill".to_string())
-            }
+            CliAction::Skills { args: Some("install ./fixtures/help-skill".to_string()) }
         );
         let error = parse_args(&["/status".to_string()])
             .expect_err("/status should remain REPL-only when invoked directly");
@@ -6794,12 +6264,9 @@ mod tests {
         assert!(compact_error.contains("Unexpected arguments for /compact."));
         assert!(compact_error.contains("Usage            /compact"));
 
-        let plugins_error = parse_args(&[
-            "/plugins".to_string(),
-            "list".to_string(),
-            "extra".to_string(),
-        ])
-        .expect_err("invalid /plugins list shape should be rejected");
+        let plugins_error =
+            parse_args(&["/plugins".to_string(), "list".to_string(), "extra".to_string()])
+                .expect_err("invalid /plugins list shape should be rejected");
         assert!(plugins_error.contains("Usage: /plugin list"));
         assert!(plugins_error.contains("Aliases          /plugins, /marketplace"));
     }
@@ -6814,11 +6281,8 @@ mod tests {
 
     #[test]
     fn parses_resume_flag_with_slash_command() {
-        let args = vec![
-            "--resume".to_string(),
-            "session.jsonl".to_string(),
-            "/compact".to_string(),
-        ];
+        let args =
+            vec!["--resume".to_string(), "session.jsonl".to_string(), "/compact".to_string()];
         assert_eq!(
             parse_args(&args).expect("args should parse"),
             CliAction::ResumeSession {
@@ -6832,10 +6296,7 @@ mod tests {
     fn parses_resume_flag_without_path_as_latest_session() {
         assert_eq!(
             parse_args(&["--resume".to_string()]).expect("args should parse"),
-            CliAction::ResumeSession {
-                session_path: PathBuf::from("latest"),
-                commands: vec![],
-            }
+            CliAction::ResumeSession { session_path: PathBuf::from("latest"), commands: vec![] }
         );
         assert_eq!(
             parse_args(&["--resume".to_string(), "/status".to_string()])
@@ -6860,11 +6321,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::ResumeSession {
                 session_path: PathBuf::from("session.jsonl"),
-                commands: vec![
-                    "/status".to_string(),
-                    "/compact".to_string(),
-                    "/cost".to_string(),
-                ],
+                commands: vec!["/status".to_string(), "/compact".to_string(), "/cost".to_string(),],
             }
         );
     }
@@ -6891,10 +6348,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::ResumeSession {
                 session_path: PathBuf::from("session.jsonl"),
-                commands: vec![
-                    "/export notes.txt".to_string(),
-                    "/clear --confirm".to_string(),
-                ],
+                commands: vec!["/export notes.txt".to_string(), "/clear --confirm".to_string(),],
             }
         );
     }
@@ -6919,25 +6373,16 @@ mod tests {
 
     #[test]
     fn filtered_tool_specs_respect_allowlist() {
-        let allowed = ["read_file", "grep_search"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let allowed = ["read_file", "grep_search"].into_iter().map(str::to_string).collect();
         let filtered = filter_tool_specs(&GlobalToolRegistry::builtin(), Some(&allowed));
-        let names = filtered
-            .into_iter()
-            .map(|spec| spec.name)
-            .collect::<Vec<_>>();
+        let names = filtered.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
         assert_eq!(names, vec!["read_file", "grep_search"]);
     }
 
     #[test]
     fn filtered_tool_specs_include_plugin_tools() {
         let filtered = filter_tool_specs(&registry_with_plugin_tool(), None);
-        let names = filtered
-            .into_iter()
-            .map(|definition| definition.name)
-            .collect::<Vec<_>>();
+        let names = filtered.into_iter().map(|definition| definition.name).collect::<Vec<_>>();
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"plugin_echo".to_string()));
     }
@@ -7039,10 +6484,8 @@ mod tests {
 
     #[test]
     fn resume_supported_command_list_matches_expected_surface() {
-        let names = resume_supported_slash_commands()
-            .into_iter()
-            .map(|spec| spec.name)
-            .collect::<Vec<_>>();
+        let names =
+            resume_supported_slash_commands().into_iter().map(|spec| spec.name).collect::<Vec<_>>();
         // Now with 135+ slash commands, verify minimum resume support
         assert!(
             names.len() >= 39,
@@ -7427,9 +6870,7 @@ UU conflicted.rs",
         git(&["commit", "-m", "init", "--quiet"], &root);
         fs::write(root.join("tracked.txt"), "hello\nworld\n").expect("modify tracked");
         let session_path = root.join("session.json");
-        Session::new()
-            .save_to_path(&session_path)
-            .expect("session should save");
+        Session::new().save_to_path(&session_path).expect("session should save");
 
         let session = Session::load_from_path(&session_path).expect("session should load");
         let outcome = with_current_dir(&root, || {
@@ -7454,23 +6895,14 @@ UU conflicted.rs",
     #[test]
     fn normalizes_supported_permission_modes() {
         assert_eq!(normalize_permission_mode("read-only"), Some("read-only"));
-        assert_eq!(
-            normalize_permission_mode("workspace-write"),
-            Some("workspace-write")
-        );
-        assert_eq!(
-            normalize_permission_mode("danger-full-access"),
-            Some("danger-full-access")
-        );
+        assert_eq!(normalize_permission_mode("workspace-write"), Some("workspace-write"));
+        assert_eq!(normalize_permission_mode("danger-full-access"), Some("danger-full-access"));
         assert_eq!(normalize_permission_mode("unknown"), None);
     }
 
     #[test]
     fn clear_command_requires_explicit_confirmation_flag() {
-        assert_eq!(
-            SlashCommand::parse("/clear"),
-            Ok(Some(SlashCommand::Clear { confirm: false }))
-        );
+        assert_eq!(SlashCommand::parse("/clear"), Ok(Some(SlashCommand::Clear { confirm: false })));
         assert_eq!(
             SlashCommand::parse("/clear --confirm"),
             Ok(Some(SlashCommand::Clear { confirm: true }))
@@ -7495,14 +6927,9 @@ UU conflicted.rs",
         );
         assert_eq!(
             SlashCommand::parse("/config env"),
-            Ok(Some(SlashCommand::Config {
-                section: Some("env".to_string())
-            }))
+            Ok(Some(SlashCommand::Config { section: Some("env".to_string()) }))
         );
-        assert_eq!(
-            SlashCommand::parse("/memory"),
-            Ok(Some(SlashCommand::Memory))
-        );
+        assert_eq!(SlashCommand::parse("/memory"), Ok(Some(SlashCommand::Memory)));
         assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init)));
         assert_eq!(
             SlashCommand::parse("/session fork incident-review"),
@@ -7537,9 +6964,7 @@ UU conflicted.rs",
 
         let legacy_path = workspace.join(".claw/sessions/legacy.json");
         std::fs::create_dir_all(
-            legacy_path
-                .parent()
-                .expect("legacy path should have parent directory"),
+            legacy_path.parent().expect("legacy path should have parent directory"),
         )
         .expect("session dir should exist");
         Session::new()
@@ -7549,13 +6974,8 @@ UU conflicted.rs",
 
         let resolved = resolve_session_reference("legacy").expect("legacy session should resolve");
         assert_eq!(
-            resolved
-                .path
-                .canonicalize()
-                .expect("resolved path should exist"),
-            legacy_path
-                .canonicalize()
-                .expect("legacy path should exist")
+            resolved.path.canonicalize().expect("resolved path should exist"),
+            legacy_path.canonicalize().expect("legacy path should exist")
         );
 
         std::env::set_current_dir(previous).expect("restore cwd");
@@ -7584,10 +7004,7 @@ UU conflicted.rs",
 
         let resolved = resolve_session_reference("latest").expect("latest session should resolve");
         assert_eq!(
-            resolved
-                .path
-                .canonicalize()
-                .expect("resolved path should exist"),
+            resolved.path.canonicalize().expect("resolved path should exist"),
             newer.path.canonicalize().expect("newer path should exist")
         );
 
@@ -7626,9 +7043,7 @@ UU conflicted.rs",
 
     #[test]
     fn init_template_mentions_detected_rust_workspace() {
-        let _guard = cwd_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = cwd_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let rendered = crate::init::render_init_claude_md(&workspace_root);
         assert!(rendered.contains("# CLAUDE.md"));
@@ -7686,10 +7101,8 @@ UU conflicted.rs",
 
     #[test]
     fn tool_rendering_truncates_large_read_output_for_display_only() {
-        let content = (0..200)
-            .map(|index| format!("line {index:03}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let content =
+            (0..200).map(|index| format!("line {index:03}")).collect::<Vec<_>>().join("\n");
         let output = json!({
             "file": {
                 "filePath": "src/main.rs",
@@ -7712,10 +7125,8 @@ UU conflicted.rs",
 
     #[test]
     fn tool_rendering_truncates_large_bash_output_for_display_only() {
-        let stdout = (0..120)
-            .map(|index| format!("stdout {index:03}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let stdout =
+            (0..120).map(|index| format!("stdout {index:03}")).collect::<Vec<_>>().join("\n");
         let output = json!({
             "stdout": stdout,
             "stderr": "",
@@ -7734,9 +7145,7 @@ UU conflicted.rs",
 
     #[test]
     fn tool_rendering_truncates_generic_long_output_for_display_only() {
-        let items = (0..120)
-            .map(|index| format!("payload {index:03}"))
-            .collect::<Vec<_>>();
+        let items = (0..120).map(|index| format!("payload {index:03}")).collect::<Vec<_>>();
         let output = json!({
             "summary": "plugin payload",
             "items": items,
@@ -7756,10 +7165,7 @@ UU conflicted.rs",
 
     #[test]
     fn tool_rendering_truncates_raw_generic_output_for_display_only() {
-        let output = (0..120)
-            .map(|index| format!("raw {index:03}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let output = (0..120).map(|index| format!("raw {index:03}")).collect::<Vec<_>>().join("\n");
 
         let rendered = format_tool_result("plugin_echo", &output, false);
 
@@ -7824,10 +7230,8 @@ UU conflicted.rs",
             describe_tool_progress("read_file", r#"{"path":"src/main.rs"}"#),
             "reading src/main.rs"
         );
-        assert!(
-            describe_tool_progress("bash", r#"{"command":"cargo test -p rusty-claude-cli"}"#)
-                .contains("cargo test -p rusty-claude-cli")
-        );
+        assert!(describe_tool_progress("bash", r#"{"command":"cargo test -p rusty-claude-cli"}"#)
+            .contains("cargo test -p rusty-claude-cli"));
         assert_eq!(
             describe_tool_progress("grep_search", r#"{"pattern":"ultraplan","path":"rust"}"#),
             "grep `ultraplan` in rust"
@@ -7841,9 +7245,7 @@ UU conflicted.rs",
         let mut pending_tool = None;
 
         push_output_block(
-            OutputContentBlock::Text {
-                text: "# Heading".to_string(),
-            },
+            OutputContentBlock::Text { text: "# Heading".to_string() },
             &mut out,
             &mut events,
             &mut pending_tool,
@@ -7966,9 +7368,7 @@ UU conflicted.rs",
                         thinking: "step 1".to_string(),
                         signature: Some("sig_123".to_string()),
                     },
-                    OutputContentBlock::Text {
-                        text: "Final answer".to_string(),
-                    },
+                    OutputContentBlock::Text { text: "Final answer".to_string() },
                 ],
                 stop_reason: Some("end_turn".to_string()),
                 stop_sequence: None,
@@ -8062,12 +7462,8 @@ UU conflicted.rs",
         assert!(allowed.contains("mcp__alpha__echo"));
         assert!(allowed.contains("MCPTool"));
 
-        let mut executor = CliToolExecutor::new(
-            None,
-            false,
-            state.tool_registry.clone(),
-            state.mcp_state.clone(),
-        );
+        let mut executor =
+            CliToolExecutor::new(None, false, state.tool_registry.clone(), state.mcp_state.clone());
 
         let tool_output = executor
             .execute("mcp__alpha__echo", r#"{"text":"hello"}"#)
@@ -8093,18 +7489,9 @@ UU conflicted.rs",
             serde_json::from_str(&search_output).expect("search output should be json");
         assert_eq!(search_json["matches"][0], "mcp__alpha__echo");
         assert_eq!(search_json["pending_mcp_servers"][0], "broken");
-        assert_eq!(
-            search_json["mcp_degraded"]["failed_servers"][0]["server_name"],
-            "broken"
-        );
-        assert_eq!(
-            search_json["mcp_degraded"]["failed_servers"][0]["phase"],
-            "tool_discovery"
-        );
-        assert_eq!(
-            search_json["mcp_degraded"]["available_tools"][0],
-            "mcp__alpha__echo"
-        );
+        assert_eq!(search_json["mcp_degraded"]["failed_servers"][0]["server_name"], "broken");
+        assert_eq!(search_json["mcp_degraded"]["failed_servers"][0]["phase"], "tool_discovery");
+        assert_eq!(search_json["mcp_degraded"]["available_tools"][0], "mcp__alpha__echo");
 
         let listed = executor
             .execute("ListMcpResourcesTool", r#"{"server":"alpha"}"#)
@@ -8114,17 +7501,11 @@ UU conflicted.rs",
         assert_eq!(listed_json["resources"][0]["uri"], "file://guide.txt");
 
         let read = executor
-            .execute(
-                "ReadMcpResourceTool",
-                r#"{"server":"alpha","uri":"file://guide.txt"}"#,
-            )
+            .execute("ReadMcpResourceTool", r#"{"server":"alpha","uri":"file://guide.txt"}"#)
             .expect("resource should read");
         let read_json: serde_json::Value =
             serde_json::from_str(&read).expect("resource read output should be json");
-        assert_eq!(
-            read_json["contents"][0]["text"],
-            "contents for file://guide.txt"
-        );
+        assert_eq!(read_json["contents"][0]["text"], "contents for file://guide.txt");
 
         if let Some(mcp_state) = state.mcp_state {
             mcp_state
@@ -8169,10 +7550,7 @@ UU conflicted.rs",
         let search_json: serde_json::Value =
             serde_json::from_str(&search_output).expect("search output should be json");
         assert_eq!(search_json["pending_mcp_servers"][0], "remote");
-        assert_eq!(
-            search_json["mcp_degraded"]["failed_servers"][0]["server_name"],
-            "remote"
-        );
+        assert_eq!(search_json["mcp_degraded"]["failed_servers"][0]["server_name"], "remote");
         assert_eq!(
             search_json["mcp_degraded"]["failed_servers"][0]["phase"],
             "server_registration"
@@ -8223,14 +7601,9 @@ UU conflicted.rs",
         )
         .expect("runtime should build");
 
-        assert_eq!(
-            fs::read_to_string(&log_path).expect("init log should exist"),
-            "init\n"
-        );
+        assert_eq!(fs::read_to_string(&log_path).expect("init log should exist"), "init\n");
 
-        runtime
-            .shutdown_plugins()
-            .expect("plugin shutdown should succeed");
+        runtime.shutdown_plugins().expect("plugin shutdown should succeed");
 
         assert_eq!(
             fs::read_to_string(&log_path).expect("shutdown log should exist"),
@@ -8390,9 +7763,7 @@ mod sandbox_report_tests {
             },
         );
 
-        done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("interrupt should complete");
+        done_rx.recv_timeout(Duration::from_secs(1)).expect("interrupt should complete");
         monitor.stop();
 
         assert!(abort_signal.is_aborted());

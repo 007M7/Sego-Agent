@@ -100,7 +100,7 @@ impl CommunityLearning {
 
         // Extract model family (strip version specifics)
         let model_family =
-            model.split('/').last().unwrap_or(model).split('@').next().unwrap_or(model).to_string();
+            model.split('/').next_back().unwrap_or(model).split('@').next().unwrap_or(model).to_string();
 
         // Extract only domain from API base URL (strip path and credentials)
         let api_domain = api_base_url
@@ -110,7 +110,7 @@ impl CommunityLearning {
             .next()
             .unwrap_or("unknown")
             .split('@')
-            .last()
+            .next_back()
             .unwrap_or("unknown")
             .to_string();
 
@@ -188,13 +188,13 @@ fn generate_device_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     nanos.hash(&mut hasher);
     format!("sego-{:016x}", hasher.finish())
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]

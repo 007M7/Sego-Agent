@@ -110,17 +110,19 @@ impl TaskRegistry {
         task
     }
 
+    #[must_use] 
     pub fn get(&self, task_id: &str) -> Option<Task> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         inner.tasks.get(task_id).cloned()
     }
 
+    #[must_use] 
     pub fn list(&self, status_filter: Option<TaskStatus>) -> Vec<Task> {
         let inner = self.inner.lock().expect("registry lock poisoned");
         inner
             .tasks
             .values()
-            .filter(|t| status_filter.map_or(true, |s| t.status == s))
+            .filter(|t| status_filter.is_none_or(|s| t.status == s))
             .cloned()
             .collect()
     }
@@ -192,6 +194,7 @@ impl TaskRegistry {
         Ok(())
     }
 
+    #[must_use] 
     pub fn remove(&self, task_id: &str) -> Option<Task> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
         inner.tasks.remove(task_id)

@@ -24,7 +24,7 @@ mod ansi {
     pub const WHITE: &str = "\x1b[37m";
 }
 
-use ansi::*;
+use ansi::{CYAN, RESET, GREEN, RED, DIM, BOLD, YELLOW, WHITE};
 
 // ---------------------------------------------------------------------------
 // Spinner frames
@@ -240,7 +240,7 @@ impl<W: Write> ProgressUI<W> {
         let line =
             format!(" {spinner_color}{spinner}{RESET} {bar} {BOLD}{running_name}{RESET}{msg}");
 
-        write!(self.out, "\r{}\x1b[K", line)?;
+        write!(self.out, "\r{line}\x1b[K")?;
         self.out.flush()
     }
 
