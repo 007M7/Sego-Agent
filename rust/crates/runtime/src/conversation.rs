@@ -314,7 +314,10 @@ where
 
             // Pre-request compaction: compact if estimated tokens near context limit
             if iterations == 1 {
-                let estimated: usize = self.session.messages.iter()
+                let estimated: usize = self
+                    .session
+                    .messages
+                    .iter()
                     .flat_map(|m| m.blocks.iter())
                     .map(|b| match b {
                         ContentBlock::Text { text } => text.len() / 4 + 1,

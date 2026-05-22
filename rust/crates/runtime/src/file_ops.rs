@@ -671,7 +671,7 @@ mod tests {
         let outside = temp_path("symlink-target.txt");
         std::fs::write(&outside, "target content").expect("target should write");
 
-        let link_path = workspace.join("escape-link.txt");
+        let _link_path = workspace.join("escape-link.txt");
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&outside, &link_path).expect("symlink should create");

@@ -207,6 +207,7 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::green_contract::GreenLevel;
     use std::fs;
 
     #[test]

@@ -50,10 +50,9 @@ use runtime::{
     ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry,
-    PhaseStatus, ProgressUI, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, ReviewStatus, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
+    ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewStatus,
+    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -5113,10 +5112,22 @@ const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 1_500;
 /// Default token-saving tool set — only the 15 most-used tools
 static LITE_TOOLS: std::sync::LazyLock<AllowedToolSet> = std::sync::LazyLock::new(|| {
     [
-        "bash", "read", "write", "edit", "grep", "glob",
-        "web_search", "web_fetch", "agent", "todo_write",
-        "task", "ask_user_question", "skill", "notebook_edit",
-        "enter_plan_mode", "exit_plan_mode",
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "grep",
+        "glob",
+        "web_search",
+        "web_fetch",
+        "agent",
+        "todo_write",
+        "task",
+        "ask_user_question",
+        "skill",
+        "notebook_edit",
+        "enter_plan_mode",
+        "exit_plan_mode",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -5178,9 +5189,8 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     let stderr = parsed.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
 
     // Clean one-liner: show first non-empty line of output as preview
-    let preview_line = stdout.lines().chain(stderr.lines())
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
+    let preview_line =
+        stdout.lines().chain(stderr.lines()).find(|l| !l.trim().is_empty()).unwrap_or("");
     let preview = truncate_for_summary(preview_line.trim(), 100);
 
     let mut lines = vec![header];
@@ -6219,11 +6229,12 @@ mod tests {
             CliAction::Status {
                 model: default_model(),
                 permission_mode: PermissionMode::DangerFullAccess,
+                output_format: CliOutputFormat::Text,
             }
         );
         assert_eq!(
             parse_args(&["sandbox".to_string()]).expect("sandbox should parse"),
-            CliAction::Sandbox
+            CliAction::Sandbox { output_format: CliOutputFormat::Text }
         );
     }
 
