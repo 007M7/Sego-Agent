@@ -69,6 +69,7 @@ pub struct WorkflowTrends {
 /// Persistent store for workflow data.
 #[derive(Debug, Clone)]
 pub struct WorkflowStore {
+#[allow(dead_code)]
     root: PathBuf,
     sessions_dir: PathBuf,
     trends_path: PathBuf,

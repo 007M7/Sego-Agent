@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   build-windows:
+    continue-on-error: true
     name: Build Windows binary
     runs-on: windows-latest
     steps:

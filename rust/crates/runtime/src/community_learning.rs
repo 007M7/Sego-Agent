@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::workflow::WorkflowSnapshot;
 
 const TELEMETRY_CONFIG_FILE: &str = "telemetry.json";
+#[allow(dead_code)]
 const REPORT_ENDPOINT: &str = "https://sego-telemetry.example.com/api/v1/report";
 
 /// Anonymous telemetry payload sent to community server.
