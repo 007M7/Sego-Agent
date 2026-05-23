@@ -326,8 +326,8 @@ where
                         ContentBlock::Thinking { thinking, .. } => thinking.len() / 4 + 1,
                     })
                     .sum();
-                // Compact if estimated > 80% of a generous threshold (800K tokens)
-                if estimated > 800_000 {
+                // Compact if estimated > 500K tokens (~50% of 1M context)
+                if estimated > 500_000 {
                     let result = compact_session(
                         &self.session,
                         CompactionConfig { max_estimated_tokens: 0, ..CompactionConfig::default() },

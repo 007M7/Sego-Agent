@@ -81,7 +81,11 @@ impl OpenAiCompatClient {
     #[must_use]
     pub fn new(api_key: impl Into<String>, config: OpenAiCompatConfig) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(600))
+                .build()
+                .expect("failed to build HTTP client"),
             api_key: api_key.into(),
             config,
             base_url: read_base_url(config),
