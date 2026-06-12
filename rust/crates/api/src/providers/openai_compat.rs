@@ -16,6 +16,8 @@ use super::{Provider, ProviderFuture};
 
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/v1";
+pub const DEFAULT_MIMO_BASE_URL: &str = "https://api.moonshot.cn/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -32,6 +34,8 @@ pub struct OpenAiCompatConfig {
 
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
+const DEEPSEEK_ENV_VARS: &[&str] = &["DEEPSEEK_API_KEY"];
+const MIMO_ENV_VARS: &[&str] = &["MIMO_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -53,11 +57,34 @@ impl OpenAiCompatConfig {
             default_base_url: DEFAULT_OPENAI_BASE_URL,
         }
     }
+
+    #[must_use]
+    pub const fn deepseek() -> Self {
+        Self {
+            provider_name: "DeepSeek",
+            api_key_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: DEFAULT_DEEPSEEK_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn mimo() -> Self {
+        Self {
+            provider_name: "MiMo",
+            api_key_env: "MIMO_API_KEY",
+            base_url_env: "MIMO_BASE_URL",
+            default_base_url: DEFAULT_MIMO_BASE_URL,
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
+            "DeepSeek" => DEEPSEEK_ENV_VARS,
+            "MiMo" => MIMO_ENV_VARS,
             _ => &[],
         }
     }
@@ -355,6 +382,19 @@ impl StreamState {
         }
 
         for choice in chunk.choices {
+            if let Some(reasoning_content) = choice
+                .delta
+                .reasoning_content
+                .filter(|value| !value.is_empty())
+            {
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::ThinkingDelta {
+                        thinking: reasoning_content,
+                    },
+                }));
+            }
+
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 if !self.text_started {
                     self.text_started = true;
@@ -537,6 +577,8 @@ struct ChatMessage {
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
     tool_calls: Vec<ResponseToolCall>,
 }
 
@@ -583,6 +625,8 @@ struct ChunkDelta {
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
     tool_calls: Vec<DeltaToolCall>,
 }
 
@@ -625,7 +669,7 @@ fn build_chat_completion_request(request: &MessageRequest, config: OpenAiCompatC
         }));
     }
     for message in &request.messages {
-        messages.extend(translate_message(message));
+        messages.extend(translate_message(message, config));
     }
 
     let mut payload = json!({
@@ -650,10 +694,12 @@ fn build_chat_completion_request(request: &MessageRequest, config: OpenAiCompatC
     payload
 }
 
-fn translate_message(message: &InputMessage) -> Vec<Value> {
+fn translate_message(message: &InputMessage, config: OpenAiCompatConfig) -> Vec<Value> {
     match message.role.as_str() {
         "assistant" => {
+            let preserve_reasoning_content = matches!(config.provider_name, "DeepSeek");
             let mut text = String::new();
+            let mut reasoning_content = String::new();
             let mut tool_calls = Vec::new();
             for block in &message.content {
                 match block {
@@ -666,19 +712,29 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                             "arguments": input.to_string(),
                         }
                     })),
+                    InputContentBlock::Thinking { thinking, .. } if preserve_reasoning_content => {
+                        reasoning_content.push_str(thinking);
+                    }
+                    InputContentBlock::Thinking { .. } => {}
                     InputContentBlock::ToolResult { .. }
-                    | InputContentBlock::Thinking { .. }
                     | InputContentBlock::RedactedThinking { .. } => {}
                 }
             }
-            if text.is_empty() && tool_calls.is_empty() {
+            if text.is_empty() && reasoning_content.is_empty() && tool_calls.is_empty() {
                 Vec::new()
             } else {
-                vec![json!({
-                    "role": "assistant",
-                    "content": (!text.is_empty()).then_some(text),
-                    "tool_calls": tool_calls,
-                })]
+                let mut msg = serde_json::Map::new();
+                msg.insert("role".to_string(), json!("assistant"));
+                if !text.is_empty() {
+                    msg.insert("content".to_string(), json!(text));
+                }
+                if !reasoning_content.is_empty() {
+                    msg.insert("reasoning_content".to_string(), json!(reasoning_content));
+                }
+                if !tool_calls.is_empty() {
+                    msg.insert("tool_calls".to_string(), json!(tool_calls));
+                }
+                vec![Value::Object(msg)]
             }
         }
         _ => message
@@ -750,6 +806,14 @@ fn normalize_response(
         .next()
         .ok_or(ApiError::InvalidSseFrame("chat completion response missing choices"))?;
     let mut content = Vec::new();
+    if let Some(reasoning_content) =
+        choice.message.reasoning_content.filter(|value| !value.is_empty())
+    {
+        content.push(OutputContentBlock::Thinking {
+            thinking: reasoning_content,
+            signature: None,
+        });
+    }
     if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
         content.push(OutputContentBlock::Text { text });
     }
@@ -908,12 +972,13 @@ impl StringExt for String {
 mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        openai_tool_choice, parse_tool_arguments, OpenAiCompatClient, OpenAiCompatConfig,
+        normalize_response, openai_tool_choice, parse_tool_arguments, ChatChoice, ChatCompletionResponse,
+        ChatMessage, OpenAiCompatClient, OpenAiCompatConfig,
     };
     use crate::error::ApiError;
     use crate::types::{
-        InputContentBlock, InputMessage, MessageRequest, ToolChoice, ToolDefinition,
-        ToolResultContentBlock,
+        InputContentBlock, InputMessage, MessageRequest, OutputContentBlock, ToolChoice,
+        ToolDefinition, ToolResultContentBlock,
     };
     use serde_json::json;
     use std::sync::{Mutex, OnceLock};
@@ -990,6 +1055,97 @@ mod tests {
         );
 
         assert!(payload.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn deepseek_request_translation_preserves_reasoning_content() {
+        let payload = build_chat_completion_request(
+            &MessageRequest {
+                model: "deepseek-v4-pro".to_string(),
+                max_tokens: 64,
+                messages: vec![InputMessage {
+                    role: "assistant".to_string(),
+                    content: vec![
+                        InputContentBlock::Thinking {
+                            thinking: "internal reasoning".to_string(),
+                            signature: None,
+                        },
+                        InputContentBlock::Text { text: "Final answer".to_string() },
+                    ],
+                }],
+                system: None,
+                tools: None,
+                tool_choice: None,
+                stream: false,
+            },
+            OpenAiCompatConfig::deepseek(),
+        );
+
+        assert_eq!(payload["messages"][0]["role"], json!("assistant"));
+        assert_eq!(payload["messages"][0]["content"], json!("Final answer"));
+        assert_eq!(
+            payload["messages"][0]["reasoning_content"],
+            json!("internal reasoning")
+        );
+    }
+
+    #[test]
+    fn openai_request_translation_drops_reasoning_content() {
+        let payload = build_chat_completion_request(
+            &MessageRequest {
+                model: "gpt-4.1".to_string(),
+                max_tokens: 64,
+                messages: vec![InputMessage {
+                    role: "assistant".to_string(),
+                    content: vec![
+                        InputContentBlock::Thinking {
+                            thinking: "internal reasoning".to_string(),
+                            signature: None,
+                        },
+                        InputContentBlock::Text { text: "Final answer".to_string() },
+                    ],
+                }],
+                system: None,
+                tools: None,
+                tool_choice: None,
+                stream: false,
+            },
+            OpenAiCompatConfig::openai(),
+        );
+
+        assert!(payload["messages"][0].get("reasoning_content").is_none());
+        assert_eq!(payload["messages"][0]["content"], json!("Final answer"));
+    }
+
+    #[test]
+    fn deepseek_response_normalization_preserves_reasoning_content() {
+        let response = normalize_response(
+            "deepseek-v4-pro",
+            ChatCompletionResponse {
+                id: "chatcmpl_1".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                choices: vec![ChatChoice {
+                    message: ChatMessage {
+                        role: "assistant".to_string(),
+                        content: Some("Final answer".to_string()),
+                        reasoning_content: Some("internal reasoning".to_string()),
+                        tool_calls: Vec::new(),
+                    },
+                    finish_reason: Some("stop".to_string()),
+                }],
+                usage: None,
+            },
+        )
+        .expect("response should normalize");
+
+        assert!(matches!(
+            &response.content[0],
+            OutputContentBlock::Thinking { thinking, .. } if thinking == "internal reasoning"
+        ));
+        assert!(matches!(
+            &response.content[1],
+            OutputContentBlock::Text { text } if text == "Final answer"
+        ));
     }
 
     #[test]

@@ -213,10 +213,9 @@ impl WorkflowStore {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
     use crate::workflow::SessionSummary;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn initializes_workflow_directories() {
