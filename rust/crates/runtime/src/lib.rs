@@ -45,6 +45,7 @@ pub mod task_registry;
 pub mod team_cron_registry;
 pub mod trust_resolver;
 mod usage;
+pub mod verification;
 pub mod worker_boot;
 pub mod workflow;
 
@@ -160,6 +161,10 @@ pub use task_packet::{validate_packet, TaskPacket, TaskPacketValidationError, Va
 pub use trust_resolver::{TrustConfig, TrustDecision, TrustEvent, TrustPolicy, TrustResolver};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+pub use verification::{
+    build_verification_plan, VerificationCommand, VerificationPlan, VerificationPlanStatus,
+    VerificationScope, VerificationScopeParseError,
 };
 pub use worker_boot::{
     Worker, WorkerEvent, WorkerEventKind, WorkerEventPayload, WorkerFailure, WorkerFailureKind,

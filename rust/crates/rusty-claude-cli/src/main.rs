@@ -55,6 +55,7 @@ use runtime::{
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
     ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewStatus,
     RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    VerificationCommand, VerificationPlanStatus, VerificationScope, build_verification_plan,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -168,7 +169,7 @@ type AllowedToolSet = BTreeSet<String>;
 fn main() {
     if let Err(error) = run() {
         let message = error.to_string();
-        if message.contains("`sego --help`") {
+        if message.contains("`sego --help`") || message == "verification failed" {
             eprintln!("error: {message}");
         } else {
             eprintln!(
@@ -205,6 +206,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
             run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?
         }
+        CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
@@ -266,6 +268,9 @@ enum CliAction {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+    },
+    CodeVerify {
+        scope: Option<String>,
     },
     Login,
     Logout,
@@ -574,6 +579,7 @@ fn parse_direct_slash_cli_action(
             allowed_tools,
             permission_mode,
         }),
+        Ok(Some(SlashCommand::Verify { scope })) => Ok(CliAction::CodeVerify { scope }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
             let _ = command;
@@ -1545,6 +1551,7 @@ fn run_resume_command(
         | SlashCommand::PrivacySettings
         | SlashCommand::Plan { .. }
         | SlashCommand::Review { .. }
+        | SlashCommand::Verify { .. }
         | SlashCommand::Tasks { .. }
         | SlashCommand::Theme { .. }
         | SlashCommand::Voice { .. }
@@ -2443,6 +2450,10 @@ impl LiveCli {
             }
             SlashCommand::Review { scope } => {
                 self.run_review(scope.as_deref())?;
+                true
+            }
+            SlashCommand::Verify { scope } => {
+                run_code_verify_cli(scope.as_deref())?;
                 true
             }
             SlashCommand::Unknown(name) => {
@@ -3911,6 +3922,148 @@ fn print_clean_review_scope(target: &ReviewTarget) {
         "Review\n  Result           clean review scope\n  Scope            {}\n  Detail           no current changes",
         target.scope.label()
     );
+}
+
+fn run_code_verify_cli(scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let scope = VerificationScope::parse(scope)?;
+    let cwd = env::current_dir()?;
+    let plan = build_verification_plan(&cwd, scope);
+
+    println!("Verify");
+    println!("  Scope            {}", scope.label());
+    match &plan.status {
+        VerificationPlanStatus::NoPlan { reason } => {
+            println!("  Result           no verification plan");
+            println!("  Reason           {reason}");
+            return Ok(());
+        }
+        VerificationPlanStatus::Ready => {
+            println!("  Plan             {} command(s)", plan.commands.len());
+        }
+    }
+
+    let mut failed = false;
+    for command in &plan.commands {
+        let result = run_verification_command(&cwd, command)?;
+        if !result.success {
+            failed = true;
+        }
+        print_verification_result(&result);
+    }
+
+    println!(
+        "  Result           {}",
+        if failed { "failed" } else { "passed" }
+    );
+
+    if failed {
+        return Err("verification failed".into());
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct VerificationCommandResult {
+    label: String,
+    command: String,
+    working_dir: String,
+    exit_code: Option<i32>,
+    success: bool,
+    duration: Duration,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_verification_command(
+    cwd: &Path,
+    command: &VerificationCommand,
+) -> Result<VerificationCommandResult, Box<dyn std::error::Error>> {
+    let started_at = Instant::now();
+    let working_dir = if command.working_dir == "." {
+        cwd.to_path_buf()
+    } else {
+        cwd.join(&command.working_dir)
+    };
+    let output = std::process::Command::new(&command.program)
+        .args(&command.args)
+        .current_dir(&working_dir)
+        .output()?;
+
+    Ok(VerificationCommandResult {
+        label: command.label.clone(),
+        command: command.display_command(),
+        working_dir: command.working_dir.clone(),
+        exit_code: output.status.code(),
+        success: output.status.success(),
+        duration: started_at.elapsed(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn print_verification_result(result: &VerificationCommandResult) {
+    println!();
+    println!("  Command          {}", result.label);
+    println!("  Run              {}", result.command);
+    println!("  Working dir      {}", result.working_dir);
+    println!("  Exit             {}", result.exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string()));
+    println!("  Duration         {}ms", result.duration.as_millis());
+    println!(
+        "  Status           {}",
+        if result.success { "passed" } else { "failed" }
+    );
+    let stdout = summarize_command_output(&result.stdout, result.success);
+    if !stdout.is_empty() {
+        println!("  Stdout           {stdout}");
+    }
+    let stderr = summarize_command_output(&result.stderr, result.success);
+    if !stderr.is_empty() {
+        println!("  Stderr           {stderr}");
+    }
+}
+
+fn summarize_command_output(value: &str, success: bool) -> String {
+    let lines = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    let compact = if success {
+        lines.iter().take(6).copied().collect::<Vec<_>>().join(" | ")
+    } else {
+        let mut selected = Vec::new();
+        for line in lines.iter().filter(|line| is_diagnostic_output_line(line)).take(12) {
+            selected.push(*line);
+        }
+        let tail_start = lines.len().saturating_sub(12);
+        for line in &lines[tail_start..] {
+            if !selected.contains(line) {
+                selected.push(*line);
+            }
+        }
+        selected.join(" | ")
+    };
+
+    let max_chars = if success { 500 } else { 1_200 };
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        format!("{}...", compact.chars().take(max_chars).collect::<String>())
+    }
+}
+
+fn is_diagnostic_output_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("failures:")
+        || lower.contains("failed")
+        || lower.contains("panicked")
+        || lower.contains("assertion failed")
+        || lower.contains("error:")
+        || lower.contains("test result: failed")
+        || lower.starts_with("---- ")
+        || lower.starts_with("thread '")
 }
 
 fn run_git_diff_command_in(
@@ -6385,6 +6538,13 @@ mod tests {
                 model: default_model(),
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+            }
+        );
+        assert_eq!(
+            parse_args(&["/verify".to_string(), "fast".to_string()])
+                .expect("/verify fast should parse"),
+            CliAction::CodeVerify {
+                scope: Some("fast".to_string()),
             }
         );
         let error = parse_args(&["/status".to_string()])
