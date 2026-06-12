@@ -8,6 +8,7 @@ mod bash;
 pub mod bash_validation;
 mod bootstrap;
 pub mod branch_lock;
+pub mod code_review;
 pub mod community_learning;
 mod compact;
 mod config;
@@ -49,6 +50,10 @@ pub mod workflow;
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::BranchLockRegistry;
+pub use code_review::{
+    build_review_prompt, ReviewContext, ReviewFinding, ReviewPromptOptions, ReviewReport,
+    ReviewScope, ReviewScopeParseError, ReviewSeverity, ReviewTarget,
+};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,

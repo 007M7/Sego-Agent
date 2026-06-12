@@ -24,8 +24,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
+    detect_provider_kind, ProviderClient, ProviderKind,
+    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
@@ -47,8 +48,9 @@ use runtime::{
     resolve_sandbox_status, save_oauth_credentials,
     workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
-    LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
+    build_review_prompt, ContentBlock, ConversationMessage, ConversationRuntime, DiffScope,
+    LaneBlocker, LaneContext, LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus,
+    LaneFailureClass, ReviewContext, ReviewPromptOptions, ReviewScope, ReviewTarget,
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
     ResolvedPermissionMode, ReviewStatus, RuntimeError, Session, TokenUsage, ToolError,
@@ -59,26 +61,23 @@ use serde_json::json;
 use tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
 
 fn default_model() -> String {
-    std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-opus-4-7".to_string())
+    std::env::var("DEEPSEEK_MODEL")
+        .or_else(|_| std::env::var("ANTHROPIC_MODEL"))
+        .unwrap_or_else(|_| "deepseek-chat".to_string())
 }
+
 fn max_tokens_for_model(model: &str) -> u32 {
-    if model.contains("opus") {
-        32_000
-    } else {
-        64_000
-    }
+    // DeepSeek, MiMo, and GPT all support 64K output
+    64_000
 }
 
 fn context_window_limit(model: &str) -> u32 {
-    // Approximate context window sizes for common models
     if model.contains("deepseek") || model.contains("v4") {
         1_000_000 // DeepSeek V4 supports 1M context
-    } else if model.contains("opus") {
-        200_000
-    } else if model.contains("sonnet") {
-        200_000
-    } else if model.contains("haiku") {
-        200_000
+    } else if model.contains("mimo") {
+        128_000 // MiMo supports 128K context
+    } else if model.starts_with("gpt") {
+        128_000 // GPT models 128K context
     } else {
         128_000 // conservative default
     }
@@ -203,6 +202,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             LiveCli::new(model, true, allowed_tools, permission_mode)?
                 .run_turn_with_output(&prompt, output_format)?
         }
+        CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
+            run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?
+        }
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
@@ -256,6 +258,12 @@ enum CliAction {
         prompt: String,
         model: String,
         output_format: CliOutputFormat,
+        allowed_tools: Option<AllowedToolSet>,
+        permission_mode: PermissionMode,
+    },
+    CodeReview {
+        scope: Option<String>,
+        model: String,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
     },
@@ -461,7 +469,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode })
         }
-        other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
+        other if other.starts_with('/') => {
+            parse_direct_slash_cli_action(&rest, model, allowed_tools, permission_mode)
+        }
         _other => Ok(CliAction::Prompt {
             prompt: rest.join(" "),
             model,
@@ -539,7 +549,12 @@ fn join_optional_args(args: &[String]) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
+fn parse_direct_slash_cli_action(
+    rest: &[String],
+    model: String,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+) -> Result<CliAction, String> {
     let raw = rest.join(" ");
     match SlashCommand::parse(&raw) {
         Ok(Some(SlashCommand::Help)) => Ok(CliAction::Help),
@@ -553,6 +568,12 @@ fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
             },
         }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
+        Ok(Some(SlashCommand::Review { scope })) => Ok(CliAction::CodeReview {
+            scope,
+            model,
+            allowed_tools,
+            permission_mode,
+        }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
             let _ = command;
@@ -672,14 +693,10 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
     previous[right_chars.len()]
 }
 
-fn resolve_model_alias(model: &str) -> &str {
-    match model {
-        "opus" => "claude-opus-4-6",
-        "sonnet" => "claude-sonnet-4-6",
-        "haiku" => "claude-haiku-4-5-20251213",
-        _ => model,
-    }
+fn resolve_model_alias(model: &str) -> String {
+    api::resolve_model_alias(model)
 }
+
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
     if values.is_empty() {
@@ -875,59 +892,14 @@ fn default_oauth_config() -> OAuthConfig {
 }
 
 fn run_login() -> Result<(), Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
-    let config = ConfigLoader::default_for(&cwd).load()?;
-    let default_oauth = default_oauth_config();
-    let oauth = config.oauth().unwrap_or(&default_oauth);
-    let callback_port = oauth.callback_port.unwrap_or(DEFAULT_OAUTH_CALLBACK_PORT);
-    let redirect_uri = runtime::loopback_redirect_uri(callback_port);
-    let pkce = generate_pkce_pair()?;
-    let state = generate_state()?;
-    let authorize_url =
-        OAuthAuthorizationRequest::from_config(oauth, redirect_uri.clone(), state.clone(), &pkce)
-            .build_url();
-
-    println!("Starting Claude OAuth login...");
-    println!("Listening for callback on {redirect_uri}");
-    if let Err(error) = open_browser(&authorize_url) {
-        eprintln!("warning: failed to open browser automatically: {error}");
-        println!("Open this URL manually:\n{authorize_url}");
-    }
-
-    let callback = wait_for_oauth_callback(callback_port)?;
-    if let Some(error) = callback.error {
-        let description =
-            callback.error_description.unwrap_or_else(|| "authorization failed".to_string());
-        return Err(io::Error::other(format!("{error}: {description}")).into());
-    }
-    let code = callback.code.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include code")
-    })?;
-    let returned_state = callback.state.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include state")
-    })?;
-    if returned_state != state {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "oauth state mismatch").into());
-    }
-
-    let client = AnthropicClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
-    let exchange_request =
-        OAuthTokenExchangeRequest::from_config(oauth, code, state, pkce.verifier, redirect_uri);
-    let runtime = tokio::runtime::Runtime::new()?;
-    let token_set = runtime.block_on(client.exchange_oauth_code(oauth, &exchange_request))?;
-    save_oauth_credentials(&runtime::OAuthTokenSet {
-        access_token: token_set.access_token,
-        refresh_token: token_set.refresh_token,
-        expires_at: token_set.expires_at,
-        scopes: token_set.scopes,
-    })?;
-    println!("Claude OAuth login complete.");
+    println!("OAuth login is not supported with the current provider setup.");
+    println!("Set DEEPSEEK_API_KEY, MIMO_API_KEY, or OPENAI_API_KEY env vars to authenticate.");
     Ok(())
 }
 
 fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
     clear_oauth_credentials()?;
-    println!("Claude OAuth credentials cleared.");
+    println!("OAuth credentials cleared.");
     Ok(())
 }
 
@@ -1130,11 +1102,33 @@ fn format_unknown_slash_command_message(name: &str) -> String {
 }
 
 fn format_model_report(model: &str, message_count: usize, turns: u32) -> String {
+    let models = [
+        ("deepseek-chat", "DeepSeek Chat (主力国产)"),
+        ("deepseek-v4-pro", "DeepSeek V4 Pro"),
+        ("mimo-v2.5-pro", "MiMo V2.5 Pro (月之暗面)"),
+        ("gpt-4.1", "GPT-4.1 (ChatGPT)"),
+    ];
+
+    let current_label = "\u{25cf} current";
+    let available_label = "\u{25cb} available";
+
+    let model_list = models
+        .iter()
+        .map(|(name, desc)| {
+            let marker = if model == *name { current_label } else { available_label };
+            format!("  {name:<20} {marker:<12} {desc}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     format!(
         "Model
   Current model    {model}
   Session messages {message_count}
   Session turns    {turns}
+
+Available models
+{model_list}
 
 Usage
   Inspect current model with /model
@@ -1653,7 +1647,7 @@ struct RuntimeMcpState {
 }
 
 struct BuiltRuntime {
-    runtime: Option<ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>>,
+    runtime: Option<ConversationRuntime<SegoRuntimeClient, CliToolExecutor>>,
     plugin_registry: PluginRegistry,
     plugins_active: bool,
     mcp_state: Option<Arc<Mutex<RuntimeMcpState>>>,
@@ -1662,7 +1656,7 @@ struct BuiltRuntime {
 
 impl BuiltRuntime {
     fn new(
-        runtime: ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>,
+        runtime: ConversationRuntime<SegoRuntimeClient, CliToolExecutor>,
         plugin_registry: PluginRegistry,
         mcp_state: Option<Arc<Mutex<RuntimeMcpState>>>,
     ) -> Self {
@@ -1702,7 +1696,7 @@ impl BuiltRuntime {
 }
 
 impl Deref for BuiltRuntime {
-    type Target = ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>;
+    type Target = ConversationRuntime<SegoRuntimeClient, CliToolExecutor>;
 
     fn deref(&self) -> &Self::Target {
         self.runtime.as_ref().expect("runtime should exist while built runtime is alive")
@@ -2416,7 +2410,6 @@ impl LiveCli {
             | SlashCommand::Keybindings
             | SlashCommand::PrivacySettings
             | SlashCommand::Plan { .. }
-            | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
             | SlashCommand::Theme { .. }
             | SlashCommand::Voice { .. }
@@ -2435,6 +2428,10 @@ impl LiveCli {
             | SlashCommand::AddDir { .. } => {
                 eprintln!("Command registered but not yet implemented.");
                 false
+            }
+            SlashCommand::Review { scope } => {
+                self.run_review(scope.as_deref())?;
+                true
             }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", format_unknown_slash_command(&name));
@@ -2566,6 +2563,7 @@ impl LiveCli {
         println!("{}", format_model_switch_report(&previous, &model, message_count));
         Ok(true)
     }
+
 
     fn set_permissions(
         &mut self,
@@ -2952,6 +2950,28 @@ impl LiveCli {
     fn run_issue(&self, context: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", format_issue_report(context));
         Ok(())
+    }
+
+    fn run_review(&mut self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let review_scope = ReviewScope::parse(scope)?;
+        let target = collect_review_target(&env::current_dir()?, review_scope)?;
+        if target.is_empty() {
+            print_clean_review_scope(&target);
+            return Ok(());
+        }
+
+        self.run_review_target(target)
+    }
+
+    fn run_review_target(
+        &mut self,
+        target: ReviewTarget,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let prompt = build_review_prompt(
+            &ReviewContext::new(target),
+            ReviewPromptOptions::default(),
+        );
+        self.run_turn(&prompt)
     }
 }
 
@@ -3827,6 +3847,61 @@ fn render_diff_report_for(cwd: &Path) -> Result<String, Box<dyn std::error::Erro
     Ok(format!("Diff\n\n{}", sections.join("\n\n")))
 }
 
+fn collect_review_target(
+    cwd: &Path,
+    scope: ReviewScope,
+) -> Result<ReviewTarget, Box<dyn std::error::Error>> {
+    let git_status = run_git_diff_command_in(cwd, &["status", "--short", "--branch"])?;
+    let (staged_diff, unstaged_diff) = match &scope {
+        ReviewScope::Workspace => (
+            run_git_diff_command_in(cwd, &["diff", "--cached"])?,
+            run_git_diff_command_in(cwd, &["diff"])?,
+        ),
+        ReviewScope::Staged => (
+            run_git_diff_command_in(cwd, &["diff", "--cached"])?,
+            String::new(),
+        ),
+        ReviewScope::Unstaged => (String::new(), run_git_diff_command_in(cwd, &["diff"])?),
+        ReviewScope::Path(path) => {
+            let path = path.to_string_lossy();
+            (
+                run_git_diff_command_in(cwd, &["diff", "--cached", "--", path.as_ref()])?,
+                run_git_diff_command_in(cwd, &["diff", "--", path.as_ref()])?,
+            )
+        }
+    };
+
+    Ok(ReviewTarget {
+        scope,
+        git_status,
+        staged_diff,
+        unstaged_diff,
+    })
+}
+
+fn run_code_review_cli(
+    model: String,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    scope: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let review_scope = ReviewScope::parse(scope)?;
+    let target = collect_review_target(&env::current_dir()?, review_scope)?;
+    if target.is_empty() {
+        print_clean_review_scope(&target);
+        return Ok(());
+    }
+
+    LiveCli::new(model, true, allowed_tools, permission_mode)?.run_review_target(target)
+}
+
+fn print_clean_review_scope(target: &ReviewTarget) {
+    println!(
+        "Review\n  Result           clean review scope\n  Scope            {}\n  Detail           no current changes",
+        target.scope.label()
+    );
+}
+
 fn run_git_diff_command_in(
     cwd: &Path,
     args: &[&str],
@@ -4562,7 +4637,7 @@ fn build_runtime_with_plugin_state(
         .map_err(std::io::Error::other)?;
     let mut runtime = ConversationRuntime::new_with_features(
         session,
-        AnthropicRuntimeClient::new(
+        SegoRuntimeClient::new(
             session_id,
             model,
             enable_tools,
@@ -4656,9 +4731,9 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
     }
 }
 
-struct AnthropicRuntimeClient {
+struct SegoRuntimeClient {
     runtime: tokio::runtime::Runtime,
-    client: AnthropicClient,
+    client: ProviderClient,
     model: String,
     enable_tools: bool,
     emit_output: bool,
@@ -4667,7 +4742,7 @@ struct AnthropicRuntimeClient {
     progress_reporter: Option<InternalPromptProgressReporter>,
 }
 
-impl AnthropicRuntimeClient {
+impl SegoRuntimeClient {
     fn new(
         session_id: &str,
         model: String,
@@ -4677,11 +4752,11 @@ impl AnthropicRuntimeClient {
         tool_registry: GlobalToolRegistry,
         progress_reporter: Option<InternalPromptProgressReporter>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let client = ProviderClient::from_model(&model)
+            .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
-            client: AnthropicClient::from_auth(resolve_cli_auth_source()?)
-                .with_base_url(api::read_base_url())
-                .with_prompt_cache(PromptCache::new(session_id)),
+            client: client.with_prompt_cache(api::PromptCache::new(session_id)),
             model,
             enable_tools,
             emit_output,
@@ -4692,17 +4767,7 @@ impl AnthropicRuntimeClient {
     }
 }
 
-fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
-    Ok(resolve_startup_auth_source(|| {
-        let cwd = env::current_dir().map_err(api::ApiError::from)?;
-        let config = ConfigLoader::default_for(&cwd).load().map_err(|error| {
-            api::ApiError::Auth(format!("failed to load runtime OAuth config: {error}"))
-        })?;
-        Ok(config.oauth().cloned())
-    })?)
-}
-
-impl ApiClient for AnthropicRuntimeClient {
+impl ApiClient for SegoRuntimeClient {
     #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         if let Some(progress_reporter) = &self.progress_reporter {
@@ -4752,6 +4817,8 @@ impl ApiClient for AnthropicRuntimeClient {
             let mut markdown_stream = MarkdownStreamState::default();
             let mut events = Vec::new();
             let mut pending_tool: Option<(String, String, String)> = None;
+            let mut pending_thinking = String::new();
+            let mut pending_thinking_signature: Option<String> = None;
             let mut saw_stop = false;
 
             while let Some(event) =
@@ -4791,8 +4858,12 @@ impl ApiClient for AnthropicRuntimeClient {
                                 input.push_str(&partial_json);
                             }
                         }
-                        ContentBlockDelta::ThinkingDelta { .. }
-                        | ContentBlockDelta::SignatureDelta { .. } => {}
+                        ContentBlockDelta::ThinkingDelta { thinking } => {
+                            pending_thinking.push_str(&thinking);
+                        }
+                        ContentBlockDelta::SignatureDelta { signature } => {
+                            pending_thinking_signature = Some(signature);
+                        }
                     },
                     ApiStreamEvent::ContentBlockStop(_) => {
                         if let Some(rendered) = markdown_stream.flush(&renderer) {
@@ -4821,12 +4892,25 @@ impl ApiClient for AnthropicRuntimeClient {
                                 .and_then(|()| out.flush())
                                 .map_err(|error| RuntimeError::new(error.to_string()))?;
                         }
+                        if !pending_thinking.is_empty() {
+                            events.push(AssistantEvent::Thinking {
+                                thinking: std::mem::take(&mut pending_thinking),
+                                signature: pending_thinking_signature.take(),
+                            });
+                        }
                         events.push(AssistantEvent::MessageStop);
                     }
                 }
             }
 
             push_prompt_cache_record(&self.client, &mut events);
+
+            if !pending_thinking.is_empty() {
+                events.push(AssistantEvent::Thinking {
+                    thinking: std::mem::take(&mut pending_thinking),
+                    signature: pending_thinking_signature.take(),
+                });
+            }
 
             if !saw_stop
                 && events.iter().any(|event| {
@@ -5422,7 +5506,7 @@ fn response_to_events(
     Ok(events)
 }
 
-fn push_prompt_cache_record(client: &AnthropicClient, events: &mut Vec<AssistantEvent>) {
+fn push_prompt_cache_record(client: &ProviderClient, events: &mut Vec<AssistantEvent>) {
     if let Some(record) = client.take_last_prompt_cache_record() {
         if let Some(event) = prompt_cache_record_to_runtime_event(record) {
             events.push(AssistantEvent::PromptCache(event));
@@ -6054,10 +6138,12 @@ mod tests {
 
     #[test]
     fn resolves_known_model_aliases() {
-        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
-        assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
-        assert_eq!(resolve_model_alias("claude-opus"), "claude-opus");
+        assert_eq!(resolve_model_alias("deepseek"), "deepseek-chat");
+        assert_eq!(resolve_model_alias("ds"), "deepseek-chat");
+        assert_eq!(resolve_model_alias("deepseek-pro"), "deepseek-v4-pro");
+        assert_eq!(resolve_model_alias("mimo"), "mimo-v2.5-pro");
+        assert_eq!(resolve_model_alias("gpt"), "gpt-4.1");
+        assert_eq!(resolve_model_alias("unknown-model"), "unknown-model");
     }
 
     #[test]
@@ -6175,11 +6261,12 @@ mod tests {
             CliAction::Status {
                 model: default_model(),
                 permission_mode: PermissionMode::DangerFullAccess,
+                output_format: CliOutputFormat::Text,
             }
         );
         assert_eq!(
             parse_args(&["sandbox".to_string()]).expect("sandbox should parse"),
-            CliAction::Sandbox
+            CliAction::Sandbox { output_format: CliOutputFormat::Text }
         );
     }
 
@@ -6236,10 +6323,28 @@ mod tests {
             .expect("/skills install should parse"),
             CliAction::Skills { args: Some("install ./fixtures/help-skill".to_string()) }
         );
+        assert_eq!(
+            parse_args(&["/review".to_string(), "staged".to_string()])
+                .expect("/review staged should parse"),
+            CliAction::CodeReview {
+                scope: Some("staged".to_string()),
+                model: default_model(),
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+            }
+        );
         let error = parse_args(&["/status".to_string()])
             .expect_err("/status should remain REPL-only when invoked directly");
         assert!(error.contains("interactive-only"));
         assert!(error.contains("claw --resume SESSION.jsonl /status"));
+    }
+
+    #[test]
+    fn keeps_bare_review_as_workflow_review() {
+        assert_eq!(
+            parse_args(&["review".to_string()]).expect("review should parse"),
+            CliAction::Review { last_n: None, output_format: CliOutputFormat::Text }
+        );
     }
 
     #[test]

@@ -69,6 +69,7 @@ pub struct WorkflowTrends {
 /// Persistent store for workflow data.
 #[derive(Debug, Clone)]
 pub struct WorkflowStore {
+    #[allow(dead_code)]
     root: PathBuf,
     sessions_dir: PathBuf,
     trends_path: PathBuf,
@@ -211,6 +212,8 @@ impl WorkflowStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::SessionSummary;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn initializes_workflow_directories() {
@@ -250,7 +253,7 @@ mod tests {
 
         let report = SessionReport {
             session_id: "s1".to_string(),
-            session_summary: super::report::SessionSummary::default(),
+            session_summary: SessionSummary::default(),
             efficiency_score: 85.0,
             failure_count: 1,
             recovery_attempts: 1,

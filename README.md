@@ -1,8 +1,8 @@
 # 🦞 sego
 
 <p align="center">
-  <strong>The AI coding agent that learns from every run.</strong><br>
-  Open-source · Rust-native · Model-agnostic · Self-evolving
+  <strong>Engineering Trust Runtime for AI coding.</strong><br>
+  Open-source · Rust-native · Model-agnostic · Review-first
 </p>
 
 <p align="center">
@@ -16,31 +16,29 @@
 
 ## Why sego exists
 
-There are hundreds of AI coding tools. Every single one follows the same pattern:
+AI coding tools are good at producing changes. The hard part is proving those changes are safe to merge.
 
-```
-Input task → Execute → Output result → End (start from scratch next time)
-```
+Sego focuses on the trust layer between code generation and delivery:
 
-**sego is different.** It runs the same loop, but adds something none of them have:
+**Generate** with Claude Code, Codex, Cursor, OpenHands, or any other authoring tool.
+**Use Sego** to review the diff, verify evidence, preserve engineering memory, and prepare the change for shipping.
 
-```
-Input task → Execute → Record lane events → Output result
-                          ↓
-              Diagnose failures (11 types)
-                          ↓
-              Match recovery recipe (7 built-in)
-                          ↓
-              Auto-heal → Policy engine learns → Better next time
-```
+---
 
-**Three things sego gives you that no other tool does:**
+### Product Direction
 
-1. **Record** — Every session is tracked as structured Lane Events. You know exactly what happened, what failed, and why.
-2. **Recover** — 11 failure types auto-classified. 7 built-in recovery recipes. sego fixes itself before asking for help.
-3. **Evolve** — Policy engine learns from history. Green Contract enforces quality. Your agent gets smarter every run.
+Sego is evolving from an agentic CLI into an **Engineering Trust Runtime**:
 
-> **You don't just use sego. sego learns how you work.**
+1. **Review** — inspect diffs with read-only, evidence-based code review.
+2. **Verify** — connect findings to tests, builds, lint, and reproducible evidence.
+3. **Memory** — retain accepted findings, false positives, missed issues, and project rules.
+4. **Ship** — produce auditable PR/commit reports and release gates.
+
+The first milestone is the real `/review` command.
+
+Sego also retains its existing capabilities: self-learning workflow recording, failure auto-recovery, policy engine, and Green Contract quality gates — these form the foundation for the trust runtime.
+
+---
 
 ---
 
@@ -146,6 +144,13 @@ sego --resume latest          # Continue last session
 sego status                   # Workspace snapshot
 sego doctor                   # System diagnostics
 sego --output-format json status  # Machine-readable output
+
+# Code review commands
+sego /review                  # Review workspace diff
+sego /review staged           # Review staged changes only
+sego /review unstaged         # Review unstaged changes only
+sego /review path/to/file.rs  # Review a path-scoped diff
+sego review                   # Workflow/session review (not code review)
 ```
 
 ### Model Support
@@ -168,6 +173,7 @@ rust/
 │   ├── api/                    # Anthropic-compatible client + SSE streaming
 │   ├── commands/               # Slash command registry (/help, /status, /cost...)
 │   ├── runtime/                # Core loop, sessions, permissions, MCP, prompts
+│   │   ├── code_review/        # Review scope, prompt contract, finding schema
 │   │   ├── lane_events.rs      #   ─┐
 │   │   ├── recovery_recipes.rs #    ├─ Self-learning system
 │   │   ├── policy_engine.rs    #    │
@@ -512,7 +518,26 @@ All data helps improve recovery recipes, efficiency benchmarks, and API compatib
 
 ## Roadmap
 
-### Done
+### Phase 1: AI Review Runtime
+- [x] `/review` MVP — read-only, scope-aware, evidence-based code review
+- [x] DeepSeek `reasoning_content` compatibility
+- [ ] structured finding parser
+- [ ] diff hash binding
+- [ ] review artifacts (`.sego`)
+
+### Phase 2: AI Trust Runtime
+- [ ] `/verify` — connect findings to tests, builds, lint, reproducible evidence
+- [ ] evidence collection and attestation
+- [ ] `.sego` local memory
+- [ ] AgentGit-backed session memory
+
+### Phase 3: AI Engineering Runtime
+- [ ] data-flow impact review
+- [ ] worktree lanes
+- [ ] PR adapter
+- [ ] CI gate
+
+### Existing (retained foundation)
 - [x] Anthropic API + SSE streaming
 - [x] Interactive REPL + one-shot prompt
 - [x] 40+ built-in tools (bash, file ops, search, web, agents, MCP, LSP)
@@ -523,13 +548,6 @@ All data helps improve recovery recipes, efficiency benchmarks, and API compatib
 - [x] Green Contract — 4-level quality enforcement
 - [x] Session persistence + resume
 - [x] Multi-provider ready (any Anthropic-compatible API)
-
-### Next up
-- [ ] `sego review` — structured workflow analysis command
-- [ ] `sego learn` — historical trend analysis and optimization suggestions
-- [ ] Pre-built binary releases (GitHub Releases)
-- [ ] Plugin marketplace
-- [ ] Team dashboard (web UI for Lane Events across team members)
 
 ---
 
@@ -554,6 +572,6 @@ MIT © 2026 sego contributors
 ---
 
 <p align="center">
-  <strong>sego — The AI coding agent that learns from every run.</strong><br>
-  <sub>Open source. Rust native. Model free. Always improving.</sub>
+  <strong>Sego — Engineering Trust Runtime for AI coding.</strong><br>
+  <sub>Build with any AI. Review, verify, and ship with evidence.</sub>
 </p>
