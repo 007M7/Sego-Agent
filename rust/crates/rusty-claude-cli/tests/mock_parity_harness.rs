@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)] use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -276,7 +276,7 @@ struct ScenarioReport {
 }
 
 fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) -> ScenarioRun {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_claw"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sego"));
     command
         .current_dir(&workspace.root)
         .env_clear()
@@ -386,7 +386,7 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
     )
     .expect("plugin script should write");
     let mut permissions = fs::metadata(&script_path).expect("plugin script metadata").permissions();
-    permissions.set_mode(0o755);
+    #[cfg(unix)] { permissions.set_mode(0o755); }
     fs::set_permissions(&script_path, permissions).expect("plugin script should be executable");
 
     fs::write(

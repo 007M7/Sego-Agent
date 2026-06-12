@@ -1672,7 +1672,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
                 "method": method,
                 "status_code": status,
                 "body": truncated_body,
-                "success": status >= 200 && status < 300
+                "success": (200..300).contains(&status)
             }))
         }
         Err(e) => to_pretty_json(json!({
@@ -1790,8 +1790,7 @@ fn git_ref_exists(reference: &str) -> bool {
     Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", reference])
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn git_stdout(args: &[&str]) -> Option<String> {
@@ -4648,8 +4647,7 @@ fn command_exists(command: &str) -> bool {
         .arg("-lc")
         .arg(format!("command -v {command} >/dev/null 2>&1"))
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -5347,6 +5345,7 @@ mod tests {
         let mut events = Vec::new();
         let mut pending_tools = BTreeMap::new();
 
+        let mut pending_thinking: std::collections::BTreeMap<u32, (String, Option<String>)> = std::collections::BTreeMap::new();
         push_output_block(
             OutputContentBlock::ToolUse {
                 id: "tool-1".to_string(),
@@ -5356,6 +5355,7 @@ mod tests {
             1,
             &mut events,
             &mut pending_tools,
+            &mut pending_thinking,
             true,
         );
         push_output_block(
@@ -5367,6 +5367,7 @@ mod tests {
             2,
             &mut events,
             &mut pending_tools,
+            &mut pending_thinking,
             true,
         );
 

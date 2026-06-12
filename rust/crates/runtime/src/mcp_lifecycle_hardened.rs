@@ -245,12 +245,17 @@ impl McpLifecycleValidator {
             | (McpLifecyclePhase::ServerRegistration, McpLifecyclePhase::SpawnConnect)
             | (McpLifecyclePhase::SpawnConnect, McpLifecyclePhase::InitializeHandshake)
             | (McpLifecyclePhase::InitializeHandshake, McpLifecyclePhase::ToolDiscovery)
-            | (McpLifecyclePhase::ToolDiscovery, McpLifecyclePhase::ResourceDiscovery)
-            | (McpLifecyclePhase::ToolDiscovery, McpLifecyclePhase::Ready)
-            | (McpLifecyclePhase::ResourceDiscovery, McpLifecyclePhase::Ready)
+            | (
+                McpLifecyclePhase::ToolDiscovery,
+                McpLifecyclePhase::ResourceDiscovery | McpLifecyclePhase::Ready,
+            )
+            | (
+                McpLifecyclePhase::ResourceDiscovery
+                | McpLifecyclePhase::Invocation
+                | McpLifecyclePhase::ErrorSurfacing,
+                McpLifecyclePhase::Ready,
+            )
             | (McpLifecyclePhase::Ready, McpLifecyclePhase::Invocation)
-            | (McpLifecyclePhase::Invocation, McpLifecyclePhase::Ready)
-            | (McpLifecyclePhase::ErrorSurfacing, McpLifecyclePhase::Ready)
             | (McpLifecyclePhase::ErrorSurfacing, McpLifecyclePhase::Shutdown)
             | (McpLifecyclePhase::Shutdown, McpLifecyclePhase::Cleanup) => true,
             (_, McpLifecyclePhase::Shutdown) => from != McpLifecyclePhase::Cleanup,

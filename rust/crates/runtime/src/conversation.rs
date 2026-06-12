@@ -312,6 +312,32 @@ where
                 return Err(error);
             }
 
+            // Pre-request compaction: compact if estimated tokens near context limit
+            if iterations == 1 {
+                let estimated: usize = self
+                    .session
+                    .messages
+                    .iter()
+                    .flat_map(|m| m.blocks.iter())
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => text.len() / 4 + 1,
+                        ContentBlock::ToolUse { input, .. } => input.len() / 4 + 20,
+                        ContentBlock::ToolResult { output, .. } => output.len() / 4 + 20,
+                        ContentBlock::Thinking { thinking, .. } => thinking.len() / 4 + 1,
+                    })
+                    .sum();
+                // Compact if estimated > 500K tokens (~50% of 1M context)
+                if estimated > 500_000 {
+                    let result = compact_session(
+                        &self.session,
+                        CompactionConfig { max_estimated_tokens: 0, ..CompactionConfig::default() },
+                    );
+                    if result.removed_message_count > 0 {
+                        self.session = result.compacted_session;
+                    }
+                }
+            }
+
             let request = ApiRequest {
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),

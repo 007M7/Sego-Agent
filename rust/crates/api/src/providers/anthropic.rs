@@ -121,7 +121,11 @@ impl AnthropicClient {
     #[must_use]
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(600))
+                .build()
+                .expect("failed to build HTTP client"),
             auth: AuthSource::ApiKey(api_key.into()),
             base_url: DEFAULT_BASE_URL.to_string(),
             max_retries: DEFAULT_MAX_RETRIES,
@@ -137,7 +141,11 @@ impl AnthropicClient {
     #[must_use]
     pub fn from_auth(auth: AuthSource) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(600))
+                .build()
+                .expect("failed to build HTTP client"),
             auth,
             base_url: DEFAULT_BASE_URL.to_string(),
             max_retries: DEFAULT_MAX_RETRIES,
@@ -724,19 +732,17 @@ impl MessageStream {
             StreamEvent::MessageDelta(MessageDeltaEvent { usage, .. }) => {
                 self.latest_usage = Some(usage.clone());
             }
-            StreamEvent::MessageStop(_) => {
-                if !self.usage_recorded {
-                    if let (Some(prompt_cache), Some(usage)) =
-                        (&self.prompt_cache, self.latest_usage.as_ref())
-                    {
-                        let record = prompt_cache.record_usage(&self.request, usage);
-                        *self
-                            .last_prompt_cache_record
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record);
-                    }
-                    self.usage_recorded = true;
+            StreamEvent::MessageStop(_) if !self.usage_recorded => {
+                if let (Some(prompt_cache), Some(usage)) =
+                    (&self.prompt_cache, self.latest_usage.as_ref())
+                {
+                    let record = prompt_cache.record_usage(&self.request, usage);
+                    *self
+                        .last_prompt_cache_record
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record);
                 }
+                self.usage_recorded = true;
             }
             _ => {}
         }

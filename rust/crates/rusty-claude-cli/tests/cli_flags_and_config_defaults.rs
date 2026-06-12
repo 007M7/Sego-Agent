@@ -15,7 +15,7 @@ fn status_command_applies_model_and_permission_mode_flags() {
     fs::create_dir_all(&temp_dir).expect("temp dir should exist");
 
     // when
-    let output = Command::new(env!("CARGO_BIN_EXE_claw"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sego"))
         .current_dir(&temp_dir)
         .args(["--model", "sonnet", "--permission-mode", "read-only", "status"])
         .output()
@@ -39,7 +39,7 @@ fn resume_flag_loads_a_saved_session_and_dispatches_status() {
     let session_path = write_session(&temp_dir, "resume-status");
 
     // when
-    let output = Command::new(env!("CARGO_BIN_EXE_claw"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sego"))
         .current_dir(&temp_dir)
         .args(["--resume", session_path.to_str().expect("utf8 path"), "/status"])
         .output()
@@ -63,12 +63,12 @@ fn slash_command_names_match_known_commands_and_suggest_nearby_unknown_ones() {
     fs::create_dir_all(&temp_dir).expect("temp dir should exist");
 
     // when
-    let help_output = Command::new(env!("CARGO_BIN_EXE_claw"))
+    let help_output = Command::new(env!("CARGO_BIN_EXE_sego"))
         .current_dir(&temp_dir)
         .arg("/help")
         .output()
         .expect("claw should launch");
-    let unknown_output = Command::new(env!("CARGO_BIN_EXE_claw"))
+    let unknown_output = Command::new(env!("CARGO_BIN_EXE_sego"))
         .current_dir(&temp_dir)
         .arg("/zstats")
         .output()
@@ -133,7 +133,7 @@ fn config_command_loads_defaults_from_standard_config_locations() {
 }
 
 fn command_in(cwd: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_claw"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sego"));
     command.current_dir(cwd);
     command
 }

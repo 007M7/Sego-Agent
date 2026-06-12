@@ -185,7 +185,7 @@ impl SessionReport {
             "failure_count": self.failure_count,
             "recovery_attempts": self.recovery_attempts,
             "recovery_successes": self.recovery_successes,
-            "green_level": self.green_level.map(|g| g.as_str()),
+            "green_level": self.green_level.map(super::super::green_contract::GreenLevel::as_str),
             "duration_display": self.session_summary.duration_display,
             "total_events": self.session_summary.total_events,
             "suggestions": self.suggestions,

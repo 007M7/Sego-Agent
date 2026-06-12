@@ -113,11 +113,13 @@ impl WorkflowStore {
         );
         record.insert(
             "green_level".to_string(),
-            serde_json::json!(snapshot.green_level.map(|g| g.as_str())),
+            serde_json::json!(snapshot
+                .green_level
+                .map(super::super::green_contract::GreenLevel::as_str)),
         );
 
         let timestamp = snapshot.started_at.as_deref().unwrap_or("unknown").replace(':', "-");
-        let filename = format!("{}.json", timestamp);
+        let filename = format!("{timestamp}.json");
         let path = self.sessions_dir.join(&filename);
 
         let json = serde_json::to_string_pretty(&record)?;
@@ -174,7 +176,7 @@ impl WorkflowStore {
             return Ok(Vec::new());
         }
         let mut paths: Vec<PathBuf> = fs::read_dir(&self.sessions_dir)?
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
             .collect();

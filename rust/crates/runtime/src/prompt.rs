@@ -38,6 +38,7 @@ impl From<ConfigError> for PromptBuildError {
 /// Marker separating static prompt scaffolding from dynamic runtime context.
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
 /// Human-readable default frontier model name embedded into generated prompts.
+#[must_use]
 pub fn frontier_model_name() -> String {
     std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "deepseek-v4-pro[1m]".to_string())
 }

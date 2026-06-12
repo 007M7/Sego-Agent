@@ -52,9 +52,9 @@ use runtime::{
     LaneBlocker, LaneContext, LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus,
     LaneFailureClass, ReviewContext, ReviewPromptOptions, ReviewScope, ReviewTarget,
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, ReviewStatus, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
+    ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewStatus,
+    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -192,15 +192,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::PrintSystemPrompt { cwd, date } => print_system_prompt(cwd, date),
         CliAction::Version => print_version(),
         CliAction::ResumeSession { session_path, commands } => {
-            resume_session(&session_path, &commands)
+            resume_session(&session_path, &commands);
         }
         CliAction::Status { model, permission_mode, output_format } => {
-            print_status_snapshot(&model, permission_mode, output_format)?
+            print_status_snapshot(&model, permission_mode, output_format)?;
         }
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
             LiveCli::new(model, true, allowed_tools, permission_mode)?
-                .run_turn_with_output(&prompt, output_format)?
+                .run_turn_with_output(&prompt, output_format)?;
         }
         CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
             run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?
@@ -209,16 +209,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
         CliAction::Repl { model, allowed_tools, permission_mode } => {
-            run_repl(model, allowed_tools, permission_mode)?
+            run_repl(model, allowed_tools, permission_mode)?;
         }
         CliAction::Help => print_help(),
         CliAction::Review { last_n, output_format } => {
-            print_workflow_review(last_n, output_format)?
+            print_workflow_review(last_n, output_format)?;
         }
         CliAction::Learn { output_format } => print_workflow_learn(output_format)?,
         CliAction::Doctor { output_format } => print_doctor(output_format)?,
         CliAction::Telemetry { action, output_format } => {
-            print_telemetry(action.as_deref(), output_format)?
+            print_telemetry(action.as_deref(), output_format)?;
         }
     }
     Ok(())
@@ -507,7 +507,7 @@ fn parse_single_word_command_alias(
         "learn" => Some(Ok(CliAction::Learn { output_format: CliOutputFormat::Text })),
         "doctor" => Some(Ok(CliAction::Doctor { output_format: CliOutputFormat::Text })),
         "telemetry" => {
-            let action = rest.get(1).map(|s| s.to_string());
+            let action = rest.get(1).cloned();
             Some(Ok(CliAction::Telemetry { action, output_format: CliOutputFormat::Text }))
         }
         other => bare_slash_command_guidance(other).map(Err),
@@ -622,7 +622,7 @@ fn format_unknown_slash_command(name: &str) -> String {
 }
 
 fn render_suggestion_line(label: &str, suggestions: &[String]) -> Option<String> {
-    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", "),))
+    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", ")))
 }
 
 fn suggest_slash_commands(input: &str) -> Vec<String> {
@@ -769,7 +769,16 @@ fn filter_tool_specs(
     tool_registry: &GlobalToolRegistry,
     allowed_tools: Option<&AllowedToolSet>,
 ) -> Vec<ToolDefinition> {
-    tool_registry.definitions(allowed_tools)
+    // Token-saving: by default, only send essential tools (~15 instead of 54)
+    // Use --allowedTools all for full toolset
+    if let Some(ref set) = allowed_tools {
+        if set.contains("all") {
+            return tool_registry.definitions(None);
+        }
+        return tool_registry.definitions(allowed_tools);
+    }
+    let lite: &AllowedToolSet = &LITE_TOOLS;
+    tool_registry.definitions(Some(lite))
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
@@ -2186,16 +2195,22 @@ impl LiveCli {
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
-        let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
-        spinner.tick("🦀 Thinking...", TerminalRenderer::new().color_theme(), &mut stdout)?;
+        let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
+        ui.add_phase("thinking", "Thinking");
+        ui.add_phase("exec", "Executing");
+        let _ = ui.start();
+        let thinking_phase = 0usize;
+        let exec_phase = 1usize;
+        ui.phase_idx(thinking_phase).start();
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        ui.phase_idx(exec_phase).complete("Done", "");
         hook_abort_monitor.stop();
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                spinner.finish("✨ Done", TerminalRenderer::new().color_theme(), &mut stdout)?;
+                ui.finish("Done")?;
                 println!();
                 if let Some(event) = summary.auto_compaction {
                     println!("{}", format_auto_compaction_notice(event.removed_message_count));
@@ -2219,11 +2234,8 @@ impl LiveCli {
                         detail: error.to_string(),
                     },
                 ));
-                spinner.fail(
-                    "❌ Request failed",
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                ui.phase_idx(thinking_phase).fail("Request failed", &error.to_string());
+                let _ = ui.finish("Failed");
                 Err(Box::new(error))
             }
         }
@@ -3421,7 +3433,7 @@ fn print_workflow_review(
                 let green = session["green_level"].as_str().unwrap_or("not set");
                 let task = session["task_description"].as_str().unwrap_or("untitled");
 
-                println!("  {session_id}  {:>5.0}%  {task}", efficiency);
+                println!("  {session_id}  {efficiency:>5.0}%  {task}");
                 println!("    failures={failures}  recoveries={recoveries}  green={green}");
                 println!();
             }
@@ -3484,7 +3496,7 @@ fn print_workflow_learn(output_format: CliOutputFormat) -> Result<(), Box<dyn st
             println!(
                 "  Recovery rate:       {:.0}%",
                 if trends.total_failures > 0 {
-                    trends.total_recoveries as f64 / trends.total_failures as f64 * 100.0
+                    f64::from(trends.total_recoveries) / f64::from(trends.total_failures) * 100.0
                 } else {
                     100.0
                 }
@@ -3515,15 +3527,14 @@ fn print_workflow_learn(output_format: CliOutputFormat) -> Result<(), Box<dyn st
 
             if trends.total_recoveries > 0 {
                 let recovery_rate = if trends.total_failures > 0 {
-                    trends.total_recoveries as f64 / trends.total_failures as f64 * 100.0
+                    f64::from(trends.total_recoveries) / f64::from(trends.total_failures) * 100.0
                 } else {
                     100.0
                 };
                 let recoveries = trends.total_recoveries;
                 let total = trends.total_failures;
                 suggestions.push(format!(
-                    "Recovery system: {recoveries} recoveries from {total} failures ({rate:.0}% success rate).",
-                    rate = recovery_rate
+                    "Recovery system: {recoveries} recoveries from {total} failures ({recovery_rate:.0}% success rate)."
                 ));
             }
 
@@ -3598,7 +3609,7 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
             println!("    In container:   {}", sandbox.in_container);
             println!();
             println!("  Config files:     {} loaded", runtime_config.loaded_entries().len());
-            if let Some(status) = status_context(None).ok() {
+            if let Ok(status) = status_context(None) {
                 println!(
                     "  Git branch:       {}",
                     status.git_branch.as_deref().unwrap_or("unknown")
@@ -3633,7 +3644,7 @@ fn print_telemetry(
             match output_format {
                 CliOutputFormat::Text => println!("Community learning telemetry: DISABLED"),
                 CliOutputFormat::Json => {
-                    println!("{}", serde_json::json!({"telemetry": "disabled"}))
+                    println!("{}", serde_json::json!({"telemetry": "disabled"}));
                 }
             }
         }
@@ -3793,7 +3804,7 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
         for (index, file) in project_context.instruction_files.iter().enumerate() {
             let preview = file.content.lines().next().unwrap_or("").trim();
             let preview = if preview.is_empty() { "<empty>" } else { preview };
-            lines.push(format!("  {}. {}", index + 1, file.path.display(),));
+            lines.push(format!("  {}. {}", index + 1, file.path.display()));
             lines.push(format!("     lines={} preview={}", file.content.lines().count(), preview));
         }
     }
@@ -4087,7 +4098,7 @@ fn git_status_ok(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn command_exists(name: &str) -> bool {
-    Command::new("which").arg(name).output().map(|output| output.status.success()).unwrap_or(false)
+    Command::new("which").arg(name).output().is_ok_and(|output| output.status.success())
 }
 
 fn write_temp_text_file(
@@ -4668,7 +4679,10 @@ impl runtime::HookProgressReporter for CliHookProgressReporter {
     fn on_event(&mut self, event: &runtime::HookProgressEvent) {
         match event {
             runtime::HookProgressEvent::Started { event, tool_name, command } => {
-                eprintln!("[hook {event_name}] {tool_name}: {command}", event_name = event.as_str())
+                eprintln!(
+                    "[hook {event_name}] {tool_name}: {command}",
+                    event_name = event.as_str()
+                );
             }
             runtime::HookProgressEvent::Completed { event, tool_name, command } => eprintln!(
                 "[hook done {event_name}] {tool_name}: {command}",
@@ -4773,7 +4787,7 @@ impl ApiClient for SegoRuntimeClient {
         if let Some(progress_reporter) = &self.progress_reporter {
             progress_reporter.mark_model_phase();
         }
-        // Context window preflight check
+        // Context window preflight check with automatic max_tokens reduction
         let estimated_chars: usize = request
             .messages
             .iter()
@@ -4786,15 +4800,32 @@ impl ApiClient for SegoRuntimeClient {
             })
             .sum();
         let estimated_tokens = (estimated_chars / 4) as u32;
-        let max_out = max_tokens_for_model(&self.model);
-        if let Some(warning) = check_context_preflight(&self.model, estimated_tokens, max_out) {
+        let context_limit = context_window_limit(&self.model);
+        let requested_max = max_tokens_for_model(&self.model);
+        // Auto-reduce max_tokens if estimated input + requested output exceeds context window
+        let safe_max_tokens = if estimated_tokens + requested_max > context_limit {
+            let reduced = context_limit.saturating_sub(estimated_tokens).max(1024);
             if self.emit_output {
-                eprintln!("{warning}");
+                eprintln!(
+                    "⚠ Context: estimated {estimated_tokens} input tokens + {requested_max} output exceeds {context_limit} limit. Reducing max_tokens to ~{reduced}."
+                );
             }
-        }
+            reduced
+        } else if estimated_tokens + requested_max > context_limit * 90 / 100 {
+            if self.emit_output {
+                eprintln!(
+                    "⚠ Approaching context limit: ~{} / {} tokens. Consider /compact soon.",
+                    estimated_tokens + requested_max,
+                    context_limit
+                );
+            }
+            requested_max
+        } else {
+            requested_max
+        };
         let message_request = MessageRequest {
             model: self.model.clone(),
-            max_tokens: max_tokens_for_model(&self.model),
+            max_tokens: safe_max_tokens,
             messages: convert_messages(&request.messages),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: self
@@ -5157,10 +5188,35 @@ fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
 
 const DISPLAY_TRUNCATION_NOTICE: &str =
     "\x1b[2m… output truncated for display; full result preserved in session.\x1b[0m";
-const READ_DISPLAY_MAX_LINES: usize = 80;
-const READ_DISPLAY_MAX_CHARS: usize = 6_000;
-const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 60;
-const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 4_000;
+const READ_DISPLAY_MAX_LINES: usize = 40;
+const READ_DISPLAY_MAX_CHARS: usize = 3_000;
+const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 15;
+const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 1_500;
+
+/// Default token-saving tool set — only the 15 most-used tools
+static LITE_TOOLS: std::sync::LazyLock<AllowedToolSet> = std::sync::LazyLock::new(|| {
+    [
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "grep",
+        "glob",
+        "web_search",
+        "web_fetch",
+        "agent",
+        "todo_write",
+        "task",
+        "ask_user_question",
+        "skill",
+        "notebook_edit",
+        "enter_plan_mode",
+        "exit_plan_mode",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+});
 
 fn extract_tool_path(parsed: &serde_json::Value) -> String {
     parsed
@@ -5205,40 +5261,41 @@ fn first_visible_line(text: &str) -> &str {
 fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     use std::fmt::Write as _;
 
-    let mut lines = vec![format!("{icon} \x1b[38;5;245mbash\x1b[0m")];
+    let exit_code = parsed.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
+    let status = if exit_code == 0 { "" } else { &" \x1b[38;5;203merror\x1b[0m" };
+    let mut header = format!("{icon} \x1b[38;5;245mbash\x1b[0m{status}");
+
     if let Some(task_id) = parsed.get("backgroundTaskId").and_then(|value| value.as_str()) {
-        write!(&mut lines[0], " backgrounded ({task_id})").expect("write to string");
-    } else if let Some(status) = parsed
-        .get("returnCodeInterpretation")
-        .and_then(|value| value.as_str())
-        .filter(|status| !status.is_empty())
-    {
-        write!(&mut lines[0], " {status}").expect("write to string");
+        write!(&mut header, " backgrounded ({task_id})").expect("write");
     }
 
-    if let Some(stdout) = parsed.get("stdout").and_then(|value| value.as_str()) {
-        if !stdout.trim().is_empty() {
-            lines.push(truncate_output_for_display(
-                stdout,
-                TOOL_OUTPUT_DISPLAY_MAX_LINES,
-                TOOL_OUTPUT_DISPLAY_MAX_CHARS,
-            ));
-        }
-    }
-    if let Some(stderr) = parsed.get("stderr").and_then(|value| value.as_str()) {
-        if !stderr.trim().is_empty() {
-            lines.push(format!(
-                "\x1b[38;5;203m{}\x1b[0m",
-                truncate_output_for_display(
-                    stderr,
-                    TOOL_OUTPUT_DISPLAY_MAX_LINES,
-                    TOOL_OUTPUT_DISPLAY_MAX_CHARS,
-                )
-            ));
+    let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = parsed.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Clean one-liner: show first non-empty line of output as preview
+    let preview_line =
+        stdout.lines().chain(stderr.lines()).find(|l| !l.trim().is_empty()).unwrap_or("");
+    let preview = truncate_for_summary(preview_line.trim(), 100);
+
+    let mut lines = vec![header];
+
+    if !stdout.trim().is_empty() {
+        let trimmed = stdout.trim();
+        let line_count = stdout.lines().count();
+        if line_count <= 3 && trimmed.len() < 200 {
+            // Short output: show inline
+            lines.push(format!("\x1b[2m{}\x1b[0m", trimmed));
+        } else if !preview.is_empty() {
+            lines.push(format!("\x1b[2m{}\x1b[0m", preview));
         }
     }
 
-    lines.join("\n\n")
+    if !stderr.trim().is_empty() {
+        let stderr_preview = truncate_for_summary(stderr.trim(), 80);
+        lines.push(format!("\x1b[38;5;203m{}\x1b[0m", stderr_preview));
+    }
+
+    lines.join("\n")
 }
 
 fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
@@ -5554,14 +5611,11 @@ impl CliToolExecutor {
     fn execute_search_tool(&self, value: serde_json::Value) -> Result<String, ToolError> {
         let input: ToolSearchRequest = serde_json::from_value(value)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
-        let (pending_mcp_servers, mcp_degraded) = self
-            .mcp_state
-            .as_ref()
-            .map(|state| {
+        let (pending_mcp_servers, mcp_degraded) =
+            self.mcp_state.as_ref().map_or((None, None), |state| {
                 let state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (state.pending_servers(), state.degraded_report())
-            })
-            .unwrap_or((None, None));
+            });
         serde_json::to_string_pretty(&self.tool_registry.search(
             &input.query,
             input.max_results.unwrap_or(5),

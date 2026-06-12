@@ -4,6 +4,7 @@
 //! MCP plumbing, tool-facing file operations, and the core conversation loop
 //! that drives interactive and one-shot turns.
 
+pub mod active_task;
 mod bash;
 pub mod bash_validation;
 mod bootstrap;
@@ -47,6 +48,10 @@ mod usage;
 pub mod worker_boot;
 pub mod workflow;
 
+pub use active_task::{
+    generate_task_id, ActiveTask, ActiveTaskError, ActiveTaskStatus, ActiveTaskStore,
+    TrackedProcess,
+};
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::BranchLockRegistry;

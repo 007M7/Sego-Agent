@@ -50,7 +50,7 @@ impl BranchLockRegistry {
             locked_at_secs: now_secs(),
         };
 
-        if let Err(_) = self.persist_lock(&lock) {
+        if self.persist_lock(&lock).is_err() {
             return false;
         }
 
@@ -111,7 +111,7 @@ impl BranchLockRegistry {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
