@@ -11,10 +11,7 @@ pub struct ReviewPromptOptions {
 
 impl Default for ReviewPromptOptions {
     fn default() -> Self {
-        Self {
-            max_diff_chars: DEFAULT_MAX_DIFF_CHARS,
-            max_rule_chars: DEFAULT_MAX_RULE_CHARS,
-        }
+        Self { max_diff_chars: DEFAULT_MAX_DIFF_CHARS, max_rule_chars: DEFAULT_MAX_RULE_CHARS }
     }
 }
 
@@ -38,10 +35,8 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
 
     if !context.project_rules.is_empty() {
         prompt.push("Project rules:".to_string());
-        prompt.push(truncate_for_prompt(
-            &context.project_rules.join("\n\n"),
-            options.max_rule_chars,
-        ));
+        prompt
+            .push(truncate_for_prompt(&context.project_rules.join("\n\n"), options.max_rule_chars));
         prompt.push(String::new());
     }
 
@@ -56,10 +51,7 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
         prompt.push("Diff: no current changes for this review scope.".to_string());
     } else {
         prompt.push("Diff:".to_string());
-        prompt.push(fenced(
-            "diff",
-            &truncate_for_prompt(&diff, options.max_diff_chars),
-        ));
+        prompt.push(fenced("diff", &truncate_for_prompt(&diff, options.max_diff_chars)));
     }
 
     prompt.join("\n")
@@ -70,10 +62,8 @@ fn diff_for_scope(context: &ReviewContext) -> String {
         ReviewScope::Workspace | ReviewScope::Path(_) => {
             let mut sections = Vec::new();
             if !context.target.staged_diff.trim().is_empty() {
-                sections.push(format!(
-                    "Staged changes:\n{}",
-                    context.target.staged_diff.trim_end()
-                ));
+                sections
+                    .push(format!("Staged changes:\n{}", context.target.staged_diff.trim_end()));
             }
             if !context.target.unstaged_diff.trim().is_empty() {
                 sections.push(format!(
@@ -98,9 +88,7 @@ fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
     }
 
     let truncated = value.chars().take(max_chars).collect::<String>();
-    format!(
-        "{truncated}\n\n[truncated: original content exceeded {max_chars} characters]"
-    )
+    format!("{truncated}\n\n[truncated: original content exceeded {max_chars} characters]")
 }
 
 #[cfg(test)]
@@ -152,13 +140,9 @@ mod tests {
 
         let prompt = build_review_prompt(
             &context,
-            ReviewPromptOptions {
-                max_diff_chars: 12,
-                max_rule_chars: 12,
-            },
+            ReviewPromptOptions { max_diff_chars: 12, max_rule_chars: 12 },
         );
 
         assert!(prompt.contains("[truncated: original content exceeded 12 characters]"));
     }
 }
-

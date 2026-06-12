@@ -5345,7 +5345,8 @@ mod tests {
         let mut events = Vec::new();
         let mut pending_tools = BTreeMap::new();
 
-        let mut pending_thinking: std::collections::BTreeMap<u32, (String, Option<String>)> = std::collections::BTreeMap::new();
+        let mut pending_thinking: std::collections::BTreeMap<u32, (String, Option<String>)> =
+            std::collections::BTreeMap::new();
         push_output_block(
             OutputContentBlock::ToolUse {
                 id: "tool-1".to_string(),

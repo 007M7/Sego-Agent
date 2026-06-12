@@ -18,12 +18,7 @@ impl VerificationCommand {
         program: impl Into<String>,
         args: Vec<String>,
     ) -> Self {
-        Self {
-            label: label.into(),
-            working_dir: working_dir.into(),
-            program: program.into(),
-            args,
-        }
+        Self { label: label.into(), working_dir: working_dir.into(), program: program.into(), args }
     }
 
     #[must_use]
@@ -51,20 +46,14 @@ pub struct VerificationPlan {
 impl VerificationPlan {
     #[must_use]
     pub fn ready(scope: VerificationScope, commands: Vec<VerificationCommand>) -> Self {
-        Self {
-            scope,
-            status: VerificationPlanStatus::Ready,
-            commands,
-        }
+        Self { scope, status: VerificationPlanStatus::Ready, commands }
     }
 
     #[must_use]
     pub fn no_plan(scope: VerificationScope, reason: impl Into<String>) -> Self {
         Self {
             scope,
-            status: VerificationPlanStatus::NoPlan {
-                reason: reason.into(),
-            },
+            status: VerificationPlanStatus::NoPlan { reason: reason.into() },
             commands: Vec::new(),
         }
     }

@@ -22,10 +22,6 @@ pub struct ReviewReport {
 impl ReviewReport {
     #[must_use]
     pub fn no_findings(raw_text: impl Into<String>) -> Self {
-        Self {
-            findings: Vec::new(),
-            raw_text: raw_text.into(),
-        }
+        Self { findings: Vec::new(), raw_text: raw_text.into() }
     }
 }
-

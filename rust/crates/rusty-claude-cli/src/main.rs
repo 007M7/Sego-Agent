@@ -24,9 +24,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    detect_provider_kind, ProviderClient, ProviderKind,
-    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock,
+    detect_provider_kind, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
+    MessageResponse, OutputContentBlock, ProviderClient, ProviderKind,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
@@ -40,7 +39,7 @@ use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials,
+    build_review_prompt, build_verification_plan, clear_oauth_credentials,
     community_learning::CommunityLearning,
     evaluate, format_usd, generate_pkce_pair, generate_state,
     green_contract::GreenLevel,
@@ -48,14 +47,14 @@ use runtime::{
     resolve_sandbox_status, save_oauth_credentials,
     workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
-    build_review_prompt, ContentBlock, ConversationMessage, ConversationRuntime, DiffScope,
-    LaneBlocker, LaneContext, LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus,
-    LaneFailureClass, ReviewContext, ReviewPromptOptions, ReviewScope, ReviewTarget,
+    ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
+    LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
-    ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewStatus,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
-    VerificationCommand, VerificationPlanStatus, VerificationScope, build_verification_plan,
+    ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewContext,
+    ReviewPromptOptions, ReviewScope, ReviewStatus, ReviewTarget, RuntimeError, Session,
+    TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand, VerificationPlanStatus,
+    VerificationScope,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -573,12 +572,9 @@ fn parse_direct_slash_cli_action(
             },
         }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
-        Ok(Some(SlashCommand::Review { scope })) => Ok(CliAction::CodeReview {
-            scope,
-            model,
-            allowed_tools,
-            permission_mode,
-        }),
+        Ok(Some(SlashCommand::Review { scope })) => {
+            Ok(CliAction::CodeReview { scope, model, allowed_tools, permission_mode })
+        }
         Ok(Some(SlashCommand::Verify { scope })) => Ok(CliAction::CodeVerify { scope }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
@@ -702,7 +698,6 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 fn resolve_model_alias(model: &str) -> String {
     api::resolve_model_alias(model)
 }
-
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
     if values.is_empty() {
@@ -2587,7 +2582,6 @@ impl LiveCli {
         Ok(true)
     }
 
-
     fn set_permissions(
         &mut self,
         mode: Option<String>,
@@ -2990,10 +2984,8 @@ impl LiveCli {
         &mut self,
         target: ReviewTarget,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let prompt = build_review_prompt(
-            &ReviewContext::new(target),
-            ReviewPromptOptions::default(),
-        );
+        let prompt =
+            build_review_prompt(&ReviewContext::new(target), ReviewPromptOptions::default());
         self.run_turn(&prompt)
     }
 }
@@ -3879,10 +3871,9 @@ fn collect_review_target(
             run_git_diff_command_in(cwd, &["diff", "--cached"])?,
             run_git_diff_command_in(cwd, &["diff"])?,
         ),
-        ReviewScope::Staged => (
-            run_git_diff_command_in(cwd, &["diff", "--cached"])?,
-            String::new(),
-        ),
+        ReviewScope::Staged => {
+            (run_git_diff_command_in(cwd, &["diff", "--cached"])?, String::new())
+        }
         ReviewScope::Unstaged => (String::new(), run_git_diff_command_in(cwd, &["diff"])?),
         ReviewScope::Path(path) => {
             let path = path.to_string_lossy();
@@ -3893,12 +3884,7 @@ fn collect_review_target(
         }
     };
 
-    Ok(ReviewTarget {
-        scope,
-        git_status,
-        staged_diff,
-        unstaged_diff,
-    })
+    Ok(ReviewTarget { scope, git_status, staged_diff, unstaged_diff })
 }
 
 fn run_code_review_cli(
@@ -3951,10 +3937,7 @@ fn run_code_verify_cli(scope: Option<&str>) -> Result<(), Box<dyn std::error::Er
         print_verification_result(&result);
     }
 
-    println!(
-        "  Result           {}",
-        if failed { "failed" } else { "passed" }
-    );
+    println!("  Result           {}", if failed { "failed" } else { "passed" });
 
     if failed {
         return Err("verification failed".into());
@@ -3980,11 +3963,8 @@ fn run_verification_command(
     command: &VerificationCommand,
 ) -> Result<VerificationCommandResult, Box<dyn std::error::Error>> {
     let started_at = Instant::now();
-    let working_dir = if command.working_dir == "." {
-        cwd.to_path_buf()
-    } else {
-        cwd.join(&command.working_dir)
-    };
+    let working_dir =
+        if command.working_dir == "." { cwd.to_path_buf() } else { cwd.join(&command.working_dir) };
     let output = std::process::Command::new(&command.program)
         .args(&command.args)
         .current_dir(&working_dir)
@@ -4007,12 +3987,12 @@ fn print_verification_result(result: &VerificationCommandResult) {
     println!("  Command          {}", result.label);
     println!("  Run              {}", result.command);
     println!("  Working dir      {}", result.working_dir);
-    println!("  Exit             {}", result.exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string()));
-    println!("  Duration         {}ms", result.duration.as_millis());
     println!(
-        "  Status           {}",
-        if result.success { "passed" } else { "failed" }
+        "  Exit             {}",
+        result.exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string())
     );
+    println!("  Duration         {}ms", result.duration.as_millis());
+    println!("  Status           {}", if result.success { "passed" } else { "failed" });
     let stdout = summarize_command_output(&result.stdout, result.success);
     if !stdout.is_empty() {
         println!("  Stdout           {stdout}");
@@ -4024,11 +4004,7 @@ fn print_verification_result(result: &VerificationCommandResult) {
 }
 
 fn summarize_command_output(value: &str, success: bool) -> String {
-    let lines = value
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
+    let lines = value.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>();
 
     let compact = if success {
         lines.iter().take(6).copied().collect::<Vec<_>>().join(" | ")
@@ -6543,9 +6519,7 @@ mod tests {
         assert_eq!(
             parse_args(&["/verify".to_string(), "fast".to_string()])
                 .expect("/verify fast should parse"),
-            CliAction::CodeVerify {
-                scope: Some("fast".to_string()),
-            }
+            CliAction::CodeVerify { scope: Some("fast".to_string()) }
         );
         let error = parse_args(&["/status".to_string()])
             .expect_err("/status should remain REPL-only when invoked directly");

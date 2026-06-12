@@ -419,7 +419,10 @@ mod tests {
         .join("\n");
         fs::write(&script_path, script).expect("write script");
         let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
-        #[cfg(unix)] { permissions.set_mode(0o755); }
+        #[cfg(unix)]
+        {
+            permissions.set_mode(0o755);
+        }
         fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }

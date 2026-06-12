@@ -19,9 +19,9 @@ impl ReviewScope {
             "workspace" | "all" | "." => Ok(Self::Workspace),
             "staged" | "--staged" | "cached" | "--cached" => Ok(Self::Staged),
             "unstaged" | "--unstaged" | "working" | "worktree" => Ok(Self::Unstaged),
-            value if value.starts_with('-') => Err(ReviewScopeParseError::UnsupportedFlag {
-                value: value.to_string(),
-            }),
+            value if value.starts_with('-') => {
+                Err(ReviewScopeParseError::UnsupportedFlag { value: value.to_string() })
+            }
             value => Ok(Self::Path(PathBuf::from(value))),
         }
     }
@@ -86,10 +86,7 @@ mod tests {
     fn rejects_unknown_flags() {
         assert_eq!(
             ReviewScope::parse(Some("--json")),
-            Err(ReviewScopeParseError::UnsupportedFlag {
-                value: "--json".to_string(),
-            })
+            Err(ReviewScopeParseError::UnsupportedFlag { value: "--json".to_string() })
         );
     }
 }
-

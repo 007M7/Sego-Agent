@@ -17,12 +17,10 @@ impl VerificationScope {
             "auto" | "default" => Ok(Self::Auto),
             "fast" | "quick" | "targeted" => Ok(Self::Fast),
             "full" | "workspace" | "all" => Ok(Self::Full),
-            value if value.starts_with('-') => Err(VerificationScopeParseError::UnsupportedFlag {
-                value: value.to_string(),
-            }),
-            value => Err(VerificationScopeParseError::UnknownScope {
-                value: value.to_string(),
-            }),
+            value if value.starts_with('-') => {
+                Err(VerificationScopeParseError::UnsupportedFlag { value: value.to_string() })
+            }
+            value => Err(VerificationScopeParseError::UnknownScope { value: value.to_string() }),
         }
     }
 
@@ -49,10 +47,9 @@ impl fmt::Display for VerificationScopeParseError {
                 formatter,
                 "unsupported /verify scope flag `{value}` (expected auto, fast, or full)"
             ),
-            Self::UnknownScope { value } => write!(
-                formatter,
-                "unknown /verify scope `{value}` (expected auto, fast, or full)"
-            ),
+            Self::UnknownScope { value } => {
+                write!(formatter, "unknown /verify scope `{value}` (expected auto, fast, or full)")
+            }
         }
     }
 }
@@ -80,15 +77,11 @@ mod tests {
     fn rejects_unknown_scopes_and_flags() {
         assert_eq!(
             VerificationScope::parse(Some("src/lib.rs")),
-            Err(VerificationScopeParseError::UnknownScope {
-                value: "src/lib.rs".to_string(),
-            })
+            Err(VerificationScopeParseError::UnknownScope { value: "src/lib.rs".to_string() })
         );
         assert_eq!(
             VerificationScope::parse(Some("--json")),
-            Err(VerificationScopeParseError::UnsupportedFlag {
-                value: "--json".to_string(),
-            })
+            Err(VerificationScopeParseError::UnsupportedFlag { value: "--json".to_string() })
         );
     }
 }

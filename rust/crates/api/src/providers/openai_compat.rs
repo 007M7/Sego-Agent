@@ -382,16 +382,12 @@ impl StreamState {
         }
 
         for choice in chunk.choices {
-            if let Some(reasoning_content) = choice
-                .delta
-                .reasoning_content
-                .filter(|value| !value.is_empty())
+            if let Some(reasoning_content) =
+                choice.delta.reasoning_content.filter(|value| !value.is_empty())
             {
                 events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
                     index: 0,
-                    delta: ContentBlockDelta::ThinkingDelta {
-                        thinking: reasoning_content,
-                    },
+                    delta: ContentBlockDelta::ThinkingDelta { thinking: reasoning_content },
                 }));
             }
 
@@ -809,10 +805,7 @@ fn normalize_response(
     if let Some(reasoning_content) =
         choice.message.reasoning_content.filter(|value| !value.is_empty())
     {
-        content.push(OutputContentBlock::Thinking {
-            thinking: reasoning_content,
-            signature: None,
-        });
+        content.push(OutputContentBlock::Thinking { thinking: reasoning_content, signature: None });
     }
     if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
         content.push(OutputContentBlock::Text { text });
@@ -972,8 +965,8 @@ impl StringExt for String {
 mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        normalize_response, openai_tool_choice, parse_tool_arguments, ChatChoice, ChatCompletionResponse,
-        ChatMessage, OpenAiCompatClient, OpenAiCompatConfig,
+        normalize_response, openai_tool_choice, parse_tool_arguments, ChatChoice,
+        ChatCompletionResponse, ChatMessage, OpenAiCompatClient, OpenAiCompatConfig,
     };
     use crate::error::ApiError;
     use crate::types::{
@@ -1083,10 +1076,7 @@ mod tests {
 
         assert_eq!(payload["messages"][0]["role"], json!("assistant"));
         assert_eq!(payload["messages"][0]["content"], json!("Final answer"));
-        assert_eq!(
-            payload["messages"][0]["reasoning_content"],
-            json!("internal reasoning")
-        );
+        assert_eq!(payload["messages"][0]["reasoning_content"], json!("internal reasoning"));
     }
 
     #[test]
