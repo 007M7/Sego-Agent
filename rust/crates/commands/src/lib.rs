@@ -277,6 +277,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
     },
     SlashCommandSpec {
+        name: "verify",
+        aliases: &[],
+        summary: "Run local verification evidence commands",
+        argument_hint: Some("[auto|fast|full]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
         name: "tasks",
         aliases: &[],
         summary: "List and manage background tasks",
@@ -1094,6 +1101,7 @@ pub enum SlashCommand {
     PrivacySettings,
     Plan { mode: Option<String> },
     Review { scope: Option<String> },
+    Verify { scope: Option<String> },
     Tasks { args: Option<String> },
     Theme { name: Option<String> },
     Voice { mode: Option<String> },
@@ -1313,6 +1321,7 @@ pub fn validate_slash_command_input(
         }
         "plan" => SlashCommand::Plan { mode: remainder },
         "review" => SlashCommand::Review { scope: remainder },
+        "verify" => SlashCommand::Verify { scope: remainder },
         "tasks" => SlashCommand::Tasks { args: remainder },
         "theme" => SlashCommand::Theme { name: remainder },
         "voice" => SlashCommand::Voice { mode: remainder },
@@ -1678,9 +1687,8 @@ fn slash_command_category(name: &str) -> &'static str {
         }
         "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "context" | "tasks"
         | "doctor" | "ide" | "desktop" => "Discovery & debugging",
-        "bughunter" | "ultraplan" | "review" | "security-review" | "advisor" | "insights" => {
-            "Analysis & automation"
-        }
+        "bughunter" | "ultraplan" | "review" | "verify" | "security-review" | "advisor"
+        | "insights" => "Analysis & automation",
         "theme" | "vim" | "voice" | "color" | "effort" | "fast" | "brief" | "output-style"
         | "keybindings" | "stickers" => "Appearance & input",
         "copy" | "share" | "feedback" | "summary" | "tag" | "thinkback" | "plan" | "exit"
@@ -3025,6 +3033,7 @@ pub fn handle_slash_command(
         | SlashCommand::PrivacySettings
         | SlashCommand::Plan { .. }
         | SlashCommand::Review { .. }
+        | SlashCommand::Verify { .. }
         | SlashCommand::Tasks { .. }
         | SlashCommand::Theme { .. }
         | SlashCommand::Voice { .. }
@@ -3404,7 +3413,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
-        assert_eq!(slash_command_specs().len(), 141);
+        assert!(help.contains("/verify [auto|fast|full]"));
+        assert_eq!(slash_command_specs().len(), 142);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 

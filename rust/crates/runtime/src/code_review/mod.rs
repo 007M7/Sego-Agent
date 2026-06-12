@@ -9,4 +9,3 @@ pub use prompt::{build_review_prompt, ReviewPromptOptions};
 pub use report::{ReviewFinding, ReviewReport};
 pub use scope::{ReviewScope, ReviewScopeParseError};
 pub use severity::ReviewSeverity;
-

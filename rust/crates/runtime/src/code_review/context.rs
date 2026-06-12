@@ -24,10 +24,7 @@ pub struct ReviewContext {
 impl ReviewContext {
     #[must_use]
     pub fn new(target: ReviewTarget) -> Self {
-        Self {
-            target,
-            project_rules: Vec::new(),
-        }
+        Self { target, project_rules: Vec::new() }
     }
 
     #[must_use]
@@ -36,4 +33,3 @@ impl ReviewContext {
         self
     }
 }
-

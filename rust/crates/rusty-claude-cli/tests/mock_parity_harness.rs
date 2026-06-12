@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-#[cfg(unix)] use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -386,7 +387,10 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
     )
     .expect("plugin script should write");
     let mut permissions = fs::metadata(&script_path).expect("plugin script metadata").permissions();
-    #[cfg(unix)] { permissions.set_mode(0o755); }
+    #[cfg(unix)]
+    {
+        permissions.set_mode(0o755);
+    }
     fs::set_permissions(&script_path, permissions).expect("plugin script should be executable");
 
     fs::write(
