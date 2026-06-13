@@ -1,8 +1,4 @@
-# Sego
-
-<p align="center">
-  <img src="assets/sego-ui-icon.png" width="96" height="96" alt="Sego 图标">
-</p>
+<h1>Sego <img src="assets/sego-ui-icon.png" width="34" height="34" alt="Sego 图标" align="right"></h1>
 
 <p align="center">
   <strong>AI Coding 的工程信任运行时</strong><br>
