@@ -2178,11 +2178,8 @@ mod tests {
     }
 
     fn write_tool_plugin_with_name(root: &Path, name: &str, version: &str, tool_name: &str) {
-        let script_path = root.join("tools").join("echo-json.sh");
-        write_file(
-            &script_path,
-            "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n",
-        );
+        let (script_path, script_command, script_body) = tool_script(root);
+        write_file(&script_path, &script_body);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2196,8 +2193,27 @@ mod tests {
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"tool plugin\",\n  \"tools\": [\n    {{\n      \"name\": \"{tool_name}\",\n      \"description\": \"Echo JSON input\",\n      \"inputSchema\": {{\"type\": \"object\", \"properties\": {{\"message\": {{\"type\": \"string\"}}}}, \"required\": [\"message\"], \"additionalProperties\": false}},\n      \"command\": \"./tools/echo-json.sh\",\n      \"requiredPermission\": \"workspace-write\"\n    }}\n  ]\n}}"
             )
+            .replace("./tools/echo-json.sh", &script_command)
             .as_str(),
         );
+    }
+
+    #[cfg(windows)]
+    fn tool_script(root: &Path) -> (PathBuf, String, String) {
+        (
+            root.join("tools").join("echo-json.cmd"),
+            "./tools/echo-json.cmd".to_string(),
+            "@echo off\r\nset /p INPUT=\r\necho {\"plugin\":\"%CLAWD_PLUGIN_ID%\",\"tool\":\"%CLAWD_TOOL_NAME%\",\"input\":%INPUT%}\r\n".to_string(),
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn tool_script(root: &Path) -> (PathBuf, String, String) {
+        (
+            root.join("tools").join("echo-json.sh"),
+            "./tools/echo-json.sh".to_string(),
+            "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n".to_string(),
+        )
     }
 
     fn write_bundled_plugin(root: &Path, name: &str, version: &str, default_enabled: bool) {

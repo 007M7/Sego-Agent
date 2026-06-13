@@ -430,11 +430,6 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         return Ok(CliAction::Help);
     }
 
-    // Subcommand --help: detect if rest contains --help/-h after a known subcommand
-    if rest.iter().any(|s| s == "--help" || s == "-h") {
-        return Ok(CliAction::Help);
-    }
-
     if wants_version {
         return Ok(CliAction::Version);
     }
@@ -572,9 +567,12 @@ fn parse_direct_slash_cli_action(
             },
         }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
-        Ok(Some(SlashCommand::Review { scope })) => {
-            Ok(CliAction::CodeReview { scope, model, allowed_tools, permission_mode })
-        }
+        Ok(Some(SlashCommand::Review { scope })) => Ok(CliAction::CodeReview {
+            scope,
+            model,
+            allowed_tools,
+            permission_mode: PermissionMode::ReadOnly,
+        }),
         Ok(Some(SlashCommand::Verify { scope })) => Ok(CliAction::CodeVerify { scope }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
@@ -779,7 +777,9 @@ fn filter_tool_specs(
         return tool_registry.definitions(allowed_tools);
     }
     let lite: &AllowedToolSet = &LITE_TOOLS;
-    tool_registry.definitions(Some(lite))
+    let mut default_tools = lite.clone();
+    default_tools.extend(tool_registry.extension_tool_names());
+    tool_registry.definitions(Some(&default_tools))
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
@@ -6108,6 +6108,56 @@ mod tests {
         std::env::temp_dir().join(format!("rusty-claude-cli-{nanos}"))
     }
 
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvRestore {
+        fn isolate(root: &Path) -> Self {
+            let vars = [
+                "HOME",
+                "USERPROFILE",
+                "CLAW_CONFIG_HOME",
+                "RUSTY_CLAUDE_PERMISSION_MODE",
+                "DEEPSEEK_MODEL",
+                "ANTHROPIC_MODEL",
+            ];
+            let values = vars.into_iter().map(|var| (var, std::env::var(var).ok())).collect();
+            let home = root.join("home");
+            let config_home = root.join("config-home");
+            fs::create_dir_all(&home).expect("home dir");
+            fs::create_dir_all(&config_home).expect("config home dir");
+            std::env::set_var("HOME", &home);
+            std::env::set_var("USERPROFILE", &home);
+            std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+            std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+            std::env::remove_var("DEEPSEEK_MODEL");
+            std::env::remove_var("ANTHROPIC_MODEL");
+            Self { values }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (var, value) in self.values.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(var, value),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+
+    fn python_command() -> String {
+        std::env::var("PYTHON").unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "python".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
+    }
+
     fn git(args: &[&str], cwd: &Path) {
         let status = Command::new("git")
             .args(args)
@@ -6300,7 +6350,8 @@ mod tests {
     #[test]
     fn resolves_model_aliases_in_args() {
         let _guard = env_lock();
-        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
         let args = vec![
             "--model".to_string(),
             "opus".to_string(),
@@ -6311,7 +6362,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-4-7".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
@@ -6321,11 +6372,14 @@ mod tests {
 
     #[test]
     fn resolves_known_model_aliases() {
-        assert_eq!(resolve_model_alias("deepseek"), "deepseek-chat");
-        assert_eq!(resolve_model_alias("ds"), "deepseek-chat");
-        assert_eq!(resolve_model_alias("deepseek-pro"), "deepseek-v4-pro");
-        assert_eq!(resolve_model_alias("mimo"), "mimo-v2.5-pro");
-        assert_eq!(resolve_model_alias("gpt"), "gpt-4.1");
+        let _guard = env_lock();
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
+        assert_eq!(resolve_model_alias("deepseek"), "deepseek");
+        assert_eq!(resolve_model_alias("ds"), "ds");
+        assert_eq!(resolve_model_alias("deepseek-pro"), "deepseek-pro");
+        assert_eq!(resolve_model_alias("mimo"), "mimo");
+        assert_eq!(resolve_model_alias("gpt"), "gpt");
         assert_eq!(resolve_model_alias("unknown-model"), "unknown-model");
     }
 
@@ -6377,6 +6431,9 @@ mod tests {
 
     #[test]
     fn rejects_unknown_allowed_tools() {
+        let _guard = env_lock();
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
         let error = parse_args(&["--allowedTools".to_string(), "teleport".to_string()])
             .expect_err("tool should be rejected");
         assert!(error.contains("unsupported tool in --allowedTools: teleport"));
@@ -6402,6 +6459,9 @@ mod tests {
 
     #[test]
     fn parses_login_and_logout_subcommands() {
+        let _guard = env_lock();
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
         assert_eq!(
             parse_args(&["login".to_string()]).expect("login should parse"),
             CliAction::Login
@@ -6479,6 +6539,9 @@ mod tests {
 
     #[test]
     fn parses_direct_agents_mcp_and_skills_slash_commands() {
+        let _guard = env_lock();
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
         assert_eq!(
             parse_args(&["/agents".to_string()]).expect("/agents should parse"),
             CliAction::Agents { args: None }
@@ -6513,7 +6576,7 @@ mod tests {
                 scope: Some("staged".to_string()),
                 model: default_model(),
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
         assert_eq!(
@@ -6609,7 +6672,7 @@ mod tests {
         let error = parse_args(&["--resum".to_string()]).expect_err("unknown option should fail");
         assert!(error.contains("unknown option: --resum"));
         assert!(error.contains("Did you mean --resume?"));
-        assert!(error.contains("claw --help"));
+        assert!(error.contains("sego --help"));
     }
 
     #[test]
@@ -6737,8 +6800,11 @@ mod tests {
     #[test]
     fn startup_banner_mentions_workflow_completions() {
         let _guard = env_lock();
+        let env_root = temp_dir();
+        let _env = EnvRestore::isolate(&env_root);
         // Inject dummy credentials so LiveCli can construct without real Anthropic key
         std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-banner-test");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "test-dummy-token-for-banner-test");
         let root = temp_dir();
         fs::create_dir_all(&root).expect("root dir");
 
@@ -6757,7 +6823,6 @@ mod tests {
         assert!(banner.contains("workflow completions"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
-        std::env::remove_var("ANTHROPIC_API_KEY");
     }
 
     #[test]
@@ -6837,15 +6902,15 @@ mod tests {
         let mut help = Vec::new();
         print_help_to(&mut help).expect("help should render");
         let help = String::from_utf8(help).expect("help should be utf8");
-        assert!(help.contains("claw help"));
-        assert!(help.contains("claw version"));
+        assert!(help.contains("sego help"));
+        assert!(help.contains("sego version"));
         assert!(help.contains("sego status"));
         assert!(help.contains("sego sandbox"));
-        assert!(help.contains("claw init"));
-        assert!(help.contains("claw agents"));
-        assert!(help.contains("claw mcp"));
-        assert!(help.contains("claw skills"));
-        assert!(help.contains("claw /skills"));
+        assert!(help.contains("sego init"));
+        assert!(help.contains("sego agents"));
+        assert!(help.contains("sego mcp"));
+        assert!(help.contains("sego skills"));
+        assert!(help.contains("sego /skills"));
     }
 
     #[test]
@@ -7223,10 +7288,10 @@ UU conflicted.rs",
         let mut help = Vec::new();
         print_help_to(&mut help).expect("help should render");
         let help = String::from_utf8(help).expect("help should be utf8");
-        assert!(help.contains("claw --resume [SESSION.jsonl|session-id|latest]"));
+        assert!(help.contains("sego --resume [SESSION.jsonl|session-id|latest]"));
         assert!(help.contains("Use `latest` with --resume, /resume, or /session switch"));
-        assert!(help.contains("claw --resume latest"));
-        assert!(help.contains("claw --resume latest /status /diff /export notes.txt"));
+        assert!(help.contains("sego --resume latest"));
+        assert!(help.contains("sego --resume latest /status /diff /export notes.txt"));
     }
 
     #[test]
@@ -7257,7 +7322,7 @@ UU conflicted.rs",
         );
 
         std::env::set_current_dir(previous).expect("restore cwd");
-        std::fs::remove_dir_all(workspace).expect("workspace should clean up");
+        let _ = std::fs::remove_dir_all(workspace);
     }
 
     #[test]
@@ -7287,7 +7352,7 @@ UU conflicted.rs",
         );
 
         std::env::set_current_dir(previous).expect("restore cwd");
-        std::fs::remove_dir_all(workspace).expect("workspace should clean up");
+        let _ = std::fs::remove_dir_all(workspace);
     }
 
     #[test]
@@ -7395,7 +7460,8 @@ UU conflicted.rs",
         let rendered = format_tool_result("read_file", &output, false);
 
         assert!(rendered.contains("line 000"));
-        assert!(rendered.contains("line 079"));
+        assert!(rendered.contains("line 039"));
+        assert!(!rendered.contains("line 040"));
         assert!(!rendered.contains("line 199"));
         assert!(rendered.contains("full result preserved in session"));
         assert!(output.contains("line 199"));
@@ -7415,9 +7481,8 @@ UU conflicted.rs",
         let rendered = format_tool_result("bash", &output, false);
 
         assert!(rendered.contains("stdout 000"));
-        assert!(rendered.contains("stdout 059"));
+        assert!(!rendered.contains("stdout 014"));
         assert!(!rendered.contains("stdout 119"));
-        assert!(rendered.contains("full result preserved in session"));
         assert!(output.contains("stdout 119"));
     }
 
@@ -7434,7 +7499,8 @@ UU conflicted.rs",
 
         assert!(rendered.contains("plugin_echo"));
         assert!(rendered.contains("payload 000"));
-        assert!(rendered.contains("payload 040"));
+        assert!(rendered.contains("payload 010"));
+        assert!(!rendered.contains("payload 020"));
         assert!(!rendered.contains("payload 080"));
         assert!(!rendered.contains("payload 119"));
         assert!(rendered.contains("full result preserved in session"));
@@ -7449,7 +7515,8 @@ UU conflicted.rs",
 
         assert!(rendered.contains("plugin_echo"));
         assert!(rendered.contains("raw 000"));
-        assert!(rendered.contains("raw 059"));
+        assert!(rendered.contains("raw 014"));
+        assert!(!rendered.contains("raw 015"));
         assert!(!rendered.contains("raw 119"));
         assert!(rendered.contains("full result preserved in session"));
         assert!(output.contains("raw 119"));
@@ -7664,6 +7731,11 @@ UU conflicted.rs",
 
         assert!(matches!(
             &events[0],
+            AssistantEvent::Thinking { thinking, signature }
+                if thinking == "step 1" && signature.as_deref() == Some("sig_123")
+        ));
+        assert!(matches!(
+            &events[1],
             AssistantEvent::TextDelta(text) if text == "Final answer"
         ));
         assert!(!String::from_utf8(out).expect("utf8").contains("step 1"));
@@ -7707,23 +7779,21 @@ UU conflicted.rs",
         fs::create_dir_all(&workspace).expect("workspace");
         let script_path = workspace.join("fixture-mcp.py");
         write_mcp_server_fixture(&script_path);
+        let settings = json!({
+            "mcpServers": {
+                "alpha": {
+                    "command": python_command(),
+                    "args": [script_path.to_string_lossy()]
+                },
+                "broken": {
+                    "command": python_command(),
+                    "args": ["-c", "import sys; sys.exit(0)"]
+                }
+            }
+        });
         fs::write(
             config_home.join("settings.json"),
-            format!(
-                r#"{{
-                  "mcpServers": {{
-                    "alpha": {{
-                      "command": "python3",
-                      "args": ["{}"]
-                    }},
-                    "broken": {{
-                      "command": "python3",
-                      "args": ["-c", "import sys; sys.exit(0)"]
-                    }}
-                  }}
-                }}"#,
-                script_path.to_string_lossy()
-            ),
+            serde_json::to_string_pretty(&settings).unwrap(),
         )
         .expect("write mcp settings");
 

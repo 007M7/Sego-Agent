@@ -205,6 +205,9 @@ impl WorkflowStore {
     }
 
     fn save_trends(&self, trends: &WorkflowTrends) -> Result<(), WorkflowStoreError> {
+        if let Some(parent) = self.trends_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(trends)?;
         fs::write(&self.trends_path, json)?;
         Ok(())
@@ -215,6 +218,7 @@ impl WorkflowStore {
 mod tests {
     use super::*;
     use crate::workflow::SessionSummary;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -303,7 +307,13 @@ mod tests {
         fs::remove_dir_all(store.root).expect("cleanup should succeed");
     }
 
-    fn rand_id() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+    fn rand_id() -> String {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        format!("{}-{nanos}-{sequence}", std::process::id())
     }
 }
