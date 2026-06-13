@@ -1334,18 +1334,28 @@ mod tests {
     fn write_echo_script() -> PathBuf {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("temp dir");
-        let script_path = root.join("echo-mcp.sh");
+        let script_path = root.join("echo-mcp.py");
         fs::write(
             &script_path,
-            "#!/bin/sh\nprintf 'READY:%s\\n' \"$MCP_TEST_TOKEN\"\nIFS= read -r line\nprintf 'ECHO:%s\\n' \"$line\"\n",
+            [
+                "#!/usr/bin/env python3",
+                "import os, sys",
+                "sys.stdout.buffer.write(f\"READY:{os.environ.get('MCP_TEST_TOKEN', '')}\\n\".encode())",
+                "sys.stdout.buffer.flush()",
+                "line = sys.stdin.buffer.readline()",
+                "sys.stdout.buffer.write(b\"ECHO:\" + line)",
+                "sys.stdout.buffer.flush()",
+                "",
+            ]
+            .join("\n"),
         )
         .expect("write script");
-        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
         #[cfg(unix)]
         {
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
             permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
         }
-        fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }
 
@@ -1389,12 +1399,12 @@ mod tests {
         ]
         .join("\n");
         fs::write(&script_path, script).expect("write script");
-        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
         #[cfg(unix)]
         {
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
             permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
         }
-        fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }
 
@@ -1526,12 +1536,12 @@ mod tests {
         ]
         .join("\n");
         fs::write(&script_path, script).expect("write script");
-        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
         #[cfg(unix)]
         {
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
             permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
         }
-        fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }
 
@@ -1654,12 +1664,12 @@ mod tests {
         ]
         .join("\n");
         fs::write(&script_path, script).expect("write script");
-        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
         #[cfg(unix)]
         {
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
             permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
         }
-        fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }
 
@@ -1667,7 +1677,7 @@ mod tests {
         let config = ScopedMcpServerConfig {
             scope: ConfigSource::Local,
             config: McpServerConfig::Stdio(McpStdioServerConfig {
-                command: "/bin/sh".to_string(),
+                command: python_command(),
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env: BTreeMap::from([("MCP_TEST_TOKEN".to_string(), "secret-value".to_string())]),
                 tool_call_timeout_ms: None,
@@ -1685,7 +1695,7 @@ mod tests {
         env: BTreeMap<String, String>,
     ) -> crate::mcp_client::McpStdioTransport {
         crate::mcp_client::McpStdioTransport {
-            command: "python3".to_string(),
+            command: python_command(),
             args: vec![script_path.to_string_lossy().into_owned()],
             env,
             tool_call_timeout_ms: None,
@@ -1723,12 +1733,22 @@ mod tests {
         ScopedMcpServerConfig {
             scope: ConfigSource::Local,
             config: McpServerConfig::Stdio(McpStdioServerConfig {
-                command: "python3".to_string(),
+                command: python_command(),
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env,
                 tool_call_timeout_ms: None,
             }),
         }
+    }
+
+    fn python_command() -> String {
+        std::env::var("PYTHON").unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "python".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
     }
 
     #[test]
@@ -1921,7 +1941,7 @@ mod tests {
         runtime.block_on(async {
             let script_path = write_echo_script();
             let transport = crate::mcp_client::McpStdioTransport {
-                command: "/bin/sh".to_string(),
+                command: python_command(),
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env: BTreeMap::from([("MCP_TEST_TOKEN".to_string(), "direct-secret".to_string())]),
                 tool_call_timeout_ms: None,
@@ -2130,7 +2150,7 @@ mod tests {
                 ScopedMcpServerConfig {
                     scope: ConfigSource::Local,
                     config: McpServerConfig::Stdio(McpStdioServerConfig {
-                        command: "python3".to_string(),
+                        command: python_command(),
                         args: vec![script_path.to_string_lossy().into_owned()],
                         env: BTreeMap::from([(
                             "MCP_TOOL_CALL_DELAY_MS".to_string(),
@@ -2173,7 +2193,7 @@ mod tests {
                 ScopedMcpServerConfig {
                     scope: ConfigSource::Local,
                     config: McpServerConfig::Stdio(McpStdioServerConfig {
-                        command: "python3".to_string(),
+                        command: python_command(),
                         args: vec![script_path.to_string_lossy().into_owned()],
                         env: BTreeMap::from([(
                             "MCP_INVALID_TOOL_CALL_RESPONSE".to_string(),
@@ -2419,7 +2439,7 @@ mod tests {
                     ScopedMcpServerConfig {
                         scope: ConfigSource::Local,
                         config: McpServerConfig::Stdio(McpStdioServerConfig {
-                            command: "python3".to_string(),
+                            command: python_command(),
                             args: vec!["-c".to_string(), "import sys; sys.exit(0)".to_string()],
                             env: BTreeMap::new(),
                             tool_call_timeout_ms: None,

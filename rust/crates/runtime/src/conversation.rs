@@ -1359,6 +1359,17 @@ mod tests {
 
     #[cfg(windows)]
     fn shell_snippet(script: &str) -> String {
+        if let Some(rest) = script.strip_prefix("printf '") {
+            if let Some((message, suffix)) = rest.split_once('\'') {
+                let suffix = suffix.trim();
+                if suffix.is_empty() {
+                    return format!("echo {message}");
+                }
+                if let Some(exit_code) = suffix.strip_prefix("; exit ") {
+                    return format!("echo {message} & exit /B {exit_code}");
+                }
+            }
+        }
         script.replace('\'', "\"")
     }
 

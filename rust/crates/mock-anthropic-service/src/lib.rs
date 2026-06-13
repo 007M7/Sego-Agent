@@ -324,6 +324,25 @@ fn build_http_response(request: &MessageRequest, scenario: Scenario) -> String {
     )
 }
 
+fn bash_command_value(text: &str) -> Value {
+    json!({
+        "command": bash_command_text(text),
+        "timeout": 1000,
+    })
+}
+
+fn bash_command_json(text: &str) -> String {
+    serde_json::to_string(&bash_command_value(text)).expect("bash command should serialize")
+}
+
+fn bash_command_text(text: &str) -> String {
+    if cfg!(windows) {
+        format!("echo {text}")
+    } else {
+        format!("printf '{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
     match scenario {
@@ -401,11 +420,10 @@ fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
             Some((tool_output, _)) => {
                 final_text_sse(&format!("bash completed: {}", extract_bash_stdout(&tool_output)))
             }
-            None => tool_use_sse(
-                "toolu_bash_stdout",
-                "bash",
-                &[r#"{"command":"printf 'alpha from bash'","timeout":1000}"#],
-            ),
+            None => {
+                let command = bash_command_json("alpha from bash");
+                tool_use_sse("toolu_bash_stdout", "bash", &[command.as_str()])
+            }
         },
         Scenario::BashPermissionPromptApproved => match latest_tool_result(request) {
             Some((tool_output, is_error)) => {
@@ -418,21 +436,19 @@ fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
                     ))
                 }
             }
-            None => tool_use_sse(
-                "toolu_bash_prompt_allow",
-                "bash",
-                &[r#"{"command":"printf 'approved via prompt'","timeout":1000}"#],
-            ),
+            None => {
+                let command = bash_command_json("approved via prompt");
+                tool_use_sse("toolu_bash_prompt_allow", "bash", &[command.as_str()])
+            }
         },
         Scenario::BashPermissionPromptDenied => match latest_tool_result(request) {
             Some((tool_output, _)) => {
                 final_text_sse(&format!("bash denied as expected: {tool_output}"))
             }
-            None => tool_use_sse(
-                "toolu_bash_prompt_deny",
-                "bash",
-                &[r#"{"command":"printf 'should not run'","timeout":1000}"#],
-            ),
+            None => {
+                let command = bash_command_json("should not run");
+                tool_use_sse("toolu_bash_prompt_deny", "bash", &[command.as_str()])
+            }
         },
         Scenario::PluginToolRoundtrip => match latest_tool_result(request) {
             Some((tool_output, _)) => final_text_sse(&format!(
@@ -546,7 +562,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
                 "msg_bash_stdout_tool",
                 "toolu_bash_stdout",
                 "bash",
-                json!({"command": "printf 'alpha from bash'", "timeout": 1000}),
+                bash_command_value("alpha from bash"),
             ),
         },
         Scenario::BashPermissionPromptApproved => match latest_tool_result(request) {
@@ -570,7 +586,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
                 "msg_bash_prompt_allow_tool",
                 "toolu_bash_prompt_allow",
                 "bash",
-                json!({"command": "printf 'approved via prompt'", "timeout": 1000}),
+                bash_command_value("approved via prompt"),
             ),
         },
         Scenario::BashPermissionPromptDenied => match latest_tool_result(request) {
@@ -582,7 +598,7 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
                 "msg_bash_prompt_deny_tool",
                 "toolu_bash_prompt_deny",
                 "bash",
-                json!({"command": "printf 'should not run'", "timeout": 1000}),
+                bash_command_value("should not run"),
             ),
         },
         Scenario::PluginToolRoundtrip => match latest_tool_result(request) {

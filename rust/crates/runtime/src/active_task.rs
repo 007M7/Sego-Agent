@@ -607,7 +607,7 @@ mod tests {
         let id2 = generate_task_id("sego");
         assert!(id1.starts_with("sego-"));
         assert!(id2.starts_with("sego-"));
-        // IDs may be identical on fast systems where subsec_nanos doesnt change; just verify format
-        assert_eq!(id1, id2); // verified identical - known limitation of generate_task_id at sub-ns resolution
+        assert_eq!(id1.split('-').count(), 3);
+        assert_eq!(id2.split('-').count(), 3);
     }
 }

@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(still_there.status, TeamStatus::Deleted);
 
         // Hard remove
-        registry.remove(&t2.team_id);
+        let _ = registry.remove(&t2.team_id);
         assert_eq!(registry.len(), 1);
     }
 
@@ -386,9 +386,9 @@ mod tests {
         let alpha = registry.create("Alpha", vec![]);
         let beta = registry.create("Beta", vec![]);
         let after_create = registry.len();
-        registry.remove(&alpha.team_id);
+        let _ = registry.remove(&alpha.team_id);
         let after_first_remove = registry.len();
-        registry.remove(&beta.team_id);
+        let _ = registry.remove(&beta.team_id);
 
         // then
         assert_eq!(after_create, 2);

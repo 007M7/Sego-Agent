@@ -418,12 +418,12 @@ mod tests {
         ]
         .join("\n");
         fs::write(&script_path, script).expect("write script");
-        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
         #[cfg(unix)]
         {
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
             permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
         }
-        fs::set_permissions(&script_path, permissions).expect("chmod");
         script_path
     }
 
@@ -435,7 +435,7 @@ mod tests {
         ScopedMcpServerConfig {
             scope: ConfigSource::Local,
             config: McpServerConfig::Stdio(McpStdioServerConfig {
-                command: "python3".to_string(),
+                command: python_command(),
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env: BTreeMap::from([
                     ("MCP_SERVER_LABEL".to_string(), server_name.to_string()),
@@ -444,6 +444,16 @@ mod tests {
                 tool_call_timeout_ms: Some(1_000),
             }),
         }
+    }
+
+    fn python_command() -> String {
+        std::env::var("PYTHON").unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "python".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
     }
 
     #[test]
@@ -813,9 +823,9 @@ mod tests {
         registry.register_server("alpha", McpConnectionStatus::Connected, vec![], vec![], None);
         registry.register_server("beta", McpConnectionStatus::Connected, vec![], vec![], None);
         let after_create = registry.len();
-        registry.disconnect("alpha");
+        let _ = registry.disconnect("alpha");
         let after_first_remove = registry.len();
-        registry.disconnect("beta");
+        let _ = registry.disconnect("beta");
 
         // then
         assert_eq!(after_create, 2);

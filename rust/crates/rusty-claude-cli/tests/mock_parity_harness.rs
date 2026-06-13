@@ -286,7 +286,6 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
         .env("CLAW_CONFIG_HOME", &workspace.config_home)
         .env("HOME", &workspace.home)
         .env("NO_COLOR", "1")
-        .env("PATH", "/usr/bin:/bin")
         .args([
             "--model",
             "sonnet",
@@ -294,6 +293,7 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
             case.permission_mode,
             "--output-format=json",
         ]);
+    apply_platform_process_env(&mut command);
 
     if let Some(allowed_tools) = case.allowed_tools {
         command.args(["--allowedTools", allowed_tools]);
@@ -329,6 +329,21 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     ScenarioRun { response: parse_json_output(&stdout), stdout }
+}
+
+fn apply_platform_process_env(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        for key in ["ComSpec", "PATH", "Path", "PATHEXT", "SystemRoot", "TEMP", "TMP", "WINDIR"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        command.env("PATH", "/usr/bin:/bin");
+    }
 }
 
 #[allow(dead_code)]
@@ -380,22 +395,17 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
     fs::create_dir_all(&tool_dir).expect("plugin tools dir");
     fs::create_dir_all(&manifest_dir).expect("plugin manifest dir");
 
-    let script_path = tool_dir.join("echo-json.sh");
-    fs::write(
-        &script_path,
-        "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n",
-    )
-    .expect("plugin script should write");
-    let mut permissions = fs::metadata(&script_path).expect("plugin script metadata").permissions();
+    let (script_path, script_command, script_body) = plugin_tool_script(&tool_dir);
+    fs::write(&script_path, script_body).expect("plugin script should write");
     #[cfg(unix)]
     {
+        let mut permissions =
+            fs::metadata(&script_path).expect("plugin script metadata").permissions();
         permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("plugin script should be executable");
     }
-    fs::set_permissions(&script_path, permissions).expect("plugin script should be executable");
 
-    fs::write(
-        manifest_dir.join("plugin.json"),
-        r#"{
+    let manifest = r#"{
   "name": "parity-plugin",
   "version": "1.0.0",
   "description": "mock parity plugin",
@@ -411,13 +421,13 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
         "required": ["message"],
         "additionalProperties": false
       },
-      "command": "./tools/echo-json.sh",
+      "command": "__SCRIPT_COMMAND__",
       "requiredPermission": "workspace-write"
     }
   ]
-}"#,
-    )
-    .expect("plugin manifest should write");
+}"#
+    .replace("__SCRIPT_COMMAND__", &script_command);
+    fs::write(manifest_dir.join("plugin.json"), manifest).expect("plugin manifest should write");
 
     fs::write(
         workspace.config_home.join("settings.json"),
@@ -434,6 +444,26 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
     .expect("plugin settings should write");
 }
 
+#[cfg(windows)]
+fn plugin_tool_script(tool_dir: &Path) -> (PathBuf, String, String) {
+    (
+        tool_dir.join("echo-json.cmd"),
+        "./tools/echo-json.cmd".to_string(),
+        "@echo off\r\nset /p INPUT=\r\necho {\"plugin\":\"%CLAWD_PLUGIN_ID%\",\"tool\":\"%CLAWD_TOOL_NAME%\",\"input\":%INPUT%}\r\n"
+            .to_string(),
+    )
+}
+
+#[cfg(unix)]
+fn plugin_tool_script(tool_dir: &Path) -> (PathBuf, String, String) {
+    (
+        tool_dir.join("echo-json.sh"),
+        "./tools/echo-json.sh".to_string(),
+        "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n"
+            .to_string(),
+    )
+}
+
 fn assert_streaming_text(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(
         run.response["message"],
@@ -444,7 +474,7 @@ fn assert_streaming_text(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["tool_results"], Value::Array(Vec::new()));
 }
 
-fn assert_read_file_roundtrip(workspace: &HarnessWorkspace, run: &ScenarioRun) {
+fn assert_read_file_roundtrip(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
     assert_eq!(run.response["tool_uses"][0]["name"], Value::String("read_file".to_string()));
     assert_eq!(
@@ -453,7 +483,7 @@ fn assert_read_file_roundtrip(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     );
     assert!(run.response["message"].as_str().expect("message text").contains("alpha parity line"));
     let output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
-    assert!(output.contains(&workspace.root.join("fixture.txt").display().to_string()));
+    assert!(output.contains("fixture.txt"));
     assert!(output.contains("alpha parity line"));
 }
 
@@ -473,10 +503,7 @@ fn assert_grep_chunk_assembly(_: &HarnessWorkspace, run: &ScenarioRun) {
 fn assert_write_file_allowed(workspace: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["iterations"], Value::from(2));
     assert_eq!(run.response["tool_uses"][0]["name"], Value::String("write_file".to_string()));
-    assert!(run.response["message"]
-        .as_str()
-        .expect("message text")
-        .contains("generated/output.txt"));
+    assert!(run.response["message"].as_str().expect("message text").contains("output.txt"));
     let generated = workspace.root.join("generated").join("output.txt");
     let contents = fs::read_to_string(&generated).expect("generated file should exist");
     assert_eq!(contents, "created by mock service\n");
@@ -510,7 +537,7 @@ fn assert_bash_stdout_roundtrip(_: &HarnessWorkspace, run: &ScenarioRun) {
     assert_eq!(run.response["tool_uses"][0]["name"], Value::String("bash".to_string()));
     let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     let parsed: Value = serde_json::from_str(tool_output).expect("bash output json");
-    assert_eq!(parsed["stdout"], Value::String("alpha from bash".to_string()));
+    assert_eq!(parsed["stdout"].as_str().expect("stdout").trim(), "alpha from bash");
     assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
     assert!(run.response["message"].as_str().expect("message text").contains("alpha from bash"));
 }
@@ -522,7 +549,7 @@ fn assert_bash_permission_prompt_approved(_: &HarnessWorkspace, run: &ScenarioRu
     assert_eq!(run.response["tool_results"][0]["is_error"], Value::Bool(false));
     let tool_output = run.response["tool_results"][0]["output"].as_str().expect("tool output");
     let parsed: Value = serde_json::from_str(tool_output).expect("bash output json");
-    assert_eq!(parsed["stdout"], Value::String("approved via prompt".to_string()));
+    assert_eq!(parsed["stdout"].as_str().expect("stdout").trim(), "approved via prompt");
     assert!(run.response["message"]
         .as_str()
         .expect("message text")
