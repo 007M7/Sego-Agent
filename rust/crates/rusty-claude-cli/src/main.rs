@@ -43,8 +43,8 @@ use runtime::{
     community_learning::CommunityLearning,
     evaluate, format_usd, generate_pkce_pair, generate_state,
     green_contract::GreenLevel,
-    load_system_prompt, parse_oauth_callback_request_target, pricing_for_model,
-    resolve_sandbox_status, save_oauth_credentials,
+    load_system_prompt, parse_oauth_callback_request_target, persist_review_artifact,
+    pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
     workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
@@ -52,9 +52,9 @@ use runtime::{
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
     ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewContext,
-    ReviewPromptOptions, ReviewScope, ReviewStatus, ReviewTarget, RuntimeError, Session,
-    TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand, VerificationPlanStatus,
-    VerificationScope,
+    ReviewPromptOptions, ReviewReport, ReviewScope, ReviewStatus, ReviewTarget, RuntimeError,
+    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand,
+    VerificationPlanStatus, VerificationScope,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -2236,7 +2236,54 @@ impl LiveCli {
                         detail: error.to_string(),
                     },
                 ));
-                ui.phase_idx(thinking_phase).fail("Request failed", &error.to_string());
+                ui.phase_idx(thinking_phase).fail("Request failed", error.to_string());
+                let _ = ui.finish("Failed");
+                Err(Box::new(error))
+            }
+        }
+    }
+
+    fn run_turn_capture_text(&mut self, input: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
+        let mut stdout = io::stdout();
+        let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
+        ui.add_phase("thinking", "Thinking");
+        ui.add_phase("exec", "Executing");
+        let _ = ui.start();
+        let thinking_phase = 0usize;
+        let exec_phase = 1usize;
+        ui.phase_idx(thinking_phase).start();
+        let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
+        let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        ui.phase_idx(exec_phase).complete("Done", "");
+        hook_abort_monitor.stop();
+        match result {
+            Ok(summary) => {
+                let text = final_assistant_text(&summary);
+                self.replace_runtime(runtime)?;
+                ui.finish("Done")?;
+                println!();
+                if let Some(event) = summary.auto_compaction {
+                    println!("{}", format_auto_compaction_notice(event.removed_message_count));
+                }
+                self.workflow.record_event(LaneEvent::new(
+                    LaneEventName::Green,
+                    LaneEventStatus::Green,
+                    default_date(),
+                ));
+                self.persist_session()?;
+                Ok(text)
+            }
+            Err(error) => {
+                runtime.shutdown_plugins()?;
+                self.workflow.record_event(LaneEvent::blocked(
+                    default_date(),
+                    &LaneEventBlocker {
+                        failure_class: LaneFailureClass::ToolRuntime,
+                        detail: error.to_string(),
+                    },
+                ));
+                ui.phase_idx(thinking_phase).fail("Request failed", error.to_string());
                 let _ = ui.finish("Failed");
                 Err(Box::new(error))
             }
@@ -2984,9 +3031,20 @@ impl LiveCli {
         &mut self,
         target: ReviewTarget,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let prompt =
-            build_review_prompt(&ReviewContext::new(target), ReviewPromptOptions::default());
-        self.run_turn(&prompt)
+        let context = ReviewContext::new(target);
+        let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
+        let review_text = self.run_turn_capture_text(&prompt)?;
+        let report = ReviewReport::no_findings(review_text);
+        let artifact = persist_review_artifact(&env::current_dir()?, &context.target, &report)?;
+
+        println!(
+            "Review Report\n  ID               {}\n  Diff hash        {}\n  Markdown         {}\n  JSON             {}",
+            artifact.id,
+            artifact.diff_hash,
+            artifact.markdown_path.display(),
+            artifact.json_path.display()
+        );
+        Ok(())
     }
 }
 
