@@ -43,8 +43,8 @@ use runtime::{
     community_learning::CommunityLearning,
     evaluate, format_usd, generate_pkce_pair, generate_state,
     green_contract::GreenLevel,
-    load_system_prompt, parse_oauth_callback_request_target, persist_review_artifact,
-    pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
+    load_review_index, load_system_prompt, parse_oauth_callback_request_target,
+    persist_review_artifact, pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
     workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
@@ -52,8 +52,8 @@ use runtime::{
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
     ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewContext,
-    ReviewPromptOptions, ReviewReport, ReviewScope, ReviewStatus, ReviewTarget, RuntimeError,
-    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand,
+    ReviewIndexEntry, ReviewPromptOptions, ReviewReport, ReviewScope, ReviewStatus, ReviewTarget,
+    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand,
     VerificationPlanStatus, VerificationScope,
 };
 use serde::Deserialize;
@@ -203,8 +203,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .run_turn_with_output(&prompt, output_format)?;
         }
         CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
-            run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?
+            run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?;
         }
+        CliAction::CodeReviewList => print_code_review_history()?,
+        CliAction::CodeReviewShow { id } => print_code_review_report(&id)?,
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -267,6 +269,10 @@ enum CliAction {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+    },
+    CodeReviewList,
+    CodeReviewShow {
+        id: String,
     },
     CodeVerify {
         scope: Option<String>,
@@ -567,12 +573,9 @@ fn parse_direct_slash_cli_action(
             },
         }),
         Ok(Some(SlashCommand::Skills { args })) => Ok(CliAction::Skills { args }),
-        Ok(Some(SlashCommand::Review { scope })) => Ok(CliAction::CodeReview {
-            scope,
-            model,
-            allowed_tools,
-            permission_mode: PermissionMode::ReadOnly,
-        }),
+        Ok(Some(SlashCommand::Review { scope })) => {
+            parse_code_review_slash_action(scope.as_deref(), model, allowed_tools)
+        }
         Ok(Some(SlashCommand::Verify { scope })) => Ok(CliAction::CodeVerify { scope }),
         Ok(Some(SlashCommand::Unknown(name))) => Err(format_unknown_direct_slash_command(&name)),
         Ok(Some(command)) => Err({
@@ -585,6 +588,36 @@ fn parse_direct_slash_cli_action(
         }),
         Ok(None) => Err(format!("unknown subcommand: {}", rest[0])),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+fn parse_code_review_slash_action(
+    scope: Option<&str>,
+    model: String,
+    allowed_tools: Option<AllowedToolSet>,
+) -> Result<CliAction, String> {
+    let Some(scope_value) = scope.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(CliAction::CodeReview {
+            scope: None,
+            model,
+            allowed_tools,
+            permission_mode: PermissionMode::ReadOnly,
+        });
+    };
+
+    let parts = scope_value.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["list"] => Ok(CliAction::CodeReviewList),
+        ["show"] => Err("missing review id for /review show <id>".to_string()),
+        ["show", id] => Ok(CliAction::CodeReviewShow { id: (*id).to_string() }),
+        ["show", ..] => Err("unexpected arguments for /review show <id>".to_string()),
+        ["list", ..] => Err("unexpected arguments for /review list".to_string()),
+        _ => Ok(CliAction::CodeReview {
+            scope: Some(scope_value.to_string()),
+            model,
+            allowed_tools,
+            permission_mode: PermissionMode::ReadOnly,
+        }),
     }
 }
 
@@ -2491,7 +2524,7 @@ impl LiveCli {
                 false
             }
             SlashCommand::Review { scope } => {
-                self.run_review(scope.as_deref())?;
+                self.handle_review_command(scope.as_deref())?;
                 true
             }
             SlashCommand::Verify { scope } => {
@@ -3025,6 +3058,17 @@ impl LiveCli {
         }
 
         self.run_review_target(target)
+    }
+
+    fn handle_review_command(
+        &mut self,
+        scope: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match parse_review_history_command(scope)? {
+            Some(ReviewHistoryCommand::List) => print_code_review_history(),
+            Some(ReviewHistoryCommand::Show { id }) => print_code_review_report(&id),
+            None => self.run_review(scope),
+        }
     }
 
     fn run_review_target(
@@ -3965,6 +4009,102 @@ fn run_code_review_cli(
     }
 
     LiveCli::new(model, true, allowed_tools, permission_mode)?.run_review_target(target)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReviewHistoryCommand {
+    List,
+    Show { id: String },
+}
+
+fn parse_review_history_command(
+    scope: Option<&str>,
+) -> Result<Option<ReviewHistoryCommand>, Box<dyn std::error::Error>> {
+    let Some(scope_value) = scope.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    let parts = scope_value.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["list"] => Ok(Some(ReviewHistoryCommand::List)),
+        ["show"] => Err("missing review id for /review show <id>".into()),
+        ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
+        ["show", ..] => Err("unexpected arguments for /review show <id>".into()),
+        ["list", ..] => Err("unexpected arguments for /review list".into()),
+        _ => Ok(None),
+    }
+}
+
+fn print_code_review_history() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let mut entries = load_review_index(&cwd)?;
+    entries.sort_by_key(|entry| entry.created_at_epoch_seconds);
+
+    println!("Review History");
+    if entries.is_empty() {
+        println!("  Result           no review reports found");
+        println!(
+            "  Index            {}",
+            cwd.join(".sego").join("reviews").join("index.jsonl").display()
+        );
+        return Ok(());
+    }
+
+    for entry in entries.iter().rev() {
+        print_review_index_entry(entry);
+    }
+
+    Ok(())
+}
+
+fn print_review_index_entry(entry: &ReviewIndexEntry) {
+    let highest_severity = entry.highest_severity.map_or("none", runtime::ReviewSeverity::label);
+    println!(
+        "  {}\n    Scope            {}\n    Findings         {}\n    Highest severity {}\n    Parse status     {}\n    Created          {}\n    Markdown         {}",
+        entry.id,
+        entry.scope,
+        entry.finding_count,
+        highest_severity,
+        entry.parse_status.label(),
+        entry.created_at_epoch_seconds,
+        entry.markdown_path
+    );
+}
+
+fn print_code_review_report(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let entries = load_review_index(&cwd)?;
+    let entry = resolve_review_entry(&entries, id)?;
+    let markdown_path = resolve_review_markdown_path(&cwd, entry);
+    let markdown = fs::read_to_string(&markdown_path)?;
+    println!("{markdown}");
+    Ok(())
+}
+
+fn resolve_review_entry<'a>(
+    entries: &'a [ReviewIndexEntry],
+    id: &str,
+) -> Result<&'a ReviewIndexEntry, Box<dyn std::error::Error>> {
+    let matches = entries.iter().filter(|entry| entry.id == id).collect::<Vec<_>>();
+    if let [entry] = matches.as_slice() {
+        return Ok(*entry);
+    }
+
+    let prefix_matches =
+        entries.iter().filter(|entry| entry.id.starts_with(id)).collect::<Vec<_>>();
+    match prefix_matches.as_slice() {
+        [entry] => Ok(*entry),
+        [] => Err(format!("review report not found: {id}").into()),
+        _ => Err(format!("review id prefix is ambiguous: {id}").into()),
+    }
+}
+
+fn resolve_review_markdown_path(workspace_root: &Path, entry: &ReviewIndexEntry) -> PathBuf {
+    let stored = PathBuf::from(entry.markdown_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+    if stored.exists() {
+        return stored;
+    }
+    workspace_root.join(".sego").join("reviews").join(format!("{}.md", entry.id))
 }
 
 fn print_clean_review_scope(target: &ReviewTarget) {
@@ -6644,6 +6784,16 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_args(&["/review".to_string(), "list".to_string()])
+                .expect("/review list should parse"),
+            CliAction::CodeReviewList
+        );
+        assert_eq!(
+            parse_args(&["/review".to_string(), "show".to_string(), "review-123".to_string(),])
+                .expect("/review show should parse"),
+            CliAction::CodeReviewShow { id: "review-123".to_string() }
+        );
+        assert_eq!(
             parse_args(&["/verify".to_string(), "fast".to_string()])
                 .expect("/verify fast should parse"),
             CliAction::CodeVerify { scope: Some("fast".to_string()) }
@@ -6652,6 +6802,18 @@ mod tests {
             .expect_err("/status should remain REPL-only when invoked directly");
         assert!(error.contains("interactive-only"));
         assert!(error.contains("claw --resume SESSION.jsonl /status"));
+    }
+
+    #[test]
+    fn review_history_commands_reject_invalid_shapes() {
+        let missing_id = parse_args(&["/review".to_string(), "show".to_string()])
+            .expect_err("/review show should require an id");
+        assert!(missing_id.contains("missing review id"));
+
+        let extra_list_arg =
+            parse_args(&["/review".to_string(), "list".to_string(), "extra".to_string()])
+                .expect_err("/review list should not accept extra args");
+        assert!(extra_list_arg.contains("unexpected arguments"));
     }
 
     #[test]
