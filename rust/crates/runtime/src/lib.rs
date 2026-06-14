@@ -34,6 +34,7 @@ mod progress_ui;
 mod prompt;
 pub mod recovery_recipes;
 mod remote;
+pub mod safety_lock;
 pub mod sandbox;
 mod session;
 pub mod session_control;
@@ -145,6 +146,10 @@ pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
+};
+pub use safety_lock::{
+    build_safety_lock_report, SafetyCategory, SafetyFinding, SafetyLockError, SafetyLockReport,
+    SafetySeverity,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
