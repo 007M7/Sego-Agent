@@ -90,6 +90,39 @@ cd rust
 ./target/debug/sego learn
 ```
 
+## Review MVP workflow
+
+Sego's current public MVP focuses on a local review and verification loop before code is committed or handed off.
+
+Recommended staged workflow:
+
+```bash
+git add <files>
+./target/debug/sego /review ready
+./target/debug/sego /review summary
+./target/debug/sego /review safety staged
+./target/debug/sego /review staged
+./target/debug/sego /verify fast
+```
+
+Review commands:
+
+| Command | Purpose |
+|---|---|
+| `/review ready` | Read-only staged readiness report with safety and verify-plan hints |
+| `/review summary` | Read-only delivery summary for demo, PR handoff, and agent handoff |
+| `/review safety staged` | Local staged safety lock for obvious secrets, dangerous commands, and hardcoded local paths |
+| `/review staged` | Model-assisted review for staged diff |
+| `/review` | Model-assisted review for the current workspace diff |
+| `/review tools` | Read-only project toolchain suggestions |
+| `/review list` | List persisted review reports |
+| `/review show <review-id>` | Print a persisted review markdown report |
+| `/review status <review-id>` | Show finding statuses for a persisted review |
+| `/review mark <review-id> <finding-id> <status> [note]` | Mark a finding as `open`, `acknowledged`, `fixed`, or `ignored` |
+| `/verify fast` | Execute the fast verification plan explicitly |
+
+`/review ready`, `/review summary`, `/review safety staged`, and `/review tools` are read-only. They do not call models, run builds/tests, install dependencies, or modify files unless the command explicitly says it performs review or verification.
+
 ## Workflow review & learning (built-in)
 
 sego automatically records every session as structured Lane Events.
