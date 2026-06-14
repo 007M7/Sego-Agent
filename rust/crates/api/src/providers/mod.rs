@@ -30,6 +30,7 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
+    DeepSeek,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +142,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi => trimmed,
+                ProviderKind::OpenAi | ProviderKind::DeepSeek => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -166,6 +167,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         });
     }
+    if canonical.starts_with("deepseek") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::DeepSeek,
+            auth_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+        });
+    }
     None
 }
 
@@ -179,6 +188,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return ProviderKind::OpenAi;
+    }
+    if openai_compat::has_api_key("DEEPSEEK_API_KEY") {
+        return ProviderKind::DeepSeek;
     }
     if openai_compat::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
@@ -211,6 +223,8 @@ mod tests {
     fn detects_provider_from_model_name_first() {
         assert_eq!(detect_provider_kind("grok"), ProviderKind::Xai);
         assert_eq!(detect_provider_kind("claude-sonnet-4-6"), ProviderKind::Anthropic);
+        assert_eq!(detect_provider_kind("deepseek-v4-flash"), ProviderKind::DeepSeek);
+        assert_eq!(detect_provider_kind("deepseek-v4-pro"), ProviderKind::DeepSeek);
     }
 
     #[test]
