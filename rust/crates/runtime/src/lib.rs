@@ -58,8 +58,8 @@ pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::BranchLockRegistry;
 pub use code_review::{
     build_review_prompt, persist_review_artifact, review_diff_hash, PersistedReviewArtifact,
-    ReviewContext, ReviewFinding, ReviewPromptOptions, ReviewReport, ReviewScope,
-    ReviewScopeParseError, ReviewSeverity, ReviewTarget,
+    ReviewContext, ReviewFinding, ReviewParseStatus, ReviewPromptOptions, ReviewReport,
+    ReviewScope, ReviewScopeParseError, ReviewSeverity, ReviewTarget,
 };
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,

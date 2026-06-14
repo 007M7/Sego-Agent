@@ -3034,15 +3034,21 @@ impl LiveCli {
         let context = ReviewContext::new(target);
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
         let review_text = self.run_turn_capture_text(&prompt)?;
-        let report = ReviewReport::no_findings(review_text);
+        let report = ReviewReport::from_model_output(review_text);
         let artifact = persist_review_artifact(&env::current_dir()?, &context.target, &report)?;
+        let highest_severity =
+            report.highest_severity().map_or("none", runtime::ReviewSeverity::label);
 
         println!(
-            "Review Report\n  ID               {}\n  Diff hash        {}\n  Markdown         {}\n  JSON             {}",
+            "Review Report\n  ID               {}\n  Diff hash        {}\n  Parse status     {}\n  Findings         {}\n  Highest severity {}\n  Markdown         {}\n  JSON             {}\n  Index            {}",
             artifact.id,
             artifact.diff_hash,
+            report.parse_status.label(),
+            report.findings.len(),
+            highest_severity,
             artifact.markdown_path.display(),
-            artifact.json_path.display()
+            artifact.json_path.display(),
+            artifact.index_path.display()
         );
         Ok(())
     }

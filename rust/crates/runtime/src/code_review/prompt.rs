@@ -26,8 +26,9 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
         "Findings must be specific and evidence-based. Avoid broad summaries unless there are no findings.".to_string(),
         String::new(),
         "Output contract:".to_string(),
-        "- Start with findings, ordered by severity.".to_string(),
-        "- For each finding include: severity, file/path, line or hunk if available, evidence, risk, suggestion, confidence, and verification hint.".to_string(),
+        "- Prefer JSON only. Do not wrap the JSON in prose.".to_string(),
+        "- Shape: {\"findings\":[{\"severity\":\"critical|high|medium|low|info\",\"file\":\"path\",\"line\":123,\"title\":\"short title\",\"evidence\":\"specific diff evidence\",\"risk\":\"why it matters\",\"suggestion\":\"specific fix\",\"confidence\":0.0,\"verification_hint\":\"test or command to run\"}]}.".to_string(),
+        "- Order findings by severity.".to_string(),
         "- If no issues are found, say exactly: No findings.".to_string(),
         "- Do not claim tests passed unless evidence is provided in the context.".to_string(),
         String::new(),
@@ -109,7 +110,8 @@ mod tests {
 
         assert!(prompt.contains("You are Sego Review Agent."));
         assert!(prompt.contains("Mode: read-only code review."));
-        assert!(prompt.contains("severity, file/path, line or hunk"));
+        assert!(prompt.contains("Prefer JSON only."));
+        assert!(prompt.contains("\"severity\":\"critical|high|medium|low|info\""));
         assert!(prompt.contains("diff --git a/src/lib.rs b/src/lib.rs"));
     }
 
