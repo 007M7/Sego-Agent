@@ -213,6 +213,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mark_code_review_finding(&id, &finding_id, status, note)?;
         }
         CliAction::CodeReviewTools => print_code_review_tools()?,
+        CliAction::CodeReviewSafety => print_code_review_safety()?,
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -290,6 +291,7 @@ enum CliAction {
         note: Option<String>,
     },
     CodeReviewTools,
+    CodeReviewSafety,
     CodeVerify {
         scope: Option<String>,
     },
@@ -612,12 +614,9 @@ fn parse_code_review_slash_action(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
 ) -> Result<CliAction, String> {
-    eprintln!("DEBUG: parse_code_review_slash_action scope={:?}", scope);
     if let Some(command) = parse_review_history_command(scope).map_err(|error| error.to_string())? {
-        eprintln!("DEBUG: parse_review_history_command returned {:?}", command);
         return Ok(review_history_command_to_cli_action(command));
     }
-    eprintln!("DEBUG: parse_review_history_command returned None, falling through to CodeReview");
 
     let Some(scope_value) = scope.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(CliAction::CodeReview {
@@ -4032,6 +4031,7 @@ enum ReviewHistoryCommand {
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Tools,
+    Safety,
 }
 
 fn parse_review_history_command(
@@ -4046,6 +4046,8 @@ fn parse_review_history_command(
         ["list"] => Ok(Some(ReviewHistoryCommand::List)),
         ["tools"] => Ok(Some(ReviewHistoryCommand::Tools)),
         ["tools", ..] => Err("unexpected arguments for /review tools".into()),
+        ["safety"] => Ok(Some(ReviewHistoryCommand::Safety)),
+        ["safety", ..] => Err("unexpected arguments for /review safety".into()),
         ["show"] => Err("missing review id for /review show <id>".into()),
         ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
         ["show", ..] => Err("unexpected arguments for /review show <id>".into()),
@@ -4082,6 +4084,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
             CliAction::CodeReviewMark { id, finding_id, status, note }
         }
         ReviewHistoryCommand::Tools => CliAction::CodeReviewTools,
+        ReviewHistoryCommand::Safety => CliAction::CodeReviewSafety,
     }
 }
 
@@ -4096,6 +4099,7 @@ fn run_review_history_command(
             mark_code_review_finding(&id, &finding_id, status, note)
         }
         ReviewHistoryCommand::Tools => print_code_review_tools(),
+        ReviewHistoryCommand::Safety => print_code_review_safety(),
     }
 }
 
@@ -4145,6 +4149,51 @@ fn print_code_review_tools() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("  Next step        run the relevant commands manually or ask Sego to verify after approval");
+    Ok(())
+}
+
+fn print_code_review_safety() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let report = runtime::build_safety_lock_report(&cwd)?;
+
+    println!("Review Safety");
+    println!("  Root             {}", report.root);
+    println!("  Mode             read-only");
+    println!("  Safety           no files were modified; no tools were executed");
+
+    if report.findings.is_empty() {
+        println!("  Result           no obvious beginner-safety risks found");
+    } else {
+        println!("  Findings         {}", report.findings.len());
+        for finding in &report.findings {
+            let location = finding
+                .line
+                .map_or_else(|| finding.file.clone(), |line| format!("{}:{line}", finding.file));
+            println!(
+                "\n  [{}] {}\n    Category       {}\n    File           {}\n    Evidence       {}\n    Risk           {}\n    Suggestion     {}",
+                finding.severity.label(),
+                finding.title,
+                finding.category.label(),
+                location,
+                finding.evidence,
+                finding.risk,
+                finding.suggestion
+            );
+        }
+    }
+
+    if !report.warnings.is_empty() {
+        println!("  Warnings");
+        for warning in &report.warnings {
+            println!("    {warning}");
+        }
+    }
+
+    if report.findings.iter().any(|finding| finding.severity == runtime::SafetySeverity::High) {
+        println!("  Next step        fix high-risk items before asking Sego to verify or commit");
+    } else {
+        println!("  Next step        run /review tools and relevant verification commands");
+    }
     Ok(())
 }
 
@@ -7007,6 +7056,11 @@ mod tests {
             parse_args(&["/review".to_string(), "tools".to_string()])
                 .expect("/review tools should parse"),
             CliAction::CodeReviewTools
+        );
+        assert_eq!(
+            parse_args(&["/review".to_string(), "safety".to_string()])
+                .expect("/review safety should parse"),
+            CliAction::CodeReviewSafety
         );
         assert_eq!(
             parse_args(&["/review".to_string(), "show".to_string(), "review-123".to_string(),])
