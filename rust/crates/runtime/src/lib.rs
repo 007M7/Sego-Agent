@@ -43,6 +43,7 @@ pub mod summary_compression;
 pub mod task_packet;
 pub mod task_registry;
 pub mod team_cron_registry;
+pub mod tool_probe;
 pub mod trust_resolver;
 mod usage;
 pub mod verification;
@@ -161,6 +162,10 @@ pub use stale_branch::{
     StaleBranchPolicy,
 };
 pub use task_packet::{validate_packet, TaskPacket, TaskPacketValidationError, ValidatedPacket};
+pub use tool_probe::{
+    build_tool_probe_report, ProjectLanguage, ProjectSignal, ToolCheckPlan, ToolCheckRisk,
+    ToolProbeError, ToolProbeReport,
+};
 pub use trust_resolver::{TrustConfig, TrustDecision, TrustEvent, TrustPolicy, TrustResolver};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
