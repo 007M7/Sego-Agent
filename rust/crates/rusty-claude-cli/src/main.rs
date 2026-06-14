@@ -212,6 +212,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::CodeReviewMark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)?;
         }
+        CliAction::CodeReviewTools => print_code_review_tools()?,
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -288,6 +289,7 @@ enum CliAction {
         status: ReviewFindingStatus,
         note: Option<String>,
     },
+    CodeReviewTools,
     CodeVerify {
         scope: Option<String>,
     },
@@ -610,9 +612,12 @@ fn parse_code_review_slash_action(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
 ) -> Result<CliAction, String> {
+    eprintln!("DEBUG: parse_code_review_slash_action scope={:?}", scope);
     if let Some(command) = parse_review_history_command(scope).map_err(|error| error.to_string())? {
+        eprintln!("DEBUG: parse_review_history_command returned {:?}", command);
         return Ok(review_history_command_to_cli_action(command));
     }
+    eprintln!("DEBUG: parse_review_history_command returned None, falling through to CodeReview");
 
     let Some(scope_value) = scope.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(CliAction::CodeReview {
@@ -4026,6 +4031,7 @@ enum ReviewHistoryCommand {
     Show { id: String },
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
+    Tools,
 }
 
 fn parse_review_history_command(
@@ -4038,6 +4044,8 @@ fn parse_review_history_command(
     let parts = scope_value.split_whitespace().collect::<Vec<_>>();
     match parts.as_slice() {
         ["list"] => Ok(Some(ReviewHistoryCommand::List)),
+        ["tools"] => Ok(Some(ReviewHistoryCommand::Tools)),
+        ["tools", ..] => Err("unexpected arguments for /review tools".into()),
         ["show"] => Err("missing review id for /review show <id>".into()),
         ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
         ["show", ..] => Err("unexpected arguments for /review show <id>".into()),
@@ -4073,6 +4081,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             CliAction::CodeReviewMark { id, finding_id, status, note }
         }
+        ReviewHistoryCommand::Tools => CliAction::CodeReviewTools,
     }
 }
 
@@ -4086,7 +4095,57 @@ fn run_review_history_command(
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)
         }
+        ReviewHistoryCommand::Tools => print_code_review_tools(),
     }
+}
+
+fn print_code_review_tools() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let report = runtime::build_tool_probe_report(&cwd)?;
+
+    println!("Review Tool Plan");
+    println!("  Root             {}", report.root);
+    println!("  Mode             suggest-only");
+    println!("  Safety           no tools were executed; no dependencies were installed");
+
+    if report.signals.is_empty() {
+        println!("  Projects         none detected");
+    } else {
+        println!("  Projects");
+        for signal in &report.signals {
+            println!("    {} (confidence {}%)", signal.language.label(), signal.confidence);
+            if !signal.evidence_paths.is_empty() {
+                println!("      Evidence      {}", signal.evidence_paths.join(", "));
+            }
+        }
+    }
+
+    if report.checks.is_empty() {
+        println!("  Checks           no checks planned");
+    } else {
+        println!("  Suggested checks");
+        for check in &report.checks {
+            println!(
+                "    [{}] {}\n      Command       {}\n      Purpose       {}\n      Risk          {}\n      Execution     {}",
+                check.language.label(),
+                check.tool,
+                check.command,
+                check.purpose,
+                check.risk.label(),
+                check.execution_mode
+            );
+        }
+    }
+
+    if !report.warnings.is_empty() {
+        println!("  Warnings");
+        for warning in &report.warnings {
+            println!("    {warning}");
+        }
+    }
+
+    println!("  Next step        run the relevant commands manually or ask Sego to verify after approval");
+    Ok(())
 }
 
 fn print_code_review_history() -> Result<(), Box<dyn std::error::Error>> {
@@ -6943,6 +7002,11 @@ mod tests {
             parse_args(&["/review".to_string(), "list".to_string()])
                 .expect("/review list should parse"),
             CliAction::CodeReviewList
+        );
+        assert_eq!(
+            parse_args(&["/review".to_string(), "tools".to_string()])
+                .expect("/review tools should parse"),
+            CliAction::CodeReviewTools
         );
         assert_eq!(
             parse_args(&["/review".to_string(), "show".to_string(), "review-123".to_string(),])
