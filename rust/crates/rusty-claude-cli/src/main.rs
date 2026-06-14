@@ -43,8 +43,9 @@ use runtime::{
     community_learning::CommunityLearning,
     evaluate, format_usd, generate_pkce_pair, generate_state,
     green_contract::GreenLevel,
-    load_review_index, load_system_prompt, parse_oauth_callback_request_target,
-    persist_review_artifact, pricing_for_model, resolve_sandbox_status, save_oauth_credentials,
+    latest_review_finding_statuses, load_review_index, load_system_prompt,
+    parse_oauth_callback_request_target, persist_review_artifact, pricing_for_model,
+    record_review_finding_status, resolve_sandbox_status, save_oauth_credentials,
     workflow::{SessionReport, WorkflowSnapshot, WorkflowStore},
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, DiffScope, LaneBlocker, LaneContext,
@@ -52,9 +53,9 @@ use runtime::{
     McpServerManager, McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, Phase, PhaseLogEntry, PhaseStatus,
     ProgressUI, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, ReviewContext,
-    ReviewIndexEntry, ReviewPromptOptions, ReviewReport, ReviewScope, ReviewStatus, ReviewTarget,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, VerificationCommand,
-    VerificationPlanStatus, VerificationScope,
+    ReviewFindingStatus, ReviewIndexEntry, ReviewPromptOptions, ReviewReport, ReviewScope,
+    ReviewStatus, ReviewTarget, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    UsageTracker, VerificationCommand, VerificationPlanStatus, VerificationScope,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -207,6 +208,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::CodeReviewList => print_code_review_history()?,
         CliAction::CodeReviewShow { id } => print_code_review_report(&id)?,
+        CliAction::CodeReviewStatus { id } => print_code_review_finding_status(&id)?,
+        CliAction::CodeReviewMark { id, finding_id, status, note } => {
+            mark_code_review_finding(&id, &finding_id, status, note)?;
+        }
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -273,6 +278,15 @@ enum CliAction {
     CodeReviewList,
     CodeReviewShow {
         id: String,
+    },
+    CodeReviewStatus {
+        id: String,
+    },
+    CodeReviewMark {
+        id: String,
+        finding_id: String,
+        status: ReviewFindingStatus,
+        note: Option<String>,
     },
     CodeVerify {
         scope: Option<String>,
@@ -596,6 +610,10 @@ fn parse_code_review_slash_action(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
 ) -> Result<CliAction, String> {
+    if let Some(command) = parse_review_history_command(scope).map_err(|error| error.to_string())? {
+        return Ok(review_history_command_to_cli_action(command));
+    }
+
     let Some(scope_value) = scope.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(CliAction::CodeReview {
             scope: None,
@@ -605,20 +623,12 @@ fn parse_code_review_slash_action(
         });
     };
 
-    let parts = scope_value.split_whitespace().collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["list"] => Ok(CliAction::CodeReviewList),
-        ["show"] => Err("missing review id for /review show <id>".to_string()),
-        ["show", id] => Ok(CliAction::CodeReviewShow { id: (*id).to_string() }),
-        ["show", ..] => Err("unexpected arguments for /review show <id>".to_string()),
-        ["list", ..] => Err("unexpected arguments for /review list".to_string()),
-        _ => Ok(CliAction::CodeReview {
-            scope: Some(scope_value.to_string()),
-            model,
-            allowed_tools,
-            permission_mode: PermissionMode::ReadOnly,
-        }),
-    }
+    Ok(CliAction::CodeReview {
+        scope: Some(scope_value.to_string()),
+        model,
+        allowed_tools,
+        permission_mode: PermissionMode::ReadOnly,
+    })
 }
 
 fn format_unknown_option(option: &str) -> String {
@@ -3065,8 +3075,7 @@ impl LiveCli {
         scope: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match parse_review_history_command(scope)? {
-            Some(ReviewHistoryCommand::List) => print_code_review_history(),
-            Some(ReviewHistoryCommand::Show { id }) => print_code_review_report(&id),
+            Some(command) => run_review_history_command(command),
             None => self.run_review(scope),
         }
     }
@@ -4015,6 +4024,8 @@ fn run_code_review_cli(
 enum ReviewHistoryCommand {
     List,
     Show { id: String },
+    Status { id: String },
+    Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
 }
 
 fn parse_review_history_command(
@@ -4030,8 +4041,51 @@ fn parse_review_history_command(
         ["show"] => Err("missing review id for /review show <id>".into()),
         ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
         ["show", ..] => Err("unexpected arguments for /review show <id>".into()),
+        ["status"] => Err("missing review id for /review status <id>".into()),
+        ["status", id] => Ok(Some(ReviewHistoryCommand::Status { id: (*id).to_string() })),
+        ["status", ..] => Err("unexpected arguments for /review status <id>".into()),
+        ["mark"] | ["mark", _] | ["mark", _, _] => {
+            Err("missing arguments for /review mark <review-id> <finding-id> <status> [note]"
+                .into())
+        }
+        ["mark", id, finding_id, status] => Ok(Some(ReviewHistoryCommand::Mark {
+            id: (*id).to_string(),
+            finding_id: (*finding_id).to_string(),
+            status: ReviewFindingStatus::parse(status)?,
+            note: None,
+        })),
+        ["mark", id, finding_id, status, note @ ..] => Ok(Some(ReviewHistoryCommand::Mark {
+            id: (*id).to_string(),
+            finding_id: (*finding_id).to_string(),
+            status: ReviewFindingStatus::parse(status)?,
+            note: Some(note.join(" ")),
+        })),
         ["list", ..] => Err("unexpected arguments for /review list".into()),
         _ => Ok(None),
+    }
+}
+
+fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAction {
+    match command {
+        ReviewHistoryCommand::List => CliAction::CodeReviewList,
+        ReviewHistoryCommand::Show { id } => CliAction::CodeReviewShow { id },
+        ReviewHistoryCommand::Status { id } => CliAction::CodeReviewStatus { id },
+        ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
+            CliAction::CodeReviewMark { id, finding_id, status, note }
+        }
+    }
+}
+
+fn run_review_history_command(
+    command: ReviewHistoryCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        ReviewHistoryCommand::List => print_code_review_history(),
+        ReviewHistoryCommand::Show { id } => print_code_review_report(&id),
+        ReviewHistoryCommand::Status { id } => print_code_review_finding_status(&id),
+        ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
+            mark_code_review_finding(&id, &finding_id, status, note)
+        }
     }
 }
 
@@ -4081,6 +4135,71 @@ fn print_code_review_report(id: &str) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+fn print_code_review_finding_status(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let entries = load_review_index(&cwd)?;
+    let entry = resolve_review_entry(&entries, id)?;
+    let report = load_review_report_from_index_entry(&cwd, entry)?;
+    let latest_statuses = latest_review_finding_statuses(&cwd, &entry.id)?;
+
+    println!("Review Finding Status");
+    println!("  Review           {}", entry.id);
+    println!("  Findings         {}", report.findings.len());
+    if report.findings.is_empty() {
+        println!("  Result           no structured findings");
+        return Ok(());
+    }
+
+    for finding in &report.findings {
+        let status = latest_statuses
+            .get(&finding.id)
+            .map_or(ReviewFindingStatus::Open, |entry| entry.status);
+        let line = finding.line.map_or_else(|| "-".to_string(), |line| line.to_string());
+        println!(
+            "  {}\n    Status           {}\n    Severity         {}\n    Location         {}:{}\n    Title            {}",
+            finding.id,
+            status.label(),
+            finding.severity.label(),
+            finding.file,
+            line,
+            finding.title
+        );
+        if let Some(note) = latest_statuses.get(&finding.id).and_then(|entry| entry.note.as_ref()) {
+            println!("    Note             {note}");
+        }
+    }
+
+    Ok(())
+}
+
+fn mark_code_review_finding(
+    id: &str,
+    finding_id: &str,
+    status: ReviewFindingStatus,
+    note: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let entries = load_review_index(&cwd)?;
+    let entry = resolve_review_entry(&entries, id)?;
+    let report = load_review_report_from_index_entry(&cwd, entry)?;
+    if !report.findings.iter().any(|finding| finding.id == finding_id) {
+        return Err(format!("finding not found in {}: {finding_id}", entry.id).into());
+    }
+
+    let status_entry = record_review_finding_status(&cwd, &entry.id, finding_id, status, note)?;
+
+    println!("Review Finding Marked");
+    println!("  Review           {}", status_entry.report_id);
+    println!("  Finding          {}", status_entry.finding_id);
+    println!("  Status           {}", status_entry.status.label());
+    println!("  Updated          {}", status_entry.updated_at_epoch_seconds);
+    if let Some(note) = status_entry.note {
+        println!("  Note             {note}");
+    }
+
+    Ok(())
+}
+
 fn resolve_review_entry<'a>(
     entries: &'a [ReviewIndexEntry],
     id: &str,
@@ -4105,6 +4224,42 @@ fn resolve_review_markdown_path(workspace_root: &Path, entry: &ReviewIndexEntry)
         return stored;
     }
     workspace_root.join(".sego").join("reviews").join(format!("{}.md", entry.id))
+}
+
+fn load_review_report_from_index_entry(
+    workspace_root: &Path,
+    entry: &ReviewIndexEntry,
+) -> Result<ReviewReport, Box<dyn std::error::Error>> {
+    let json_path = resolve_review_json_path(workspace_root, entry);
+    let json = fs::read_to_string(json_path)?;
+    let artifact: serde_json::Value = serde_json::from_str(json.trim_start_matches('\u{feff}'))?;
+    let findings = artifact
+        .get("findings")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let raw_text = artifact
+        .get("raw_text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let parse_status = artifact
+        .get("parse_status")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or(runtime::ReviewParseStatus::FallbackRawText);
+
+    Ok(ReviewReport { findings, raw_text, parse_status })
+}
+
+fn resolve_review_json_path(workspace_root: &Path, entry: &ReviewIndexEntry) -> PathBuf {
+    let stored = PathBuf::from(entry.json_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+    if stored.exists() {
+        return stored;
+    }
+    workspace_root.join(".sego").join("reviews").join(format!("{}.json", entry.id))
 }
 
 fn print_clean_review_scope(target: &ReviewTarget) {
@@ -6268,6 +6423,7 @@ mod tests {
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
     };
+    use runtime::ReviewFindingStatus;
     use runtime::{
         AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, MessageRole,
         PermissionMode, Session, ToolExecutor,
@@ -6794,6 +6950,30 @@ mod tests {
             CliAction::CodeReviewShow { id: "review-123".to_string() }
         );
         assert_eq!(
+            parse_args(&["/review".to_string(), "status".to_string(), "review-123".to_string()])
+                .expect("/review status should parse"),
+            CliAction::CodeReviewStatus { id: "review-123".to_string() }
+        );
+        assert_eq!(
+            parse_args(&[
+                "/review".to_string(),
+                "mark".to_string(),
+                "review-123".to_string(),
+                "finding-456".to_string(),
+                "fixed".to_string(),
+                "covered".to_string(),
+                "by".to_string(),
+                "tests".to_string(),
+            ])
+            .expect("/review mark should parse"),
+            CliAction::CodeReviewMark {
+                id: "review-123".to_string(),
+                finding_id: "finding-456".to_string(),
+                status: ReviewFindingStatus::Fixed,
+                note: Some("covered by tests".to_string()),
+            }
+        );
+        assert_eq!(
             parse_args(&["/verify".to_string(), "fast".to_string()])
                 .expect("/verify fast should parse"),
             CliAction::CodeVerify { scope: Some("fast".to_string()) }
@@ -6814,6 +6994,16 @@ mod tests {
             parse_args(&["/review".to_string(), "list".to_string(), "extra".to_string()])
                 .expect_err("/review list should not accept extra args");
         assert!(extra_list_arg.contains("unexpected arguments"));
+
+        let invalid_status = parse_args(&[
+            "/review".to_string(),
+            "mark".to_string(),
+            "review-123".to_string(),
+            "finding-456".to_string(),
+            "done".to_string(),
+        ])
+        .expect_err("/review mark should reject invalid status");
+        assert!(invalid_status.contains("unsupported review finding status"));
     }
 
     #[test]
