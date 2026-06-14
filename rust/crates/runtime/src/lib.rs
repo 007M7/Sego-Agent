@@ -148,8 +148,8 @@ pub use remote::{
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
 pub use safety_lock::{
-    build_safety_lock_report, SafetyCategory, SafetyFinding, SafetyLockError, SafetyLockReport,
-    SafetySeverity,
+    build_safety_lock_report, build_safety_lock_report_for_paths, SafetyCategory, SafetyFinding,
+    SafetyLockError, SafetyLockReport, SafetyScanMode, SafetySeverity,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
