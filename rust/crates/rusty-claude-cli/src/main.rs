@@ -213,7 +213,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mark_code_review_finding(&id, &finding_id, status, note)?;
         }
         CliAction::CodeReviewTools => print_code_review_tools()?,
-        CliAction::CodeReviewSafety => print_code_review_safety()?,
+        CliAction::CodeReviewSafety { scope } => print_code_review_safety(scope)?,
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -291,7 +291,9 @@ enum CliAction {
         note: Option<String>,
     },
     CodeReviewTools,
-    CodeReviewSafety,
+    CodeReviewSafety {
+        scope: SafetyReviewScope,
+    },
     CodeVerify {
         scope: Option<String>,
     },
@@ -319,6 +321,12 @@ enum CliAction {
         action: Option<String>,
         output_format: CliOutputFormat,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafetyReviewScope {
+    Workspace,
+    Staged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4008,6 +4016,12 @@ fn collect_review_target(
     Ok(ReviewTarget { scope, git_status, staged_diff, unstaged_diff })
 }
 
+fn collect_staged_review_paths(cwd: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let output =
+        run_git_diff_command_in(cwd, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
+    Ok(output.lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).collect())
+}
+
 fn run_code_review_cli(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -4031,7 +4045,7 @@ enum ReviewHistoryCommand {
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Tools,
-    Safety,
+    Safety { scope: SafetyReviewScope },
 }
 
 fn parse_review_history_command(
@@ -4046,7 +4060,12 @@ fn parse_review_history_command(
         ["list"] => Ok(Some(ReviewHistoryCommand::List)),
         ["tools"] => Ok(Some(ReviewHistoryCommand::Tools)),
         ["tools", ..] => Err("unexpected arguments for /review tools".into()),
-        ["safety"] => Ok(Some(ReviewHistoryCommand::Safety)),
+        ["safety"] => {
+            Ok(Some(ReviewHistoryCommand::Safety { scope: SafetyReviewScope::Workspace }))
+        }
+        ["safety", "staged"] => {
+            Ok(Some(ReviewHistoryCommand::Safety { scope: SafetyReviewScope::Staged }))
+        }
         ["safety", ..] => Err("unexpected arguments for /review safety".into()),
         ["show"] => Err("missing review id for /review show <id>".into()),
         ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
@@ -4084,7 +4103,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
             CliAction::CodeReviewMark { id, finding_id, status, note }
         }
         ReviewHistoryCommand::Tools => CliAction::CodeReviewTools,
-        ReviewHistoryCommand::Safety => CliAction::CodeReviewSafety,
+        ReviewHistoryCommand::Safety { scope } => CliAction::CodeReviewSafety { scope },
     }
 }
 
@@ -4099,7 +4118,7 @@ fn run_review_history_command(
             mark_code_review_finding(&id, &finding_id, status, note)
         }
         ReviewHistoryCommand::Tools => print_code_review_tools(),
-        ReviewHistoryCommand::Safety => print_code_review_safety(),
+        ReviewHistoryCommand::Safety { scope } => print_code_review_safety(scope),
     }
 }
 
@@ -4152,13 +4171,34 @@ fn print_code_review_tools() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_code_review_safety() -> Result<(), Box<dyn std::error::Error>> {
+fn print_code_review_safety(scope: SafetyReviewScope) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    let report = runtime::build_safety_lock_report(&cwd)?;
+    let report = match scope {
+        SafetyReviewScope::Workspace => runtime::build_safety_lock_report(&cwd)?,
+        SafetyReviewScope::Staged => {
+            let paths = collect_staged_review_paths(&cwd)?;
+            if paths.is_empty() {
+                println!("Review Safety");
+                println!("  Root             {}", cwd.display());
+                println!("  Mode             read-only");
+                println!("  Scope            staged");
+                println!("  Safety           no files were modified; no tools were executed");
+                println!("  Result           no staged files to scan");
+                println!("  Next step        stage changes, then rerun /review safety staged");
+                return Ok(());
+            }
+            runtime::build_safety_lock_report_for_paths(
+                &cwd,
+                paths,
+                runtime::SafetyScanMode::Staged,
+            )?
+        }
+    };
 
     println!("Review Safety");
     println!("  Root             {}", report.root);
     println!("  Mode             read-only");
+    println!("  Scope            {}", report.mode.label());
     println!("  Safety           no files were modified; no tools were executed");
 
     if report.findings.is_empty() {
@@ -6524,8 +6564,8 @@ mod tests {
         resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
+        SlashCommand, StatusUsage,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -7060,7 +7100,12 @@ mod tests {
         assert_eq!(
             parse_args(&["/review".to_string(), "safety".to_string()])
                 .expect("/review safety should parse"),
-            CliAction::CodeReviewSafety
+            CliAction::CodeReviewSafety { scope: SafetyReviewScope::Workspace }
+        );
+        assert_eq!(
+            parse_args(&["/review".to_string(), "safety".to_string(), "staged".to_string()])
+                .expect("/review safety staged should parse"),
+            CliAction::CodeReviewSafety { scope: SafetyReviewScope::Staged }
         );
         assert_eq!(
             parse_args(&["/review".to_string(), "show".to_string(), "review-123".to_string(),])

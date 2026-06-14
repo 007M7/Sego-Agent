@@ -48,6 +48,23 @@ impl SafetyCategory {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SafetyScanMode {
+    Workspace,
+    Staged,
+}
+
+impl SafetyScanMode {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Staged => "staged",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SafetyFinding {
     pub severity: SafetySeverity,
@@ -63,6 +80,7 @@ pub struct SafetyFinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SafetyLockReport {
     pub root: String,
+    pub mode: SafetyScanMode,
     pub findings: Vec<SafetyFinding>,
     pub warnings: Vec<String>,
 }
@@ -135,7 +153,56 @@ pub fn build_safety_lock_report(root: &Path) -> Result<SafetyLockReport, SafetyL
 
     findings.sort_by_key(|finding| severity_rank(finding.severity));
     let warnings = build_warnings(&state);
-    Ok(SafetyLockReport { root: root.display().to_string(), findings, warnings })
+    Ok(SafetyLockReport {
+        root: root.display().to_string(),
+        mode: SafetyScanMode::Workspace,
+        findings,
+        warnings,
+    })
+}
+
+pub fn build_safety_lock_report_for_paths<I, P>(
+    root: &Path,
+    relative_paths: I,
+    mode: SafetyScanMode,
+) -> Result<SafetyLockReport, SafetyLockError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    if !root.is_dir() {
+        return Err(SafetyLockError::NotDirectory(root.to_path_buf()));
+    }
+
+    let mut findings = Vec::new();
+    let mut state = ScanState::default();
+    for relative_path in relative_paths {
+        if state.scanned_entries >= MAX_SCAN_ENTRIES {
+            state.truncated_entries = true;
+            break;
+        }
+
+        let relative_path = relative_path.as_ref();
+        if !is_safe_relative_path(relative_path) {
+            continue;
+        }
+
+        let path = root.join(relative_path);
+        if !path.is_file() {
+            continue;
+        }
+
+        state.scanned_entries += 1;
+        scan_existing_file(root, &path, &mut findings, &mut state)?;
+        if findings.len() >= MAX_FINDINGS {
+            state.truncated_findings = true;
+            break;
+        }
+    }
+
+    findings.sort_by_key(|finding| severity_rank(finding.severity));
+    let warnings = build_warnings(&state);
+    Ok(SafetyLockReport { root: root.display().to_string(), mode, findings, warnings })
 }
 
 fn scan_file(
@@ -145,10 +212,19 @@ fn scan_file(
     state: &mut ScanState,
 ) -> Result<(), SafetyLockError> {
     let path = entry.path();
+    scan_existing_file(root, path, findings, state)
+}
+
+fn scan_existing_file(
+    root: &Path,
+    path: &Path,
+    findings: &mut Vec<SafetyFinding>,
+    state: &mut ScanState,
+) -> Result<(), SafetyLockError> {
     let relative = relative_path(root, path);
     add_path_findings(&relative, findings);
 
-    let metadata = entry.metadata()?;
+    let metadata = fs::metadata(path)?;
     if metadata.len() > MAX_FILE_BYTES {
         state.skipped_large_files += 1;
         return Ok(());
@@ -174,6 +250,14 @@ fn scan_file(
         }
     }
     Ok(())
+}
+
+fn is_safe_relative_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && path.components().any(|component| matches!(component, std::path::Component::Normal(_)))
+        && path.components().all(|component| {
+            matches!(component, std::path::Component::Normal(_) | std::path::Component::CurDir)
+        })
 }
 
 fn add_path_findings(relative: &str, findings: &mut Vec<SafetyFinding>) {
@@ -411,7 +495,7 @@ fn should_scan_dangerous_commands(relative: &str) -> bool {
 
 fn should_scan_file_content(relative: &str) -> bool {
     let normalized = relative.replace('\\', "/").to_ascii_lowercase();
-    !(normalized == "crates/runtime/src/safety_lock.rs"
+    !(normalized.ends_with("crates/runtime/src/safety_lock.rs")
         || normalized.contains("/tests/")
         || normalized.ends_with("_test.rs")
         || normalized.ends_with("_tests.rs")
@@ -534,7 +618,10 @@ fn relative_path(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_safety_lock_report, SafetyCategory, SafetySeverity, MAX_FILE_BYTES};
+    use super::{
+        build_safety_lock_report, build_safety_lock_report_for_paths, SafetyCategory,
+        SafetyScanMode, SafetySeverity, MAX_FILE_BYTES,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -650,6 +737,49 @@ mod tests {
         assert!(report.findings.is_empty());
         assert!(report.warnings.is_empty());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn path_scoped_scan_ignores_unlisted_files() {
+        let root = temp_dir("scoped");
+        let key = ["API", "_KEY"].concat();
+        let value = ["sk", "-live-value-that-looks-real"].concat();
+        write(&root.join(".env"), &format!("{key}={value}\n"));
+        write(&root.join("src/main.rs"), "fn main() { println!(\"hello\"); }\n");
+
+        let report = build_safety_lock_report_for_paths(
+            &root,
+            [PathBuf::from("src/main.rs")],
+            SafetyScanMode::Staged,
+        )
+        .expect("safety report");
+
+        assert_eq!(report.mode, SafetyScanMode::Staged);
+        assert!(report.findings.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn path_scoped_scan_ignores_unsafe_relative_paths() {
+        let root = temp_dir("unsafe-relative");
+        let outside = root.parent().expect("temp root parent").join("secret.env");
+        let key = ["API", "_KEY"].concat();
+        let value = ["sk", "-live-value-that-looks-real"].concat();
+        write(&outside, &format!("{key}={value}\n"));
+        write(&root.join("safe.rs"), "fn main() {}\n");
+
+        let report = build_safety_lock_report_for_paths(
+            &root,
+            [PathBuf::from("../secret.env"), PathBuf::from("safe.rs")],
+            SafetyScanMode::Staged,
+        )
+        .expect("safety report");
+
+        assert!(report.findings.is_empty());
+
+        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 }
