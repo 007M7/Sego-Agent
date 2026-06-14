@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
@@ -133,6 +134,48 @@ pub struct ReviewIndexEntry {
     pub markdown_path: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewFindingStatus {
+    Open,
+    Acknowledged,
+    Fixed,
+    Ignored,
+}
+
+impl ReviewFindingStatus {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Acknowledged => "acknowledged",
+            Self::Fixed => "fixed",
+            Self::Ignored => "ignored",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "open" => Ok(Self::Open),
+            "acknowledged" | "ack" => Ok(Self::Acknowledged),
+            "fixed" | "resolved" => Ok(Self::Fixed),
+            "ignored" | "ignore" => Ok(Self::Ignored),
+            other => Err(format!(
+                "unsupported review finding status `{other}` (expected open, acknowledged, fixed, or ignored)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewFindingStatusEntry {
+    pub report_id: String,
+    pub finding_id: String,
+    pub status: ReviewFindingStatus,
+    pub note: Option<String>,
+    pub updated_at_epoch_seconds: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReviewReportWire {
     findings: Vec<ReviewFinding>,
@@ -187,6 +230,7 @@ pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEnt
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(line_index, line)| {
+            let line = line.trim_start_matches('\u{feff}');
             serde_json::from_str::<ReviewIndexEntry>(line).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -195,6 +239,74 @@ pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEnt
             })
         })
         .collect()
+}
+
+pub fn record_review_finding_status(
+    workspace_root: &Path,
+    report_id: &str,
+    finding_id: &str,
+    status: ReviewFindingStatus,
+    note: Option<String>,
+) -> io::Result<ReviewFindingStatusEntry> {
+    let reviews_dir = workspace_root.join(".sego").join("reviews");
+    fs::create_dir_all(&reviews_dir)?;
+
+    let entry = ReviewFindingStatusEntry {
+        report_id: report_id.to_string(),
+        finding_id: finding_id.to_string(),
+        status,
+        note: note.filter(|value| !value.trim().is_empty()),
+        updated_at_epoch_seconds: current_epoch_seconds(),
+    };
+
+    let status_path = reviews_dir.join("status.jsonl");
+    let mut line = serde_json::to_string(&entry)?;
+    line.push('\n');
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(status_path)?
+        .write_all(line.as_bytes())?;
+
+    Ok(entry)
+}
+
+pub fn load_review_finding_statuses(
+    workspace_root: &Path,
+) -> io::Result<Vec<ReviewFindingStatusEntry>> {
+    let status_path = workspace_root.join(".sego").join("reviews").join("status.jsonl");
+    if !status_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = fs::read_to_string(status_path)?;
+    contents
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(line_index, line)| {
+            let line = line.trim_start_matches('\u{feff}');
+            serde_json::from_str::<ReviewFindingStatusEntry>(line).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid review status entry at line {}: {error}", line_index + 1),
+                )
+            })
+        })
+        .collect()
+}
+
+pub fn latest_review_finding_statuses(
+    workspace_root: &Path,
+    report_id: &str,
+) -> io::Result<BTreeMap<String, ReviewFindingStatusEntry>> {
+    let mut statuses = BTreeMap::new();
+    for entry in load_review_finding_statuses(workspace_root)? {
+        if entry.report_id == report_id {
+            statuses.insert(entry.finding_id.clone(), entry);
+        }
+    }
+    Ok(statuses)
 }
 
 #[must_use]
@@ -356,8 +468,9 @@ fn short_hash(hash: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_review_index, persist_review_artifact, review_diff_hash, ReviewParseStatus,
-        ReviewReport,
+        latest_review_finding_statuses, load_review_finding_statuses, load_review_index,
+        persist_review_artifact, record_review_finding_status, review_diff_hash,
+        ReviewFindingStatus, ReviewParseStatus, ReviewReport,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
 
@@ -483,6 +596,57 @@ mod tests {
         let entries = load_review_index(&root).expect("missing index should be empty");
 
         assert!(entries.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_review_finding_status_aliases() {
+        assert_eq!(ReviewFindingStatus::parse("open"), Ok(ReviewFindingStatus::Open));
+        assert_eq!(ReviewFindingStatus::parse("ack"), Ok(ReviewFindingStatus::Acknowledged));
+        assert_eq!(ReviewFindingStatus::parse("resolved"), Ok(ReviewFindingStatus::Fixed));
+        assert_eq!(ReviewFindingStatus::parse("ignore"), Ok(ReviewFindingStatus::Ignored));
+        assert!(ReviewFindingStatus::parse("done").is_err());
+    }
+
+    #[test]
+    fn records_and_loads_latest_review_finding_statuses() {
+        let root = temp_path("review-finding-status");
+
+        record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-1",
+            ReviewFindingStatus::Acknowledged,
+            Some("triaged".to_string()),
+        )
+        .expect("status should record");
+        record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-1",
+            ReviewFindingStatus::Fixed,
+            Some("covered by test".to_string()),
+        )
+        .expect("status should record");
+        record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-2",
+            ReviewFindingStatus::Ignored,
+            None,
+        )
+        .expect("status should record");
+
+        let all_statuses = load_review_finding_statuses(&root).expect("statuses should load");
+        let latest =
+            latest_review_finding_statuses(&root, "review-1").expect("latest statuses should load");
+
+        assert_eq!(all_statuses.len(), 3);
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest["finding-1"].status, ReviewFindingStatus::Fixed);
+        assert_eq!(latest["finding-1"].note.as_deref(), Some("covered by test"));
+        assert_eq!(latest["finding-2"].status, ReviewFindingStatus::Ignored);
 
         let _ = std::fs::remove_dir_all(root);
     }
