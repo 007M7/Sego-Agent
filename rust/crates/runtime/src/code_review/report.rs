@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -121,16 +121,16 @@ struct ReviewArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct ReviewIndexEntry {
-    id: String,
-    created_at_epoch_seconds: u64,
-    scope: String,
-    diff_hash: String,
-    finding_count: usize,
-    highest_severity: Option<ReviewSeverity>,
-    parse_status: ReviewParseStatus,
-    json_path: String,
-    markdown_path: String,
+pub struct ReviewIndexEntry {
+    pub id: String,
+    pub created_at_epoch_seconds: u64,
+    pub scope: String,
+    pub diff_hash: String,
+    pub finding_count: usize,
+    pub highest_severity: Option<ReviewSeverity>,
+    pub parse_status: ReviewParseStatus,
+    pub json_path: String,
+    pub markdown_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +173,28 @@ pub fn persist_review_artifact(
     append_review_index(&index_path, &artifact, &json_path, &markdown_path)?;
 
     Ok(PersistedReviewArtifact { id, diff_hash, json_path, markdown_path, index_path })
+}
+
+pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEntry>> {
+    let index_path = workspace_root.join(".sego").join("reviews").join("index.jsonl");
+    if !index_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = fs::read_to_string(index_path)?;
+    contents
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(line_index, line)| {
+            serde_json::from_str::<ReviewIndexEntry>(line).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid review index entry at line {}: {error}", line_index + 1),
+                )
+            })
+        })
+        .collect()
 }
 
 #[must_use]
@@ -333,7 +355,10 @@ fn short_hash(hash: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{persist_review_artifact, review_diff_hash, ReviewParseStatus, ReviewReport};
+    use super::{
+        load_review_index, persist_review_artifact, review_diff_hash, ReviewParseStatus,
+        ReviewReport,
+    };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
 
     #[test]
@@ -426,6 +451,38 @@ mod tests {
         let index = std::fs::read_to_string(&artifact.index_path).expect("read index");
         assert!(index.contains("\"finding_count\":1"));
         assert!(index.contains("\"highest_severity\":\"critical\""));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn loads_review_index_entries() {
+        let root = temp_path("review-index-load");
+        let target = target_with_diff("diff --git a/src/lib.rs b/src/lib.rs\n");
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"medium","file":"src/lib.rs","line":9,"title":"Missing branch coverage","evidence":"new branch has no test","risk":"regression can slip","suggestion":"add a focused test","confidence":0.72,"verification_hint":"cargo test"}]}"#,
+        );
+        let artifact =
+            persist_review_artifact(&root, &target, &report).expect("artifact should persist");
+
+        let entries = load_review_index(&root).expect("index should load");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, artifact.id);
+        assert_eq!(entries[0].finding_count, 1);
+        assert_eq!(entries[0].highest_severity, Some(ReviewSeverity::Medium));
+        assert_eq!(entries[0].parse_status, ReviewParseStatus::Structured);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_review_index_loads_as_empty_history() {
+        let root = temp_path("review-index-missing");
+
+        let entries = load_review_index(&root).expect("missing index should be empty");
+
+        assert!(entries.is_empty());
 
         let _ = std::fs::remove_dir_all(root);
     }

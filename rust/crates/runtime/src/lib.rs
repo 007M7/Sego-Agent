@@ -57,9 +57,10 @@ pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::BranchLockRegistry;
 pub use code_review::{
-    build_review_prompt, persist_review_artifact, review_diff_hash, PersistedReviewArtifact,
-    ReviewContext, ReviewFinding, ReviewParseStatus, ReviewPromptOptions, ReviewReport,
-    ReviewScope, ReviewScopeParseError, ReviewSeverity, ReviewTarget,
+    build_review_prompt, load_review_index, persist_review_artifact, review_diff_hash,
+    PersistedReviewArtifact, ReviewContext, ReviewFinding, ReviewIndexEntry, ReviewParseStatus,
+    ReviewPromptOptions, ReviewReport, ReviewScope, ReviewScopeParseError, ReviewSeverity,
+    ReviewTarget,
 };
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
