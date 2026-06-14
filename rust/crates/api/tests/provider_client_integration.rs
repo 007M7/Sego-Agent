@@ -1,7 +1,9 @@
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
-use api::{read_xai_base_url, ApiError, AuthSource, ProviderClient, ProviderKind};
+use api::{
+    read_deepseek_base_url, read_xai_base_url, ApiError, AuthSource, ProviderClient, ProviderKind,
+};
 
 #[test]
 fn provider_client_routes_grok_aliases_through_xai() {
@@ -31,6 +33,40 @@ fn provider_client_reports_missing_xai_credentials_for_grok_models() {
 }
 
 #[test]
+fn provider_client_routes_deepseek_models_through_deepseek_config() {
+    let _lock = env_lock();
+    let _deepseek_api_key = EnvVarGuard::set("DEEPSEEK_API_KEY", Some("deepseek-test-key"));
+    let _openai_api_key = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+    let _anthropic_api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", None);
+    let _anthropic_auth_token = EnvVarGuard::set("ANTHROPIC_AUTH_TOKEN", None);
+
+    let client =
+        ProviderClient::from_model("deepseek-v4-flash").expect("DeepSeek model should resolve");
+
+    assert_eq!(client.provider_kind(), ProviderKind::DeepSeek);
+}
+
+#[test]
+fn provider_client_reports_missing_deepseek_credentials_for_deepseek_models() {
+    let _lock = env_lock();
+    let _deepseek_api_key = EnvVarGuard::set("DEEPSEEK_API_KEY", None);
+    let _openai_api_key = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+    let _anthropic_api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", None);
+    let _anthropic_auth_token = EnvVarGuard::set("ANTHROPIC_AUTH_TOKEN", None);
+
+    let error = ProviderClient::from_model("deepseek-v4-pro")
+        .expect_err("DeepSeek requests without DEEPSEEK_API_KEY should fail fast");
+
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => {
+            assert_eq!(provider, "DeepSeek");
+            assert_eq!(env_vars, &["DEEPSEEK_API_KEY"]);
+        }
+        other => panic!("expected missing DeepSeek credentials, got {other:?}"),
+    }
+}
+
+#[test]
 fn provider_client_uses_explicit_anthropic_auth_without_env_lookup() {
     let _lock = env_lock();
     let _anthropic_api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", None);
@@ -51,6 +87,15 @@ fn read_xai_base_url_prefers_env_override() {
     let _xai_base_url = EnvVarGuard::set("XAI_BASE_URL", Some("https://example.xai.test/v1"));
 
     assert_eq!(read_xai_base_url(), "https://example.xai.test/v1");
+}
+
+#[test]
+fn read_deepseek_base_url_prefers_env_override() {
+    let _lock = env_lock();
+    let _deepseek_base_url =
+        EnvVarGuard::set("DEEPSEEK_BASE_URL", Some("https://example.deepseek.test/v1"));
+
+    assert_eq!(read_deepseek_base_url(), "https://example.deepseek.test/v1");
 }
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {

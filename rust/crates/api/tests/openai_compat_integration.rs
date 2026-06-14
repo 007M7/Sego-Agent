@@ -279,6 +279,51 @@ async fn provider_client_dispatches_xai_requests_from_env() {
     );
 }
 
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn provider_client_dispatches_deepseek_requests_from_env() {
+    let _lock = env_lock();
+    let _api_key = ScopedEnvVar::set("DEEPSEEK_API_KEY", "deepseek-test-key");
+
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let server = spawn_server(
+        state.clone(),
+        vec![http_response(
+            "200 OK",
+            "application/json",
+            "{\"id\":\"chatcmpl_deepseek_provider\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"reasoning_content\":\"internal reasoning\",\"content\":\"Through DeepSeek provider\",\"tool_calls\":[]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}",
+        )],
+    )
+    .await;
+    let _base_url = ScopedEnvVar::set("DEEPSEEK_BASE_URL", server.base_url());
+
+    let client = ProviderClient::from_model("deepseek-v4-pro")
+        .expect("DeepSeek provider client should be constructed");
+    assert!(matches!(client, ProviderClient::DeepSeek(_)));
+
+    let response = client
+        .send_message(&sample_request(false))
+        .await
+        .expect("provider-dispatched DeepSeek request should succeed");
+
+    assert_eq!(response.total_tokens(), 13);
+    assert_eq!(
+        response.content[0],
+        OutputContentBlock::Thinking {
+            thinking: "internal reasoning".to_string(),
+            signature: None,
+        }
+    );
+
+    let captured = state.lock().await;
+    let request = captured.first().expect("captured request");
+    assert_eq!(request.path, "/chat/completions");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer deepseek-test-key")
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CapturedRequest {
     path: String,
