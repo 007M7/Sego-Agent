@@ -213,6 +213,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mark_code_review_finding(&id, &finding_id, status, note)?;
         }
         CliAction::CodeReviewReady => print_code_review_readiness()?,
+        CliAction::CodeReviewSummary => print_code_review_summary()?,
         CliAction::CodeReviewTools => print_code_review_tools()?,
         CliAction::CodeReviewSafety { scope } => print_code_review_safety(scope)?,
         CliAction::CodeVerify { scope } => run_code_verify_cli(scope.as_deref())?,
@@ -292,6 +293,7 @@ enum CliAction {
         note: Option<String>,
     },
     CodeReviewReady,
+    CodeReviewSummary,
     CodeReviewTools,
     CodeReviewSafety {
         scope: SafetyReviewScope,
@@ -4047,6 +4049,7 @@ enum ReviewHistoryCommand {
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Ready,
+    Summary,
     Tools,
     Safety { scope: SafetyReviewScope },
 }
@@ -4063,6 +4066,8 @@ fn parse_review_history_command(
         ["list"] => Ok(Some(ReviewHistoryCommand::List)),
         ["ready"] => Ok(Some(ReviewHistoryCommand::Ready)),
         ["ready", ..] => Err("unexpected arguments for /review ready".into()),
+        ["summary"] => Ok(Some(ReviewHistoryCommand::Summary)),
+        ["summary", ..] => Err("unexpected arguments for /review summary".into()),
         ["tools"] => Ok(Some(ReviewHistoryCommand::Tools)),
         ["tools", ..] => Err("unexpected arguments for /review tools".into()),
         ["safety"] => {
@@ -4108,6 +4113,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
             CliAction::CodeReviewMark { id, finding_id, status, note }
         }
         ReviewHistoryCommand::Ready => CliAction::CodeReviewReady,
+        ReviewHistoryCommand::Summary => CliAction::CodeReviewSummary,
         ReviewHistoryCommand::Tools => CliAction::CodeReviewTools,
         ReviewHistoryCommand::Safety { scope } => CliAction::CodeReviewSafety { scope },
     }
@@ -4124,6 +4130,7 @@ fn run_review_history_command(
             mark_code_review_finding(&id, &finding_id, status, note)
         }
         ReviewHistoryCommand::Ready => print_code_review_readiness(),
+        ReviewHistoryCommand::Summary => print_code_review_summary(),
         ReviewHistoryCommand::Tools => print_code_review_tools(),
         ReviewHistoryCommand::Safety { scope } => print_code_review_safety(scope),
     }
@@ -4137,6 +4144,238 @@ fn print_code_review_readiness() -> Result<(), Box<dyn std::error::Error>> {
 fn render_code_review_readiness_for(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let report = build_code_review_readiness_report(cwd)?;
     Ok(report.render())
+}
+
+fn print_code_review_summary() -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", render_code_review_summary_for(&env::current_dir()?)?);
+    Ok(())
+}
+
+fn render_code_review_summary_for(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let report = build_code_review_summary_report(cwd)?;
+    Ok(report.render())
+}
+
+fn build_code_review_summary_report(
+    cwd: &Path,
+) -> Result<CodeReviewSummaryReport, Box<dyn std::error::Error>> {
+    let git_status = run_git_diff_command_in(cwd, &["status", "--short", "--branch"])?;
+    let staged_diff = run_git_diff_command_in(cwd, &["diff", "--cached"])?;
+    let unstaged_diff = run_git_diff_command_in(cwd, &["diff"])?;
+    let staged_paths = collect_staged_review_paths(cwd)?;
+    let safety_report = if staged_paths.is_empty() {
+        None
+    } else {
+        Some(runtime::build_safety_lock_report_for_paths(
+            cwd,
+            staged_paths.iter(),
+            runtime::SafetyScanMode::Staged,
+        )?)
+    };
+    let verification_plan = build_verification_plan(cwd, VerificationScope::Fast);
+    let mut review_entries = load_review_index(cwd)?;
+    review_entries.sort_by_key(|entry| entry.created_at_epoch_seconds);
+    let latest_review = review_entries.pop();
+    let latest_status_counts = latest_review
+        .as_ref()
+        .map(|entry| latest_review_finding_statuses(cwd, &entry.id))
+        .transpose()?
+        .map(|statuses| ReviewFindingStatusCounts::from_entries(&statuses));
+
+    Ok(CodeReviewSummaryReport {
+        root: cwd.display().to_string(),
+        git_status,
+        staged_diff,
+        unstaged_diff,
+        staged_paths,
+        safety_report,
+        verification_plan,
+        latest_review,
+        latest_status_counts,
+    })
+}
+
+struct CodeReviewSummaryReport {
+    root: String,
+    git_status: String,
+    staged_diff: String,
+    unstaged_diff: String,
+    staged_paths: Vec<PathBuf>,
+    safety_report: Option<runtime::SafetyLockReport>,
+    verification_plan: runtime::VerificationPlan,
+    latest_review: Option<ReviewIndexEntry>,
+    latest_status_counts: Option<ReviewFindingStatusCounts>,
+}
+
+#[derive(Default)]
+struct ReviewFindingStatusCounts {
+    open: usize,
+    acknowledged: usize,
+    fixed: usize,
+    ignored: usize,
+}
+
+impl ReviewFindingStatusCounts {
+    fn from_entries(
+        statuses: &std::collections::BTreeMap<String, runtime::ReviewFindingStatusEntry>,
+    ) -> Self {
+        let mut counts = Self::default();
+        for entry in statuses.values() {
+            match entry.status {
+                ReviewFindingStatus::Open => counts.open += 1,
+                ReviewFindingStatus::Acknowledged => counts.acknowledged += 1,
+                ReviewFindingStatus::Fixed => counts.fixed += 1,
+                ReviewFindingStatus::Ignored => counts.ignored += 1,
+            }
+        }
+        counts
+    }
+
+    fn is_empty(&self) -> bool {
+        self.open == 0 && self.acknowledged == 0 && self.fixed == 0 && self.ignored == 0
+    }
+
+    fn render(&self) -> String {
+        format!(
+            "open {}, acknowledged {}, fixed {}, ignored {}",
+            self.open, self.acknowledged, self.fixed, self.ignored
+        )
+    }
+}
+
+impl CodeReviewSummaryReport {
+    fn render(&self) -> String {
+        let mut lines = Vec::new();
+        let branch_status = self.git_status.lines().next().unwrap_or("(not a git repository)");
+
+        lines.push("Review Summary".to_string());
+        lines.push(format!("  Root             {}", self.root));
+        lines.push("  Mode             read-only".to_string());
+        lines.push("  Scope            workspace".to_string());
+        lines.push(
+            "  Safety           no files were modified; no model calls were made; no tools were executed"
+                .to_string(),
+        );
+
+        self.push_git_section(&mut lines, branch_status);
+        self.push_staged_safety_section(&mut lines);
+        self.push_latest_review_section(&mut lines);
+        self.push_verify_fast_section(&mut lines);
+        self.push_suggested_next_steps(&mut lines);
+
+        lines.join("\n")
+    }
+
+    fn push_git_section(&self, lines: &mut Vec<String>, branch_status: &str) {
+        lines.push(String::new());
+        lines.push("  Git".to_string());
+        lines.push(format!("    Branch/status  {branch_status}"));
+        lines.push(format!("    Staged files   {}", self.staged_paths.len()));
+        lines.push(format!(
+            "    Staged diff    {}",
+            if self.staged_diff.trim().is_empty() { "no" } else { "yes" }
+        ));
+        lines.push(format!(
+            "    Unstaged diff  {}",
+            if self.unstaged_diff.trim().is_empty() { "no" } else { "yes" }
+        ));
+    }
+
+    fn push_staged_safety_section(&self, lines: &mut Vec<String>) {
+        lines.push(String::new());
+        lines.push("  Staged safety".to_string());
+        match &self.safety_report {
+            None => {
+                lines.push("    Result         no staged files".to_string());
+                lines.push("    Findings       0".to_string());
+            }
+            Some(report) if report.findings.is_empty() => {
+                lines.push("    Result         passed".to_string());
+                lines.push("    Findings       0".to_string());
+            }
+            Some(report) => {
+                let has_high_risk = report
+                    .findings
+                    .iter()
+                    .any(|finding| matches!(finding.severity, runtime::SafetySeverity::High));
+                lines.push(format!(
+                    "    Result         {}",
+                    if has_high_risk { "blocked" } else { "needs review" }
+                ));
+                lines.push(format!("    Findings       {}", report.findings.len()));
+                for finding in report.findings.iter().take(8) {
+                    let location = finding.line.map_or_else(
+                        || finding.file.clone(),
+                        |line| format!("{}:{line}", finding.file),
+                    );
+                    lines.push(format!(
+                        "    [{}] {} {}",
+                        finding.severity.label(),
+                        location,
+                        finding.title
+                    ));
+                }
+                if report.findings.len() > 8 {
+                    lines.push(format!("    ... {} more", report.findings.len() - 8));
+                }
+            }
+        }
+    }
+
+    fn push_latest_review_section(&self, lines: &mut Vec<String>) {
+        lines.push(String::new());
+        lines.push("  Latest review".to_string());
+        if let Some(entry) = &self.latest_review {
+            let highest_severity =
+                entry.highest_severity.map_or("none", runtime::ReviewSeverity::label);
+            lines.push(format!("    ID             {}", entry.id));
+            lines.push(format!("    Scope          {}", entry.scope));
+            lines.push(format!("    Findings       {}", entry.finding_count));
+            lines.push(format!("    Highest        {highest_severity}"));
+            lines.push(format!("    Parse status   {}", entry.parse_status.label()));
+            if let Some(counts) = &self.latest_status_counts {
+                if !counts.is_empty() {
+                    lines.push(format!("    Statuses       {}", counts.render()));
+                }
+            }
+        } else {
+            lines.push("    ID             none".to_string());
+            lines.push("    Findings       0".to_string());
+        }
+    }
+
+    fn push_verify_fast_section(&self, lines: &mut Vec<String>) {
+        lines.push(String::new());
+        lines.push("  Verify fast".to_string());
+        match &self.verification_plan.status {
+            VerificationPlanStatus::Ready => {
+                lines.push(format!(
+                    "    Plan           {} command(s)",
+                    self.verification_plan.commands.len()
+                ));
+                for command in &self.verification_plan.commands {
+                    lines.push(format!(
+                        "    {} ({})",
+                        command.display_command(),
+                        command.working_dir
+                    ));
+                }
+            }
+            VerificationPlanStatus::NoPlan { reason } => {
+                lines.push("    Plan           no plan".to_string());
+                lines.push(format!("    Reason         {reason}"));
+            }
+        }
+    }
+
+    fn push_suggested_next_steps(&self, lines: &mut Vec<String>) {
+        lines.push(String::new());
+        lines.push("  Suggested next steps".to_string());
+        lines.push("    sego /review ready".to_string());
+        lines.push("    sego /review safety staged".to_string());
+        lines.push("    sego /review staged".to_string());
+        lines.push("    sego /verify fast".to_string());
+    }
 }
 
 fn build_code_review_readiness_report(
@@ -6697,9 +6936,10 @@ mod tests {
         format_unknown_slash_command_message, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         permission_policy, print_help_to, push_output_block, render_code_review_readiness_for,
-        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
-        response_to_events, resume_supported_slash_commands, run_resume_command,
+        render_code_review_summary_for, render_config_report, render_diff_report,
+        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
+        resolve_model_alias, resolve_session_reference, response_to_events,
+        resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
@@ -7241,6 +7481,11 @@ mod tests {
             CliAction::CodeReviewReady
         );
         assert_eq!(
+            parse_args(&["/review".to_string(), "summary".to_string()])
+                .expect("/review summary should parse"),
+            CliAction::CodeReviewSummary
+        );
+        assert_eq!(
             parse_args(&["/review".to_string(), "safety".to_string()])
                 .expect("/review safety should parse"),
             CliAction::CodeReviewSafety { scope: SafetyReviewScope::Workspace }
@@ -7279,6 +7524,10 @@ mod tests {
                 note: Some("covered by tests".to_string()),
             }
         );
+        let summary_error =
+            parse_args(&["/review".to_string(), "summary".to_string(), "extra".to_string()])
+                .expect_err("/review summary should reject extra args");
+        assert!(summary_error.contains("unexpected arguments for /review summary"));
         assert_eq!(
             parse_args(&["/verify".to_string(), "fast".to_string()])
                 .expect("/verify fast should parse"),
@@ -7939,6 +8188,50 @@ UU conflicted.rs",
         assert!(report.contains("cargo build (.)"));
         assert!(report.contains("Command        sego /review staged"));
         assert!(report.contains("Command        sego /verify fast"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn review_summary_renders_empty_git_repo_without_side_effects() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        git(&["init", "--quiet"], &root);
+
+        let report = render_code_review_summary_for(&root).expect("summary report");
+
+        assert!(report.contains("Review Summary"));
+        assert!(report.contains("Mode             read-only"));
+        assert!(report.contains("Staged safety"));
+        assert!(report.contains("Result         no staged files"));
+        assert!(report.contains("Latest review"));
+        assert!(report.contains("Verify fast"));
+        assert!(report.contains("Suggested next steps"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn review_summary_includes_staged_safety_and_fast_verify_plan() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        git(&["init", "--quiet"], &root);
+        fs::write(root.join("Cargo.toml"), "[package]\nname='demo'\n").expect("write manifest");
+        fs::create_dir_all(root.join("src")).expect("src dir");
+        fs::write(root.join("src").join("main.rs"), "fn main() {}\n").expect("write main");
+        git(&["add", "Cargo.toml", "src/main.rs"], &root);
+
+        let report = render_code_review_summary_for(&root).expect("summary report");
+
+        assert!(report.contains("Review Summary"));
+        assert!(report.contains("Staged files   2"));
+        assert!(report.contains("Staged diff    yes"));
+        assert!(report.contains("Result         passed"));
+        assert!(report.contains("Plan           1 command(s)"));
+        assert!(report.contains("cargo build (.)"));
+        assert!(report.contains("sego /review staged"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
