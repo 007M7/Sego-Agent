@@ -32,6 +32,7 @@ pub mod plugin_lifecycle;
 mod policy_engine;
 mod progress_ui;
 mod prompt;
+pub mod recovery;
 pub mod recovery_recipes;
 mod remote;
 pub mod safety_lock;
@@ -137,6 +138,15 @@ pub use progress_ui::{Phase, PhaseLogEntry, PhaseStatus, ProgressUI};
 pub use prompt::{
     frontier_model_name, load_system_prompt, prepend_bullets, ContextFile, ProjectContext,
     PromptBuildError, SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+};
+pub use recovery::{
+    assess_recovery_state, exit_state_record_path, latest_session_record_path,
+    persist_recovery_state, read_exit_state, read_latest_session, recovery_dir,
+    recovery_summary_path, render_recovery_summary, write_recovery_summary, ExitStateRecord,
+    LatestSessionRecord, PersistedRecoveryState, RecoveryAssessment, RecoveryAvailability,
+    RecoveryError, RecoveryExitState, RecoverySessionPathKind, RecoveryStateUpdate,
+    EXIT_STATE_FILE, LATEST_SESSION_FILE, RECOVERY_DIR, RECOVERY_SCHEMA_VERSION,
+    RECOVERY_SUMMARY_FILE,
 };
 pub use recovery_recipes::{
     attempt_recovery, recipe_for, EscalationPolicy, FailureScenario, RecoveryContext,

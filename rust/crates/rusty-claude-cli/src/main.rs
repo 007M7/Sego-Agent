@@ -184,7 +184,20 @@ Run `sego --help` for usage."
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    match parse_args(&args)? {
+    let action = parse_args(&args)?;
+
+    // A2 启动提示层：只对会创建/恢复可持久化 session 且可能执行模型/工具的动作触发。
+    // 只读 recovery JSON，不写、不扫描、不调模型（Codex 审查两层架构第 1 层）。
+    let triggers_recovery = matches!(
+        action,
+        CliAction::Repl { .. }
+            | CliAction::Prompt { .. }
+            | CliAction::CodeReview { .. }
+            | CliAction::ResumeSession { .. }
+    );
+    maybe_print_recovery_notice(triggers_recovery);
+
+    match action {
         CliAction::DumpManifests => dump_manifests(),
         CliAction::BootstrapPlan => print_bootstrap_plan(),
         CliAction::Agents { args } => LiveCli::print_agents(args.as_deref())?,
@@ -200,8 +213,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
-            LiveCli::new(model, true, allowed_tools, permission_mode)?
-                .run_turn_with_output(&prompt, output_format)?;
+            // A2 session 状态写入：active 在 LiveCli 创建后写，graceful 在成功返回后写。
+            // 错误路径（?返回 / 崩溃）不写 graceful，保留 active，下次启动提示可恢复。
+            let mut cli = LiveCli::new(model.clone(), true, allowed_tools, permission_mode)?;
+            persist_recovery_for_cli(
+                runtime::recovery::RecoveryExitState::Active,
+                cli.session_id(),
+                cli.session_path(),
+                Some(cli.model_name()),
+                Some(&prompt),
+            );
+            cli.run_turn_with_output(&prompt, output_format)?;
+            persist_recovery_for_cli(
+                runtime::recovery::RecoveryExitState::Graceful,
+                cli.session_id(),
+                cli.session_path(),
+                Some(cli.model_name()),
+                Some(&prompt),
+            );
         }
         CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
             run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?;
@@ -1055,11 +1084,30 @@ fn resume_session(session_path: &Path, commands: &[String]) {
         }
     };
 
+    // A2 session 状态写入：session 加载成功后写 active。
+    // commands 全部成功完成后写 graceful（函数末尾）。
+    // 错误路径（process::exit）不写 graceful，保留 active。
+    persist_recovery_for_cli(
+        runtime::recovery::RecoveryExitState::Active,
+        &session.session_id,
+        &resolved_path,
+        None,
+        None,
+    );
+
     if commands.is_empty() {
         println!(
             "Restored session from {} ({} messages).",
             resolved_path.display(),
             session.messages.len()
+        );
+        // 无命令的纯恢复视为正常退出。
+        persist_recovery_for_cli(
+            runtime::recovery::RecoveryExitState::Graceful,
+            &session.session_id,
+            &resolved_path,
+            None,
+            None,
         );
         return;
     }
@@ -1090,6 +1138,15 @@ fn resume_session(session_path: &Path, commands: &[String]) {
             }
         }
     }
+
+    // 所有 resume 命令成功完成，写 graceful。
+    persist_recovery_for_cli(
+        runtime::recovery::RecoveryExitState::Graceful,
+        &session.session_id,
+        &resolved_path,
+        None,
+        None,
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -1554,6 +1611,16 @@ fn run_resume_command(
                 )),
             })
         }
+        SlashCommand::RecoveryExport { path } => {
+            let export_path = write_recovery_export(path.as_deref())?;
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(format!(
+                    "RecoveryExport\n  Result           wrote recovery summary\n  File             {}",
+                    export_path.display(),
+                )),
+            })
+        }
         SlashCommand::Agents { args } => {
             let cwd = env::current_dir()?;
             Ok(ResumeCommandOutcome {
@@ -1635,6 +1702,17 @@ fn run_repl(
         input::LineEditor::new("> ", cli.repl_completion_candidates().unwrap_or_default());
     println!("{}", cli.startup_banner());
 
+    // A2 session 状态写入：进入 REPL 写 active。
+    // 正常退出（/exit、/quit、ReadOutcome::Exit）写 graceful。
+    // 错误路径（?返回 / 崩溃 / Ctrl+C）不写 graceful，保留 active，下次启动提示可恢复。
+    persist_recovery_for_cli(
+        runtime::recovery::RecoveryExitState::Active,
+        cli.session_id(),
+        cli.session_path(),
+        Some(cli.model_name()),
+        None,
+    );
+
     loop {
         editor.set_completions(cli.repl_completion_candidates().unwrap_or_default());
         match editor.read_line()? {
@@ -1645,6 +1723,13 @@ fn run_repl(
                 }
                 if matches!(trimmed.as_str(), "/exit" | "/quit") {
                     cli.persist_session()?;
+                    persist_recovery_for_cli(
+                        runtime::recovery::RecoveryExitState::Graceful,
+                        cli.session_id(),
+                        cli.session_path(),
+                        Some(cli.model_name()),
+                        None,
+                    );
                     break;
                 }
                 match SlashCommand::parse(&trimmed) {
@@ -1666,6 +1751,13 @@ fn run_repl(
             input::ReadOutcome::Cancel => {}
             input::ReadOutcome::Exit => {
                 cli.persist_session()?;
+                persist_recovery_for_cli(
+                    runtime::recovery::RecoveryExitState::Graceful,
+                    cli.session_id(),
+                    cli.session_path(),
+                    Some(cli.model_name()),
+                    None,
+                );
                 break;
             }
         }
@@ -2179,6 +2271,21 @@ impl LiveCli {
         Ok(cli)
     }
 
+    /// 当前 session id（用于 recovery state 写入）。
+    fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
+    /// 当前 session 文件路径（用于 recovery state 写入）。
+    fn session_path(&self) -> &Path {
+        &self.session.path
+    }
+
+    /// 当前模型名（用于 recovery state 写入）。
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
     fn startup_banner(&self) -> String {
         let cwd = env::current_dir()
             .map_or_else(|_| "<unknown>".to_string(), |path| path.display().to_string());
@@ -2488,6 +2595,14 @@ impl LiveCli {
             }
             SlashCommand::Export { path } => {
                 self.export_session(path.as_deref())?;
+                false
+            }
+            SlashCommand::RecoveryExport { path } => {
+                let export_path = write_recovery_export(path.as_deref())?;
+                println!(
+                    "RecoveryExport\n  Result           wrote recovery summary\n  File             {}",
+                    export_path.display(),
+                );
                 false
             }
             SlashCommand::Session { action, target } => {
@@ -3136,6 +3251,96 @@ fn create_managed_session_handle(
     let id = session_id.to_string();
     let path = sessions_dir()?.join(format!("{id}.{PRIMARY_SESSION_EXTENSION}"));
     Ok(SessionHandle { id, path })
+}
+
+// ---------------------------------------------------------------------------
+// Crash recovery CLI 集成（A2）
+//
+// 设计依据：sego-c9-a2-zcode-handoff-2026-06-15.md + Codex 架构审查
+// 两层架构：
+//   1. 启动提示层 maybe_print_recovery_notice —— parse_args 后只读 recovery JSON
+//   2. session 状态写入层 persist_recovery_for_cli —— session handle 已知后写
+// 不在 parse_args 后立即写 active（session id/path 那时不可用，Codex 审查问题③）
+// 不用 Drop guard 写 graceful（fallible IO 不清晰，Codex 审查 §4.3）
+// ---------------------------------------------------------------------------
+
+/// 启动提示层：parse_args 后调用，只读 recovery JSON，不写、不扫描、不调模型。
+///
+/// 仅对会创建/恢复可持久化 session 且可能执行模型/工具的动作触发提示
+/// （Repl / Prompt / CodeReview / ResumeSession）。对 Version/Help 等纯查询动作不触发。
+fn maybe_print_recovery_notice(should_check: bool) {
+    if !should_check {
+        return;
+    }
+    let Ok(workspace_root) = env::current_dir() else {
+        return;
+    };
+    let assessment = runtime::recovery::assess_recovery_state(&workspace_root);
+    if assessment.availability == runtime::recovery::RecoveryAvailability::Recoverable
+        || assessment.availability == runtime::recovery::RecoveryAvailability::MissingSession
+    {
+        println!("{}", assessment.message);
+        println!("hint: run `sego --resume latest` to restore the previous session.");
+    }
+}
+
+/// session 状态写入层：在 session handle 已知后调用，写入完整 recovery record。
+///
+/// 错误路径（进程崩溃 / Ctrl+C / 窗口关闭）不会调用本函数写 graceful，
+/// 因此 exit-state 保留上次的 active，下次启动提示可恢复。
+fn persist_recovery_for_cli(
+    state: runtime::recovery::RecoveryExitState,
+    session_id: &str,
+    session_path: &Path,
+    model: Option<&str>,
+    last_user_goal: Option<&str>,
+) {
+    let Ok(workspace_root) = env::current_dir() else {
+        return;
+    };
+    let Ok(cwd) = env::current_dir() else {
+        return;
+    };
+    let mut update =
+        runtime::recovery::RecoveryStateUpdate::new(session_id, session_path, cwd, state);
+    if let Some(model) = model {
+        update = update.with_model(model.to_string());
+    }
+    if let Some(goal) = last_user_goal {
+        update = update.with_last_user_goal(goal.to_string());
+    }
+    // recovery 写入失败不应影响主流程，只记录到 stderr。
+    if let Err(error) = runtime::recovery::persist_recovery_state(&workspace_root, update) {
+        eprintln!("warning: failed to persist recovery state: {error}");
+    }
+}
+
+/// `/recovery-export` 的共享实现：读取当前 recovery 状态，渲染 summary，写文件。
+///
+/// resume 模式和 REPL 模式共用此 helper（Codex 审查 §2.3 建议），
+/// 避免"registered but not yet implemented"的断裂体验。
+///
+/// 路径语义：
+/// - 用户传 path → 尊重用户路径，不强制 .txt（区别于 /export 的 resolve_export_path）
+/// - 用户不传 path → 默认写到 .sego/recovery/recovery-summary.md
+fn write_recovery_export(
+    requested_path: Option<&str>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let workspace_root = env::current_dir()?;
+    let assessment = runtime::recovery::assess_recovery_state(&workspace_root);
+    let summary = runtime::recovery::render_recovery_summary(&assessment);
+
+    let final_path = match requested_path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => runtime::recovery::recovery_summary_path(&workspace_root),
+    };
+    if let Some(parent) = final_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&final_path, summary)?;
+    Ok(final_path)
 }
 
 fn resolve_session_reference(reference: &str) -> Result<SessionHandle, Box<dyn std::error::Error>> {
@@ -4039,7 +4244,24 @@ fn run_code_review_cli(
         return Ok(());
     }
 
-    LiveCli::new(model, true, allowed_tools, permission_mode)?.run_review_target(target)
+    // A2 session 状态写入：active 在 LiveCli 创建后写，graceful 在成功返回后写。
+    let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
+    persist_recovery_for_cli(
+        runtime::recovery::RecoveryExitState::Active,
+        cli.session_id(),
+        cli.session_path(),
+        Some(cli.model_name()),
+        Some(scope.unwrap_or("code-review")),
+    );
+    cli.run_review_target(target)?;
+    persist_recovery_for_cli(
+        runtime::recovery::RecoveryExitState::Graceful,
+        cli.session_id(),
+        cli.session_path(),
+        Some(cli.model_name()),
+        Some(scope.unwrap_or("code-review")),
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

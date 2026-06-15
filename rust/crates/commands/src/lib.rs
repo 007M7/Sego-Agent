@@ -212,6 +212,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "recovery-export",
+        aliases: &[],
+        summary: "Export the crash recovery summary to a file (markdown)",
+        argument_hint: Some("[file]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
         name: "session",
         aliases: &[],
         summary: "List, switch, or fork managed local sessions",
@@ -1073,6 +1080,7 @@ pub enum SlashCommand {
     Diff,
     Version,
     Export { path: Option<String> },
+    RecoveryExport { path: Option<String> },
     Session { action: Option<String>, target: Option<String> },
     Plugins { action: Option<String>, target: Option<String> },
     Agents { args: Option<String> },
@@ -1227,6 +1235,7 @@ pub fn validate_slash_command_input(
             SlashCommand::Version
         }
         "export" => SlashCommand::Export { path: remainder },
+        "recovery-export" => SlashCommand::RecoveryExport { path: remainder },
         "session" => parse_session_command(&args)?,
         "plugin" | "plugins" | "marketplace" => parse_plugin_command(&args)?,
         "agents" => SlashCommand::Agents { args: parse_list_or_help_args(command, remainder)? },
@@ -1682,9 +1691,8 @@ fn slash_command_category(name: &str) -> &'static str {
             "Session & visibility"
         }
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
-        | "export" | "plugin" | "branch" | "add-dir" | "files" | "hooks" | "release-notes" => {
-            "Workspace & git"
-        }
+        | "export" | "recovery-export" | "plugin" | "branch" | "add-dir" | "files" | "hooks"
+        | "release-notes" => "Workspace & git",
         "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "context" | "tasks"
         | "doctor" | "ide" | "desktop" => "Discovery & debugging",
         "bughunter" | "ultraplan" | "review" | "verify" | "security-review" | "advisor"
@@ -3005,6 +3013,7 @@ pub fn handle_slash_command(
         | SlashCommand::Diff
         | SlashCommand::Version
         | SlashCommand::Export { .. }
+        | SlashCommand::RecoveryExport { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
         | SlashCommand::Agents { .. }
@@ -3060,8 +3069,9 @@ mod tests {
         handle_plugins_slash_command, handle_slash_command, load_agents_from_roots,
         load_skills_from_roots, render_agents_report, render_plugins_report, render_skills_report,
         render_slash_command_help, render_slash_command_help_detail,
-        resume_supported_slash_commands, slash_command_specs, suggest_slash_commands,
-        validate_slash_command_input, DefinitionSource, SkillOrigin, SkillRoot, SlashCommand,
+        resume_supported_slash_commands, slash_command_category, slash_command_specs,
+        suggest_slash_commands, validate_slash_command_input, DefinitionSource, SkillOrigin,
+        SkillRoot, SlashCommand,
     };
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{
@@ -3405,6 +3415,7 @@ mod tests {
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
+        assert!(help.contains("/recovery-export [file]"));
         assert!(help.contains("/session [list|switch <session-id>|fork [branch-name]]"));
         assert!(help.contains("/sandbox"));
         assert!(help.contains(
@@ -3414,8 +3425,40 @@ mod tests {
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
         assert!(help.contains("/verify [auto|fast|full]"));
-        assert_eq!(slash_command_specs().len(), 142);
+        assert_eq!(slash_command_specs().len(), 143);
         assert!(resume_supported_slash_commands().len() >= 39);
+    }
+
+    #[test]
+    fn recovery_export_parses_with_and_without_path() {
+        // 无参数：path 为 None
+        let parsed = SlashCommand::parse("/recovery-export").expect("parse without path");
+        assert!(matches!(parsed, Some(SlashCommand::RecoveryExport { path: None })));
+
+        // 带参数：path 为 Some
+        let parsed_with_path =
+            SlashCommand::parse("/recovery-export summary.md").expect("parse with path");
+        assert!(matches!(
+            parsed_with_path,
+            Some(SlashCommand::RecoveryExport { path: Some(ref p) }) if p == "summary.md"
+        ));
+    }
+
+    #[test]
+    fn recovery_export_is_resume_supported_and_categorized() {
+        // recovery-export 的 spec 必须标记 resume_supported = true
+        let spec = slash_command_specs()
+            .iter()
+            .find(|spec| spec.name == "recovery-export")
+            .expect("recovery-export spec must exist");
+        assert!(spec.resume_supported, "recovery-export must be resume-supported");
+
+        // recovery-export 必须归类到 Workspace & git（和 export 同组）
+        assert_eq!(slash_command_category("recovery-export"), "Workspace & git");
+
+        // recovery-export 必须出现在 help 里
+        let help = render_slash_command_help();
+        assert!(help.contains("/recovery-export"), "recovery-export must appear in help");
     }
 
     #[test]

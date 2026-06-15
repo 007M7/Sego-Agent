@@ -150,6 +150,7 @@ tests/                       # Python port tests
 | Add a new slash command | `rust/crates/commands/src/lib.rs` |
 | Add a new built-in tool | `rust/crates/tools/src/lib.rs` |
 | Change session persistence | `rust/crates/runtime/src/session.rs` |
+| Change crash/session resume recovery state | `rust/crates/runtime/src/recovery.rs` |
 | Add a recovery recipe | `rust/crates/runtime/src/recovery_recipes.rs` |
 | Add a failure class | `rust/crates/runtime/src/lane_events.rs` |
 | Change CLI arg parsing | `rust/crates/rusty-claude-cli/src/main.rs` → `parse_args()` |
@@ -193,6 +194,18 @@ Before pushing any change:
 5. **Partial success is first-class** — MCP servers can fail individually
 6. **Terminal is transport, not truth** — TUI is rendering, state is above it
 7. **Policy is executable** — merge/retry/rebase rules are machine-enforced
+8. **Recovery paths are absolute** — crash/session resume records live under `.sego/recovery/` and must store absolute session paths, even while session JSONL remains under `.claw/sessions/`
+
+### Recovery State Boundary
+
+- `rust/crates/runtime/src/recovery.rs` owns crash/session resume state, including `.sego/recovery/latest-session.json`, `.sego/recovery/exit-state.json`, and `.sego/recovery/recovery-summary.md`.
+- `rust/crates/runtime/src/recovery_recipes.rs` owns automatic remediation recipes after tool/task failures. Do not use it for session crash recovery.
+- Recovery startup detection must only read recovery JSON and check the referenced session file. It must not scan the repo, call a model, auto-resume, or replay old tool calls.
+- `session_path` in recovery JSON must be absolute. This prevents `.claw` / `.sego` dual-directory references from breaking on Windows paths or future storage migration.
+- **A2 CLI integration**: recovery startup notice is triggered only for actions that create/restore a persistent session and may execute model/tools (`Repl` / `Prompt` / `CodeReview` / `ResumeSession`). Pure-query actions (`Version`, `Help`, `Status`, etc.) must not trigger it.
+- **A2 exit-state write timing**: `active` is written only after the session handle is known (`LiveCli::new` for Repl/Prompt/CodeReview; session load for ResumeSession). `graceful` is written only on the normal return path. Error paths (crash, Ctrl+C, `?` propagation) leave `active` in place so the next launch prompts recovery. Do not use a `Drop` guard for `graceful` (fallible IO in `Drop` is unclear and risks writing `graceful` on error paths).
+- **A2 no signal handler (MVP)**: A2 deliberately does not add a signal handler. Interrupted/crashed sessions keep the `active` state and are surfaced as recoverable on next launch. Precise `interrupted` vs `crashed` distinction is deferred to a future `ctrlc` crate evaluation.
+- **A2 `/recovery-export`**: a separate slash command from `/export`. `/export` writes the session transcript (forced `.txt`); `/recovery-export` writes the recovery summary (markdown, default `.sego/recovery/recovery-summary.md`). Both share the `write_recovery_export` helper pattern but must not share path resolution logic.
 
 ---
 

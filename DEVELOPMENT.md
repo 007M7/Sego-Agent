@@ -73,6 +73,7 @@ Sego-Agent/
 │       │       ├── lib.rs         # Public API surface
 │       │       ├── conversation.rs # Turn-based conversation loop
 │       │       ├── session.rs     # Session state + persistence (JSONL)
+│       │       ├── recovery.rs    # Crash/session resume recovery state
 │       │       ├── permissions.rs # Permission mode enforcement
 │       │       ├── config.rs      # 5-layer config hierarchy
 │       │       ├── prompt.rs      # System prompt builder
@@ -210,6 +211,26 @@ tools
 ├── runtime (for types)
 └── plugins (for plugin tool aggregation)
 ```
+
+### Crash Recovery State
+
+Crash/session resume recovery is owned by `rust/crates/runtime/src/recovery.rs`.
+
+- Recovery records are written under `.sego/recovery/`.
+- Conversation JSONL sessions currently remain under `.claw/sessions/`; this is intentional until a dedicated migration is designed.
+- Every recovery record that references a session must store `session_path` as an absolute path. Do not rely on `.claw` or `.sego` relative prefixes.
+- Startup recovery detection must stay lightweight: read recovery JSON, check whether the referenced session file exists, and render a prompt. It must not scan the repo, call a model, auto-resume, or replay previous tool calls.
+- `recovery_recipes.rs` is a separate automatic remediation subsystem and must not be used as crash/session resume state storage.
+
+### Crash Recovery CLI Integration (A2)
+
+The CLI layer (`rusty-claude-cli`) integrates the runtime recovery module as follows:
+
+- **Startup notice**: `maybe_print_recovery_notice` runs after `parse_args` and only reads recovery JSON (no writes, no scans, no model calls). It triggers only for `Repl` / `Prompt` / `CodeReview` / `ResumeSession` — actions that create or restore a persistent session. Pure-query actions do not trigger it.
+- **Two-layer write timing**: startup notice (read-only) is separate from session-state writes (`active`/`graceful`). `active` is written only after the session handle is known; `graceful` only on the normal return path. Error paths leave `active` in place.
+- **No signal handler (MVP)**: A2 deliberately avoids signal handling. An interrupted/crashed session keeps `active` and is surfaced as recoverable on the next launch. Precise `interrupted` vs `crashed` distinction is deferred to a future `ctrlc` crate evaluation.
+- **`/recovery-export` command**: separate from `/export`. `/export` writes the session transcript (forced `.txt` suffix); `/recovery-export` writes the recovery summary (markdown, supports `.md`, defaults to `.sego/recovery/recovery-summary.md`). Both resume and REPL modes support it via the shared `write_recovery_export` helper.
+- **`sego-resume` script**: `scripts/sego-resume.bat` (Windows) and `scripts/sego-resume.sh` (Unix) wrap `sego --resume latest "$@"`. They auto-detect the sego binary (local cargo build > `CARGO_TARGET_DIR` > `PATH`).
 
 ---
 
