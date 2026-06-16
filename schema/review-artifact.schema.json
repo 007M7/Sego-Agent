@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/007M7/Sego-Agent/blob/main/schema/review-artifact.schema.json",
+  "title": "Sego Review Artifact",
+  "description": "The persisted review artifact written to .sego/reviews/{id}.json. This is the canonical on-disk representation produced by Sego's code review workflow. Aligned with Rust struct ReviewArtifact in runtime/src/code_review/report.rs.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "created_at_epoch_seconds",
+    "scope",
+    "diff_hash",
+    "finding_count",
+    "parse_status",
+    "git_status",
+    "findings",
+    "raw_text"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "description": "Schema version for forward compatibility. Current version is 1.",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique review artifact identifier, e.g. 'rev-20260615-001'.",
+      "minLength": 1
+    },
+    "created_at_epoch_seconds": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds) when the review was created.",
+      "minimum": 0
+    },
+    "scope": {
+      "type": "string",
+      "description": "Review scope descriptor, e.g. 'staged', 'workspace', 'src/auth'."
+    },
+    "diff_hash": {
+      "type": "string",
+      "description": "Hash of the reviewed diff (binds review/verify/ship to the same code state)."
+    },
+    "finding_count": {
+      "type": "integer",
+      "description": "Number of findings. Must equal findings.length.",
+      "minimum": 0
+    },
+    "highest_severity": {
+      "description": "Highest severity among findings, or null if no findings. Optional in older artifacts.",
+      "oneOf": [
+        { "$ref": "#/$defs/severity" },
+        { "type": "null" }
+      ]
+    },
+    "parse_status": {
+      "$ref": "#/$defs/parse_status"
+    },
+    "git_status": {
+      "type": "string",
+      "description": "Git status snapshot at review time (e.g. '## main...origin/main')."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Structured review findings.",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "raw_text": {
+      "type": "string",
+      "description": "Raw model output text before parsing into findings."
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "description": "Review finding severity (snake_case, aligned with Rust ReviewSeverity).",
+      "enum": ["critical", "high", "medium", "low", "info"]
+    },
+    "parse_status": {
+      "type": "string",
+      "description": "How the model output was parsed (aligned with Rust ReviewParseStatus).",
+      "enum": ["structured", "fallback_raw_text"]
+    },
+    "finding": {
+      "type": "object",
+      "description": "A single structured review finding (aligned with Rust ReviewFinding).",
+      "required": [
+        "severity",
+        "file",
+        "title",
+        "evidence",
+        "risk",
+        "suggestion",
+        "confidence"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Finding identifier (e.g. 'f-001'). Has serde default; may be absent in legacy artifacts.",
+          "default": ""
+        },
+        "severity": { "$ref": "#/$defs/severity" },
+        "file": {
+          "type": "string",
+          "description": "File path relative to workspace root."
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "description": "Line number, or null if not applicable.",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string",
+          "description": "Short title summarizing the finding."
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Code snippet or evidence supporting the finding."
+        },
+        "risk": {
+          "type": "string",
+          "description": "Risk description if the finding is not addressed."
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "Suggested fix or mitigation."
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Model confidence score (0.0 to 1.0).",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "verification_hint": {
+          "type": ["string", "null"],
+          "description": "Optional hint for how to verify the finding."
+        }
+      }
+    }
+  }
+}

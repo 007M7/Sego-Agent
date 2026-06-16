@@ -642,3 +642,20 @@ git push                                    # Push to GitHub
 cd Sego-Agent
 python -m pytest tests/ -v
 ```
+
+### .sego Schema Formalization (c9/b)
+
+The `schema/` directory contains hand-written JSON Schema files that serve as
+the public contract for `.sego` artifacts. Aligned with Codex decision D-B-1~4:
+
+- Schemas are hand-written (no `schemars`/`jsonschema` runtime dependency).
+- Rust production path uses `serde` deserialization + golden fixture round-trip
+  tests; full JSON Schema validation is a future dev-dependency if needed.
+- `review-artifact.schema.json` aligns with `ReviewArtifact` (the real on-disk
+  struct), which already has `schema_version: u32` (currently hardcoded to 1).
+- `review-index-entry.schema.json` has no `schema_version` (append-only, stable).
+- `sidecar-request-response.schema.json` defines a minimal stable envelope;
+  Cycle 9 C refines action-specific fields during PoC.
+- When modifying a struct with a schema, update the schema file and the golden
+  fixture test together.
+
