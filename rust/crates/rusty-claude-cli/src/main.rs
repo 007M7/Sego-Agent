@@ -9,6 +9,7 @@
 mod init;
 mod input;
 mod render;
+mod sidecar;
 
 use std::collections::{BTreeSet, HashSet};
 use std::env;
@@ -200,6 +201,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match action {
         CliAction::DumpManifests => dump_manifests(),
         CliAction::BootstrapPlan => print_bootstrap_plan(),
+        CliAction::SidecarReview => {
+            // c9/c PoC: stdin JSON → stdout JSON. Exit code from pipeline.
+            let exit_code = sidecar::run_sidecar_review_pipeline();
+            std::process::exit(exit_code);
+        }
         CliAction::Agents { args } => LiveCli::print_agents(args.as_deref())?,
         CliAction::Mcp { args } => LiveCli::print_mcp(args.as_deref())?,
         CliAction::Skills { args } => LiveCli::print_skills(args.as_deref())?,
@@ -269,6 +275,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 enum CliAction {
     DumpManifests,
     BootstrapPlan,
+    SidecarReview,
     Agents {
         args: Option<String>,
     },
@@ -556,6 +563,14 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     match rest[0].as_str() {
         "dump-manifests" => Ok(CliAction::DumpManifests),
         "bootstrap-plan" => Ok(CliAction::BootstrapPlan),
+        "sidecar" => {
+            // sego sidecar review — JSON stdin → JSON stdout (c9/c PoC, P1)
+            if rest.len() >= 2 && rest[1] == "review" {
+                Ok(CliAction::SidecarReview)
+            } else {
+                Err("sidecar subcommand requires an action (currently: review)".to_string())
+            }
+        }
         "agents" => Ok(CliAction::Agents { args: join_optional_args(&rest[1..]) }),
         "mcp" => Ok(CliAction::Mcp { args: join_optional_args(&rest[1..]) }),
         "skills" => Ok(CliAction::Skills { args: join_optional_args(&rest[1..]) }),
