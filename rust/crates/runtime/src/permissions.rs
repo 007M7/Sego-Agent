@@ -99,6 +99,10 @@ pub struct PermissionPolicy {
     allow_rules: Vec<PermissionRule>,
     deny_rules: Vec<PermissionRule>,
     ask_rules: Vec<PermissionRule>,
+    /// When true, `bash` invocations are classified by [`crate::bash_command_classifier`]
+    /// before falling through to mode comparison. This implements the `review-trust`
+    /// profile without changing `PermissionMode` semantics (Codex c10/b decision §2).
+    review_trust: bool,
 }
 
 impl PermissionPolicy {
@@ -110,7 +114,22 @@ impl PermissionPolicy {
             allow_rules: Vec::new(),
             deny_rules: Vec::new(),
             ask_rules: Vec::new(),
+            review_trust: false,
         }
+    }
+
+    /// Enable the `review-trust` profile: `bash` commands are classified by
+    /// [`crate::bash_command_classifier`] before falling through to mode comparison.
+    #[must_use]
+    pub fn with_review_trust(mut self) -> Self {
+        self.review_trust = true;
+        self
+    }
+
+    /// Returns `true` when the `review-trust` profile is active.
+    #[must_use]
+    pub fn is_review_trust(&self) -> bool {
+        self.review_trust
     }
 
     #[must_use]
@@ -167,6 +186,36 @@ impl PermissionPolicy {
                     rule.raw
                 ),
             };
+        }
+
+        // review-trust profile: classify bash commands before mode comparison.
+        // This runs after explicit deny rules (user config wins) but before
+        // override/allow rules, so that classified decisions are applied
+        // consistently. See Codex c10/b decision §3.4-3.5.
+        if self.review_trust && tool_name == "bash" {
+            match crate::bash_command_classifier::classify_bash_tool_input(input) {
+                crate::bash_command_classifier::BashCommandRisk::SafeReadonly
+                | crate::bash_command_classifier::BashCommandRisk::SafeVerify
+                | crate::bash_command_classifier::BashCommandRisk::SegaMetadataWrite => {
+                    return PermissionOutcome::Allow;
+                }
+                crate::bash_command_classifier::BashCommandRisk::DenyDangerous => {
+                    return PermissionOutcome::Deny {
+                        reason: format!("review-trust denied bash command as dangerous: {input}"),
+                    };
+                }
+                crate::bash_command_classifier::BashCommandRisk::AskMutation
+                | crate::bash_command_classifier::BashCommandRisk::UnknownAsk => {
+                    return Self::prompt_or_deny(
+                        tool_name,
+                        input,
+                        self.active_mode(),
+                        self.required_mode_for(tool_name),
+                        Some(format!("review-trust requires approval for bash command: {input}")),
+                        prompter,
+                    );
+                }
+            }
         }
 
         let current_mode = self.active_mode();
