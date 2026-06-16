@@ -385,6 +385,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut model = default_model();
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode_override = None;
+    let mut permission_profile_override: Option<String> = None;
     let mut wants_help = false;
     let mut wants_version = false;
     let mut allowed_tool_values = Vec::new();
@@ -437,6 +438,17 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode_override = Some(PermissionMode::DangerFullAccess);
                 index += 1;
             }
+            "--permission-profile" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --permission-profile".to_string())?;
+                permission_profile_override = Some(value.clone());
+                index += 2;
+            }
+            flag if flag.starts_with("--permission-profile=") => {
+                permission_profile_override = Some(flag[20..].to_string());
+                index += 1;
+            }
             "-p" => {
                 // Claw Code compat: -p "prompt" = one-shot prompt
                 let prompt = args[index + 1..].join(" ");
@@ -487,6 +499,31 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             other => {
                 rest.push(other.to_string());
                 index += 1;
+            }
+        }
+    }
+
+    // c10/b: --permission-profile review-trust handling.
+    // review-trust maps to workspace-write mode + bash command classifier.
+    // Mutually exclusive with --permission-mode (Codex decision §2: fail closed).
+    if let Some(profile) = &permission_profile_override {
+        if permission_mode_override.is_some() {
+            return Err(
+                "--permission-profile cannot be combined with --permission-mode; choose one"
+                    .to_string(),
+            );
+        }
+        match profile.as_str() {
+            "review-trust" => {
+                // Signal review-trust via env var (consumed by LiveCli policy construction).
+                // This avoids changing every CliAction variant signature.
+                env::set_var("SEGO_REVIEW_TRUST", "1");
+                permission_mode_override = Some(PermissionMode::WorkspaceWrite);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported permission profile '{other}'. Currently supported: review-trust"
+                ));
             }
         }
     }
@@ -6944,8 +6981,15 @@ fn permission_policy(
     feature_config: &runtime::RuntimeFeatureConfig,
     tool_registry: &GlobalToolRegistry,
 ) -> Result<PermissionPolicy, String> {
+    let base = PermissionPolicy::new(mode).with_permission_rules(feature_config.permission_rules());
+    // c10/b: enable review-trust bash classifier when --permission-profile review-trust was passed.
+    let policy = if env::var("SEGO_REVIEW_TRUST").as_deref() == Ok("1") {
+        base.with_review_trust()
+    } else {
+        base
+    };
     Ok(tool_registry.permission_specs(None)?.into_iter().fold(
-        PermissionPolicy::new(mode).with_permission_rules(feature_config.permission_rules()),
+        policy,
         |policy, (name, required_permission)| {
             policy.with_tool_requirement(name, required_permission)
         },
