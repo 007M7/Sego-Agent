@@ -313,3 +313,22 @@ fn git(args, cwd) { /* runs git command, asserts success */ }
 - Do not overwrite existing `AGENTS.md` content automatically; update it intentionally when repo workflows change
 - Always run `cargo test --workspace` before pushing
 - When in doubt, read `DEVELOPMENT.md` first
+
+## .sego Schema (c9/b)
+
+JSON Schema files in `schema/` are the **public contract** between the Rust
+engine and future TS sidecar / Python consumers. They are version-controlled
+and safe for GitHub.
+
+- `schema/review-artifact.schema.json` — aligned with `ReviewArtifact` (the
+  real on-disk structure in `.sego/reviews/{id}.json`, NOT `PersistedReviewArtifact`
+  which is just a path handle). Contains `schema_version`, `findings`, etc.
+- `schema/review-index-entry.schema.json` — aligned with `ReviewIndexEntry`
+  and `ReviewFindingStatusEntry`. Append-only index, no `schema_version`.
+- `schema/sidecar-request-response.schema.json` — minimal envelope for
+  sidecar <-> engine stdin/stdout JSON. Refined in Cycle 9 C.
+
+When changing any struct that has a schema file, **update the schema file too**.
+The golden fixture tests in `code_review/report.rs` verify serde round-trip
+consistency but do not validate against the JSON Schema file automatically.
+

@@ -469,8 +469,9 @@ fn short_hash(hash: &str) -> &str {
 mod tests {
     use super::{
         latest_review_finding_statuses, load_review_finding_statuses, load_review_index,
-        persist_review_artifact, record_review_finding_status, review_diff_hash,
-        ReviewFindingStatus, ReviewParseStatus, ReviewReport,
+        persist_review_artifact, record_review_finding_status, review_diff_hash, ReviewArtifact,
+        ReviewFinding, ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry,
+        ReviewParseStatus, ReviewReport,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
 
@@ -505,6 +506,137 @@ mod tests {
         assert!(index.contains(&artifact.id));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn review_artifact_round_trips_through_json() {
+        // Golden fixture: construct a ReviewArtifact with a finding, serialize,
+        // deserialize, and verify every field survives the round-trip.
+        let artifact = ReviewArtifact {
+            schema_version: 1,
+            id: "rev-test-001".to_string(),
+            created_at_epoch_seconds: 1_719_849_600,
+            scope: "staged".to_string(),
+            diff_hash: "sha256:abc123".to_string(),
+            finding_count: 1,
+            highest_severity: Some(ReviewSeverity::High),
+            parse_status: ReviewParseStatus::Structured,
+            git_status: "## main...origin/main".to_string(),
+            findings: vec![ReviewFinding {
+                id: "f-001".to_string(),
+                severity: ReviewSeverity::High,
+                file: "src/lib.rs".to_string(),
+                line: Some(42),
+                title: "Missing error handling".to_string(),
+                evidence: "unwrap on result".to_string(),
+                risk: "panic in production".to_string(),
+                suggestion: "propagate the error".to_string(),
+                confidence: 0.91,
+                verification_hint: Some("cargo test".to_string()),
+            }],
+            raw_text: "raw model output".to_string(),
+        };
+
+        let json = serde_json::to_string(&artifact).expect("serialize artifact");
+        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
+
+        // Field-by-field round-trip verification.
+        assert_eq!(parsed.schema_version, 1);
+        assert_eq!(parsed.id, "rev-test-001");
+        assert_eq!(parsed.scope, "staged");
+        assert_eq!(parsed.diff_hash, "sha256:abc123");
+        assert_eq!(parsed.finding_count, 1);
+        assert_eq!(parsed.highest_severity, Some(ReviewSeverity::High));
+        assert_eq!(parsed.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(parsed.findings.len(), 1);
+        assert_eq!(parsed.findings[0].severity, ReviewSeverity::High);
+        assert_eq!(parsed.findings[0].line, Some(42));
+        assert_eq!(parsed.findings[0].confidence, 0.91);
+        assert_eq!(parsed.raw_text, "raw model output");
+
+        // Enum serialization must be snake_case (aligned with schema).
+        assert!(json.contains(r#""severity":"high""#), "severity must be snake_case: {json}");
+        assert!(
+            json.contains(r#""parse_status":"structured""#),
+            "parse_status must be snake_case: {json}"
+        );
+
+        // schema_version must be present in JSON (schema required field).
+        assert!(json.contains(r#""schema_version":1"#), "schema_version must be in JSON: {json}");
+
+        // finding_count must equal findings length (schema consistency).
+        assert_eq!(parsed.finding_count, parsed.findings.len());
+    }
+
+    #[test]
+    fn review_artifact_with_no_findings_round_trips() {
+        let artifact = ReviewArtifact {
+            schema_version: 1,
+            id: "rev-test-002".to_string(),
+            created_at_epoch_seconds: 1_719_849_600,
+            scope: "workspace".to_string(),
+            diff_hash: "sha256:none".to_string(),
+            finding_count: 0,
+            highest_severity: None,
+            parse_status: ReviewParseStatus::FallbackRawText,
+            git_status: String::new(),
+            findings: vec![],
+            raw_text: "No findings.".to_string(),
+        };
+
+        let json = serde_json::to_string(&artifact).expect("serialize");
+        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(parsed.finding_count, 0);
+        assert!(parsed.findings.is_empty());
+        assert_eq!(parsed.highest_severity, None);
+        // null severity must serialize correctly.
+        assert!(json.contains(r#""highest_severity":null"#), "null severity: {json}");
+    }
+
+    #[test]
+    fn review_index_entry_round_trips_through_json() {
+        let entry = ReviewIndexEntry {
+            id: "rev-test-003".to_string(),
+            created_at_epoch_seconds: 1_719_849_600,
+            scope: "staged".to_string(),
+            diff_hash: "sha256:def456".to_string(),
+            finding_count: 2,
+            highest_severity: Some(ReviewSeverity::Critical),
+            parse_status: ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/rev-test-003.json".to_string(),
+            markdown_path: ".sego/reviews/rev-test-003.md".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).expect("serialize index entry");
+        let parsed: ReviewIndexEntry =
+            serde_json::from_str(&json).expect("deserialize index entry");
+
+        assert_eq!(parsed.id, entry.id);
+        assert_eq!(parsed.highest_severity, Some(ReviewSeverity::Critical));
+        assert_eq!(parsed.finding_count, 2);
+        // Index entries do NOT have schema_version (Codex D-B-2).
+        assert!(!json.contains("schema_version"), "index must not have schema_version: {json}");
+    }
+
+    #[test]
+    fn review_finding_status_entry_round_trips_through_json() {
+        let entry = ReviewFindingStatusEntry {
+            report_id: "rev-test-001".to_string(),
+            finding_id: "f-001".to_string(),
+            status: ReviewFindingStatus::Fixed,
+            note: Some("fixed in commit abc".to_string()),
+            updated_at_epoch_seconds: 1_719_849_700,
+        };
+
+        let json = serde_json::to_string(&entry).expect("serialize status entry");
+        let parsed: ReviewFindingStatusEntry =
+            serde_json::from_str(&json).expect("deserialize status entry");
+
+        assert_eq!(parsed.status, ReviewFindingStatus::Fixed);
+        assert_eq!(parsed.finding_id, "f-001");
+        // status must be snake_case.
+        assert!(json.contains(r#""status":"fixed""#), "status must be snake_case: {json}");
     }
 
     #[test]
