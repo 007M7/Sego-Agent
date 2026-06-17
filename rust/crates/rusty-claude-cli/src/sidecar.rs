@@ -110,7 +110,7 @@ fn execute_review(
         .as_ref()
         .and_then(|opts| opts.model.clone())
         .unwrap_or_else(crate::default_model);
-    let mut cli = LiveCli::new(model, true, None, PermissionMode::ReadOnly)?;
+    let mut cli = LiveCli::new(model, true, None, PermissionMode::ReadOnly)?.with_machine_output();
 
     let context = ReviewContext::new(target);
     let prompt = build_review_prompt(&context, ReviewPromptOptions::default());

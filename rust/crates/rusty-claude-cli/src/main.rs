@@ -1838,6 +1838,8 @@ struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    /// When true, suppress all non-JSON stdout output (sidecar machine mode, D-IDE-1).
+    machine_output: bool,
     system_prompt: Vec<String>,
     runtime: BuiltRuntime,
     session: SessionHandle,
@@ -2312,6 +2314,7 @@ impl LiveCli {
             model,
             allowed_tools,
             permission_mode,
+            machine_output: false,
             system_prompt,
             runtime,
             session,
@@ -2336,6 +2339,12 @@ impl LiveCli {
     /// 当前模型名（用于 recovery state 写入）。
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    /// Enable machine output mode: suppress all non-JSON stdout (sidecar, D-IDE-1).
+    fn with_machine_output(mut self) -> Self {
+        self.machine_output = true;
+        self
     }
 
     fn startup_banner(&self) -> String {
@@ -2415,8 +2424,11 @@ impl LiveCli {
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
+        let machine = self.machine_output;
         let mut stdout = io::stdout();
-        let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
+        let mut stderr = io::stderr();
+        let ui_target: &mut dyn std::io::Write = if machine { &mut stderr } else { &mut stdout };
+        let mut ui = ProgressUI::new("Sego Agent", ui_target);
         ui.add_phase("thinking", "Thinking");
         ui.add_phase("exec", "Executing");
         let _ = ui.start();
@@ -2431,9 +2443,11 @@ impl LiveCli {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
                 ui.finish("Done")?;
-                println!();
-                if let Some(event) = summary.auto_compaction {
-                    println!("{}", format_auto_compaction_notice(event.removed_message_count));
+                if !machine {
+                    println!();
+                    if let Some(event) = summary.auto_compaction {
+                        println!("{}", format_auto_compaction_notice(event.removed_message_count));
+                    }
                 }
                 // Record workflow: successful turn
                 self.workflow.record_event(LaneEvent::new(
@@ -2462,52 +2476,75 @@ impl LiveCli {
     }
 
     fn run_turn_capture_text(&mut self, input: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
-        let mut stdout = io::stdout();
-        let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
-        ui.add_phase("thinking", "Thinking");
-        ui.add_phase("exec", "Executing");
-        let _ = ui.start();
-        let thinking_phase = 0usize;
-        let exec_phase = 1usize;
-        ui.phase_idx(thinking_phase).start();
-        let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
-        let result = runtime.run_turn(input, Some(&mut permission_prompter));
-        ui.phase_idx(exec_phase).complete("Done", "");
-        hook_abort_monitor.stop();
-        match result {
-            Ok(summary) => {
-                let text = final_assistant_text(&summary);
-                self.replace_runtime(runtime)?;
-                ui.finish("Done")?;
-                println!();
-                if let Some(event) = summary.auto_compaction {
-                    println!("{}", format_auto_compaction_notice(event.removed_message_count));
+        let machine = self.machine_output;
+        // C-light (D-IDE-1): machine mode uses emit_output=false to suppress
+        // conversation runtime rendering, and a fail-closed prompter that never
+        // writes to stdout or reads from stdin.
+        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(!machine)?;
+        if machine {
+            // Machine mode: no ProgressUI, no stdout output, fail-closed permissions.
+            let mut prompter = MachinePermissionPrompter;
+            let result = runtime.run_turn(input, Some(&mut prompter));
+            hook_abort_monitor.stop();
+            match result {
+                Ok(summary) => {
+                    let text = final_assistant_text(&summary);
+                    self.replace_runtime(runtime)?;
+                    self.persist_session()?;
+                    Ok(text)
                 }
-                self.workflow.record_event(LaneEvent::new(
-                    LaneEventName::Green,
-                    LaneEventStatus::Green,
-                    default_date(),
-                ));
-                self.persist_session()?;
-                Ok(text)
+                Err(error) => {
+                    runtime.shutdown_plugins()?;
+                    Err(error.into())
+                }
             }
-            Err(error) => {
-                runtime.shutdown_plugins()?;
-                self.workflow.record_event(LaneEvent::blocked(
-                    default_date(),
-                    &LaneEventBlocker {
-                        failure_class: LaneFailureClass::ToolRuntime,
-                        detail: error.to_string(),
-                    },
-                ));
-                ui.phase_idx(thinking_phase).fail("Request failed", error.to_string());
-                let _ = ui.finish("Failed");
-                Err(Box::new(error))
+        } else {
+            // Interactive mode: full ProgressUI + CliPermissionPrompter.
+            let mut stdout = io::stdout();
+            let mut ui = ProgressUI::new("Sego Agent", &mut stdout);
+            ui.add_phase("thinking", "Thinking");
+            ui.add_phase("exec", "Executing");
+            let _ = ui.start();
+            let thinking_phase = 0usize;
+            let exec_phase = 1usize;
+            ui.phase_idx(thinking_phase).start();
+            let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
+            let result = runtime.run_turn(input, Some(&mut permission_prompter));
+            ui.phase_idx(exec_phase).complete("Done", "");
+            hook_abort_monitor.stop();
+            match result {
+                Ok(summary) => {
+                    let text = final_assistant_text(&summary);
+                    self.replace_runtime(runtime)?;
+                    ui.finish("Done")?;
+                    println!();
+                    if let Some(event) = summary.auto_compaction {
+                        println!("{}", format_auto_compaction_notice(event.removed_message_count));
+                    }
+                    self.workflow.record_event(LaneEvent::new(
+                        LaneEventName::Green,
+                        LaneEventStatus::Green,
+                        default_date(),
+                    ));
+                    self.persist_session()?;
+                    Ok(text)
+                }
+                Err(error) => {
+                    runtime.shutdown_plugins()?;
+                    self.workflow.record_event(LaneEvent::blocked(
+                        default_date(),
+                        &LaneEventBlocker {
+                            failure_class: LaneFailureClass::ToolRuntime,
+                            detail: error.to_string(),
+                        },
+                    ));
+                    ui.phase_idx(thinking_phase).fail("Request failed", error.to_string());
+                    let _ = ui.finish("Failed");
+                    Err(error.into())
+                }
             }
         }
     }
-
     fn run_turn_with_output(
         &mut self,
         input: &str,
@@ -5979,6 +6016,22 @@ impl runtime::HookProgressReporter for CliHookProgressReporter {
                 "[hook cancelled {event_name}] {tool_name}: {command}",
                 event_name = event.as_str()
             ),
+        }
+    }
+}
+
+/// Fail-closed permission prompter for machine/sidecar mode (D-IDE-1).
+/// Never writes to stdout, never reads from stdin. Always denies tool calls
+/// that require interactive approval. Used when `machine_output == true`.
+struct MachinePermissionPrompter;
+
+impl runtime::PermissionPrompter for MachinePermissionPrompter {
+    fn decide(
+        &mut self,
+        _request: &runtime::PermissionRequest,
+    ) -> runtime::PermissionPromptDecision {
+        runtime::PermissionPromptDecision::Deny {
+            reason: "machine mode: interactive approval not available".to_string(),
         }
     }
 }
