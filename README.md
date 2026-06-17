@@ -34,7 +34,10 @@ Sego 做独立的第三方审查——不和任何生成工具绑定，输出结
 
 ## 快速开始
 
-📘 第一次使用建议先看这份 Word 指南：[Sego 使用指南](docs/Sego使用指南.docx)
+📘 第一次使用建议先看这份指南：
+
+- [在线阅读版：Sego 使用指南](docs/Sego使用指南.md)
+- [Word 下载版](docs/Sego使用指南.docx?raw=1)（GitHub 不能直接预览 `.docx`，如果页面空白请下载后用 Word/WPS 打开）
 
 ### Windows（推荐：直接下载）
 
