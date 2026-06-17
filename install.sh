@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sego Agent — Linux/macOS one-liner installer
+# Sego Agent ? Linux/macOS one-liner installer
 # Run: curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
 
 set -e
@@ -8,14 +8,20 @@ BINARY="sego"
 INSTALL_DIR="$HOME/.local/bin"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
-echo "🦞 Sego Agent Installer"
+case "$OS" in
+    darwin*) RELEASE_BINARY="sego-macos" ;;
+    linux*) RELEASE_BINARY="sego" ;;
+    *) RELEASE_BINARY="sego" ;;
+esac
+
+echo "?? Sego Agent Installer"
 echo ""
 
 mkdir -p "$INSTALL_DIR"
 
 # Download latest release
-RELEASE_URL="https://github.com/$REPO/releases/latest/download/$BINARY"
-echo "Downloading $BINARY..."
+RELEASE_URL="https://github.com/$REPO/releases/latest/download/$RELEASE_BINARY"
+echo "Downloading $RELEASE_BINARY..."
 if curl -fsSL "$RELEASE_URL" -o "$INSTALL_DIR/$BINARY"; then
     chmod +x "$INSTALL_DIR/$BINARY"
     echo "Installed to $INSTALL_DIR/$BINARY"

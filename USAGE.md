@@ -4,13 +4,37 @@ This guide covers the current Rust workspace under `rust/` and the `sego` CLI bi
 
 ## Prerequisites
 
-- Rust toolchain with `cargo`
+- Normal release install: no Rust toolchain required.
+- Source build only: Rust toolchain with `cargo`.
 - One of:
   - `DEEPSEEK_API_KEY` for native DeepSeek access (recommended)
   - `ANTHROPIC_API_KEY` for Anthropic access
   - `sego login` for OAuth-based auth
 - Optional: `DEEPSEEK_MODEL` to override the default model (defaults to `deepseek-v4-flash`)
 - Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
+
+## Install for normal users
+
+### Windows one-line install
+
+```powershell
+irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+```
+
+The installer downloads the latest `sego.exe`, installs it to `~/sego`, adds it to PATH, creates `~/sego/Sego.cmd`, and creates a **Sego** desktop shortcut.
+
+### Windows direct download
+
+- From [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest): download `sego-windows.zip`, unzip it, and double-click `Sego.cmd`.
+- From GitHub **Code ? Download ZIP**: unzip the source package and double-click `start-sego-windows.cmd`. It bootstraps the latest release binary, creates the desktop shortcut, and starts Sego.
+
+GitHub source ZIP files do not contain compiled binaries. Use `sego-windows.zip` for offline double-click usage.
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+```
 
 ## Build the workspace
 
@@ -62,9 +86,9 @@ Supported permission modes:
 
 Model aliases currently supported by the CLI:
 
-- `opus` → `claude-opus-4-7`
-- `sonnet` → `claude-sonnet-4-6`
-- `haiku` → `claude-haiku-4-5`
+- `opus` ? `claude-opus-4-7`
+- `sonnet` ? `claude-sonnet-4-6`
+- `haiku` ? `claude-haiku-4-5`
 
 ## Authentication
 
@@ -156,7 +180,7 @@ Use `review` and `learn` to analyze your AI coding workflows.
 ### What gets recorded automatically
 
 Every `sego` session records:
-- Lane Events: started → ready → running → green/red → finished
+- Lane Events: started ? ready ? running ? green/red ? finished
 - Failure classification (11 types) and recovery attempts
 - Green Contract level achieved
 - Efficiency scoring
@@ -258,14 +282,14 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 - stdin receives a JSON request; stdout returns a JSON response.
 - Error responses are structured envelopes (`schema_version` / `status` / `error`).
 - The skill package at `skills/sego-review/` can be invoked by SKILL.md-compatible tools (Claude Code, Codex, Cursor, etc.).
-- **PoC status**: only the `review` action is supported. stdout banner mixing is a known limitation to be fixed in a future release.
+- **PoC status**: only the `review` action is supported. stdout is reserved for pure JSON; diagnostics go to stderr.
 # sego-review skill
 
-AI coding engineering trust review — a Sego sidecar skill package.
+AI coding engineering trust review ? a Sego sidecar skill package.
 
 ## What it does
 
-After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, etc.), invoke this skill to get a structured review from Sego. Sego returns findings with severity, file, line, evidence, risk, and suggestion — then persists a review artifact to `.sego/reviews/`.
+After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, etc.), invoke this skill to get a structured review from Sego. Sego returns findings with severity, file, line, evidence, risk, and suggestion ? then persists a review artifact to `.sego/reviews/`.
 
 ## Install
 
@@ -323,11 +347,11 @@ See [SKILL.md](SKILL.md) for the full response schema. Key fields:
 
 ## Graceful degradation
 
-If the Sego binary is not found, the script outputs a structured error JSON to stderr and exits with code 1 — it does not crash silently.
+If the Sego binary is not found, the script outputs a structured error JSON to stderr and exits with code 1 ? it does not crash silently.
 
-## 接入 AI 编码工具（Sidecar skill PoC）
+## ?? AI ?????Sidecar skill PoC?
 
-### 一键安装 skill
+### ???? skill
 
 ```bash
 # Mac / Linux
@@ -337,20 +361,20 @@ bash skills/sego-review/install.sh
 powershell -File skills\sego-review\install.ps1
 ```
 
-自动检测 Claude Code / Codex / Zcode / Cursor 并复制 skill 包。
+???? Claude Code / Codex / Zcode / Cursor ??? skill ??
 
-### 手动 sidecar 调用
+### ?? sidecar ??
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' | sego sidecar review
 ```
 
-- stdout 返回纯 JSON（findings + artifact_path）
-- stderr 留给诊断日志
-- exit code：0 成功，1 错误
+- stdout ??? JSON?findings + artifact_path?
+- stderr ??????
+- exit code?0 ???1 ??
 
-### 已知限制（PoC）
+### ?????PoC?
 
-- 仅支持 `review` action（verify/export 后续扩展）
-- Cursor 通过 `.cursorrules` 适配，不是原生扩展
-- 这是早期集成（early integration），不承诺完整 IDE 插件生态
+- ??? `review` action?verify/export ?????
+- Cursor ?? `.cursorrules` ?????????
+- ???????early integration??????? IDE ????

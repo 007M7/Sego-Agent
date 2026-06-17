@@ -27,6 +27,19 @@ jobs:
         with:
           name: sego-windows
           path: rust/target/release/sego.exe
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/sego-windows | Out-Null
+          Copy-Item rust/target/release/sego.exe dist/sego-windows/sego.exe
+          Copy-Item packaging/windows/Sego.cmd dist/sego-windows/Sego.cmd
+          Copy-Item packaging/windows/README-WINDOWS.txt dist/sego-windows/README-WINDOWS.txt
+          Compress-Archive -Path dist/sego-windows/* -DestinationPath dist/sego-windows.zip -Force
+      - name: Upload Windows ZIP artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sego-windows-zip
+          path: dist/sego-windows.zip
 
   build-linux:
     name: Build Linux binary
@@ -72,38 +85,61 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           name: sego-windows
-          path: artifacts
+          path: artifacts/windows
+      - uses: actions/download-artifact@v5
+        with:
+          name: sego-windows-zip
+          path: artifacts/windows-zip
       - uses: actions/download-artifact@v5
         with:
           name: sego-linux
-          path: artifacts
+          path: artifacts/linux
       - uses: actions/download-artifact@v5
         with:
           name: sego-macos
-          path: artifacts
+          path: artifacts/macos
+      - name: Normalize release asset names
+        run: |
+          cp artifacts/windows/sego.exe artifacts/sego.exe
+          cp artifacts/windows-zip/sego-windows.zip artifacts/sego-windows.zip
+          cp artifacts/linux/sego artifacts/sego
+          cp artifacts/macos/sego artifacts/sego-macos
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/sego.exe
+            artifacts/sego-windows.zip
             artifacts/sego
+            artifacts/sego-macos
           name: Sego Agent ${{ github.ref_name }}
           body: |
             ## Sego Agent ${{ github.ref_name }}
 
             ### Download
-            - **Windows:** `sego.exe`
+            - **Windows:** `sego-windows.zip` for double-click use, or `sego.exe` for terminal use
             - **Linux:** `sego`
-            - **macOS:** `sego` (rename from Linux artifact)
+            - **macOS:** `sego-macos`
 
             ### Quick Start
-            ```bash
-            # Set your API key
-            export ANTHROPIC_API_KEY=sk-your-key
-            export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+            ```powershell
+            # Windows installer: downloads the latest binary and creates a desktop shortcut
+            irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+            ```
 
-            # Run
-            ./sego
+            ```bash
+            # macOS / Linux installer
+            curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+            ```
+
+            ### Model configuration
+            ```bash
+            # DeepSeek recommended
+            export DEEPSEEK_API_KEY=sk-your-key
+            export DEEPSEEK_MODEL=deepseek-v4-flash
+
+            # Or Anthropic
+            export ANTHROPIC_API_KEY=sk-your-key
             ```
 
             ### Build from source
