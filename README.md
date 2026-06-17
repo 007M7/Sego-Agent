@@ -146,6 +146,31 @@ sego /verify         # 完整验证
 
 根据项目类型识别验证命令（Rust: cargo build/test，Node: npm test/build）。
 
+### 6. 接入 AI 编码工具（Sidecar skill PoC）
+
+Sego 提供一个 sidecar skill 包，让你的 AI 编码工具（Claude Code、Codex、Cursor 等）能自动调用 Sego review。
+
+**一键安装**：
+
+```bash
+# Mac / Linux
+bash skills/sego-review/install.sh
+
+# Windows
+powershell -File skills\sego-review\install.ps1
+```
+
+脚本会自动检测已安装的 AI 工具（Claude Code / Codex / Zcode / Cursor），复制 skill 包到对应目录。安装后重启你的 AI 编码工具即可。
+
+**手动调用**（不依赖 IDE）：
+
+```bash
+echo '{"schema_version":1,"action":"review","cwd":"/your/project","scope":"staged"}' \
+  | sego sidecar review
+```
+
+> **PoC 状态**：sidecar skill 当前仅支持 `review` action。这是早期集成（early integration），不承诺完整 IDE 插件生态。
+
 ---
 
 ## Demo 示例
