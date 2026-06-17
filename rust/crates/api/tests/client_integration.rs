@@ -65,7 +65,11 @@ async fn send_message_posts_json_and_parses_response() {
         Some("Bearer proxy-token")
     );
     assert_eq!(request.headers.get("anthropic-version").map(String::as_str), Some("2023-06-01"));
-    assert_eq!(request.headers.get("user-agent").map(String::as_str), Some("claude-code/0.1.0"));
+    let expected_user_agent = format!("claude-code/{}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        request.headers.get("user-agent").map(String::as_str),
+        Some(expected_user_agent.as_str())
+    );
     assert_eq!(
         request.headers.get("anthropic-beta").map(String::as_str),
         Some("claude-code-20250219,prompt-caching-scope-2026-01-05")
