@@ -25,6 +25,16 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
         "Task: review the current git diff for correctness, regressions, security risks, data-flow drift, missing tests, and maintainability issues.".to_string(),
         "Findings must be specific and evidence-based. Avoid broad summaries unless there are no findings.".to_string(),
         String::new(),
+        "Closed-loop verification requirements:".to_string(),
+        "- Do not claim a generated file, lint result, syntax check, test, dry-run, or runtime output exists/passed unless that evidence is present in the provided context.".to_string(),
+        "- If an output file or command result is proposed but not verified, label it as proposed/unverified and include the command needed to verify it.".to_string(),
+        "- Flag behavior changes separately from bug fixes, especially output schema, column names, request semantics, retry policy, filesystem paths, or data-flow changes.".to_string(),
+        "- For generated or optimized code, actively look for newly introduced regressions and include verification commands in each finding when practical.".to_string(),
+        String::new(),
+        "Domain review dimensions:".to_string(),
+        "- For network/crawler code, explicitly check URL construction, retry policy, non-retryable 4xx handling, timeout and exception handling, per-request User-Agent/header rotation if claimed, rate limiting/backoff, encoding fallback, SSRF/SSL/secrets/log leakage risks, output filename collision/overwrite behavior, dependency audit, and mockable network IO.".to_string(),
+        "- For shell command generation on Windows, flag cross-shell syntax mixing such as using CMD-only `cd /d` or `^` escaping in Bash/Git Bash, or Bash-only here-doc/path syntax in CMD/PowerShell.".to_string(),
+        String::new(),
         "Output contract:".to_string(),
         "- Prefer JSON only. Do not wrap the JSON in prose.".to_string(),
         "- Shape: {\"findings\":[{\"severity\":\"critical|high|medium|low|info\",\"file\":\"path\",\"line\":123,\"title\":\"short title\",\"evidence\":\"specific diff evidence\",\"risk\":\"why it matters\",\"suggestion\":\"specific fix\",\"confidence\":0.0,\"verification_hint\":\"test or command to run\"}]}.".to_string(),
@@ -146,5 +156,41 @@ mod tests {
         );
 
         assert!(prompt.contains("[truncated: original content exceeded 12 characters]"));
+    }
+
+    #[test]
+    fn prompt_requires_closed_loop_verification_guardrails() {
+        let context = ReviewContext::new(ReviewTarget {
+            scope: ReviewScope::Workspace,
+            git_status: String::new(),
+            staged_diff: String::new(),
+            unstaged_diff: String::new(),
+        });
+
+        let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
+
+        assert!(prompt.contains("Do not claim a generated file"));
+        assert!(prompt.contains("proposed/unverified"));
+        assert!(prompt.contains("behavior changes"));
+        assert!(prompt.contains("newly introduced regressions"));
+    }
+
+    #[test]
+    fn prompt_includes_network_and_shell_specific_review_dimensions() {
+        let context = ReviewContext::new(ReviewTarget {
+            scope: ReviewScope::Workspace,
+            git_status: String::new(),
+            staged_diff: String::new(),
+            unstaged_diff: String::new(),
+        });
+
+        let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
+
+        assert!(prompt.contains("network/crawler code"));
+        assert!(prompt.contains("non-retryable 4xx"));
+        assert!(prompt.contains("SSRF"));
+        assert!(prompt.contains("per-request User-Agent/header rotation"));
+        assert!(prompt.contains("cross-shell syntax mixing"));
+        assert!(prompt.contains("cd /d"));
     }
 }
