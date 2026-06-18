@@ -10,11 +10,14 @@ body:
 
         We review your private project or diff with Sego and deliver a structured report.
         Pricing starts at $19 (overseas) or RMB 99 (China).
+        Overseas payments are currently accepted through BNB Chain only, after
+        we confirm the audit scope and delivery plan.
 
         **This is a public GitHub issue. Do not upload sensitive source code, secrets,
         production credentials, customer data, or private business details before we confirm the workflow.**
 
         If you do not want to publish your email, leave it blank and we will reply in this issue first.
+        Do not send payment before the scope is confirmed.
   - type: input
     id: name
     attributes:
@@ -68,13 +71,19 @@ body:
     attributes:
       label: Preferred payment method
       options:
-        - PayPal
-        - Wise
+        - BNB Chain (overseas)
         - WeChat Pay
         - Alipay
-        - Other
+        - Other (will discuss)
     validations:
       required: true
+  - type: markdown
+    attributes:
+      value: |
+        **Payment note:** overseas paid audits use BNB Chain for now. We will
+        confirm scope, price, delivery window, and payment details before any
+        transfer. Do not post wallet addresses, transaction hashes, private code,
+        or sensitive business information in this public issue unless requested.
   - type: dropdown
     id: nda
     attributes:

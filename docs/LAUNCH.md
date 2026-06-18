@@ -36,6 +36,10 @@ For private projects, paid audits start at:
 - $19 / RMB 99 for a basic private audit
 - $99 / RMB 699 for a launch check
 
+Overseas payments are currently accepted through BNB Chain only. Please request
+scope confirmation first; do not send payment before the audit scope, price,
+delivery window, and payment details are confirmed.
+
 Request scope confirmation here:
 
 https://github.com/007M7/Sego-Agent/issues/new?assignees=&labels=private-audit,pending-scope&template=private-audit.yml&title=%5BPrivate+Audit%5D+
