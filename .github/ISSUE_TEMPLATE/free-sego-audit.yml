@@ -1,0 +1,92 @@
+name: "Free Sego Audit Request"
+description: "Request a free AI code review using Sego"
+title: "[Free Audit] "
+labels: ["free-audit", "pending-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Free Sego Audit Request
+
+        Send us a small AI-generated project and we'll run a free Sego review.
+        You'll get a structured report with security risks, quality issues, and commit readiness.
+
+        **This is a public GitHub issue. Do not submit secrets, production credentials,
+        private customer data, or private source code.**
+
+        If you do not want to publish your email, leave it blank and we will reply in this issue.
+  - type: input
+    id: name
+    attributes:
+      label: Name
+      placeholder: Your name
+    validations:
+      required: true
+  - type: input
+    id: email
+    attributes:
+      label: Email (optional, public)
+      placeholder: Leave blank if you prefer GitHub replies
+    validations:
+      required: false
+  - type: input
+    id: repo
+    attributes:
+      label: GitHub repo URL
+      placeholder: https://github.com/you/project
+    validations:
+      required: true
+  - type: dropdown
+    id: public
+    attributes:
+      label: Is the repo public?
+      options:
+        - "Yes"
+        - "No (will share diff privately)"
+    validations:
+      required: true
+  - type: dropdown
+    id: ai-tool
+    attributes:
+      label: What AI tool did you use?
+      options:
+        - Cursor
+        - Claude Code
+        - Codex
+        - GitHub Copilot
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What are you building?
+      placeholder: A brief description of your project
+    validations:
+      required: true
+  - type: textarea
+    id: focus
+    attributes:
+      label: What do you want Sego to check?
+      placeholder: e.g. security risks, SQL injection, hardcoded secrets, overall quality
+    validations:
+      required: false
+  - type: dropdown
+    id: publish
+    attributes:
+      label: Can we publish an anonymized case study?
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
+  - type: dropdown
+    id: paid-later
+    attributes:
+      label: Are you open to a paid private audit later?
+      options:
+        - "Yes"
+        - "No"
+        - "Maybe"
+    validations:
+      required: true
