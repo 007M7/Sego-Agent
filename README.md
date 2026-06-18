@@ -32,6 +32,16 @@ Sego 做独立的第三方审查——不和任何生成工具绑定，输出结
 
 ---
 
+## First Users / 免费代码体检
+
+Sego 正在招募第一批 AI Coding 用户。如果你正在用 Cursor、Claude Code、Codex、Copilot 或其他 AI 编码工具，可以申请一次免费的 Sego 审查。
+
+- [Apply for Free Sego Audit](docs/LAUNCH.md)
+- [Request Private AI Code Audit](docs/LAUNCH.md)
+- [Launch landing page](docs/index.html)
+
+---
+
 ## 快速开始
 
 📘 第一次使用建议先看这份指南：

@@ -1,0 +1,86 @@
+name: "Private AI Code Audit"
+description: "Request a private AI code audit (paid, from $19)"
+title: "[Private Audit] "
+labels: ["private-audit", "pending-scope"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Private AI Code Audit Request
+
+        We review your private project or diff with Sego and deliver a structured report.
+        Pricing starts at $19 (overseas) or RMB 99 (China).
+
+        **This is a public GitHub issue. Do not upload sensitive source code, secrets,
+        production credentials, customer data, or private business details before we confirm the workflow.**
+
+        If you do not want to publish your email, leave it blank and we will reply in this issue first.
+  - type: input
+    id: name
+    attributes:
+      label: Name
+      placeholder: Your name
+    validations:
+      required: true
+  - type: input
+    id: email
+    attributes:
+      label: Email (optional, public)
+      placeholder: Leave blank if you prefer GitHub replies
+    validations:
+      required: false
+  - type: input
+    id: project-type
+    attributes:
+      label: Project type
+      placeholder: e.g. web app, API, CLI tool, library
+    validations:
+      required: true
+  - type: dropdown
+    id: delivery
+    attributes:
+      label: Delivery method
+      options:
+        - Share private GitHub repo access after scope confirmation
+        - Send diff/patch file after scope confirmation
+        - Other (will discuss)
+    validations:
+      required: true
+  - type: input
+    id: deadline
+    attributes:
+      label: Expected deadline
+      placeholder: e.g. within 48 hours
+    validations:
+      required: false
+  - type: dropdown
+    id: budget
+    attributes:
+      label: Budget range
+      options:
+        - "$19 / RMB 99 (basic audit)"
+        - "$99 / RMB 699 (launch check)"
+        - "Custom (will discuss)"
+    validations:
+      required: true
+  - type: dropdown
+    id: payment
+    attributes:
+      label: Preferred payment method
+      options:
+        - PayPal
+        - Wise
+        - WeChat Pay
+        - Alipay
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: nda
+    attributes:
+      label: Need NDA?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
