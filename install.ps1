@@ -40,7 +40,6 @@ $LauncherContent = @'
 @echo off
 setlocal EnableExtensions
 title Sego Agent
-cd /d "%USERPROFILE%"
 
 if "%DEEPSEEK_API_KEY%%ANTHROPIC_API_KEY%"=="" (
   echo [Sego] No API key was found in your environment.
@@ -52,12 +51,18 @@ if "%DEEPSEEK_API_KEY%%ANTHROPIC_API_KEY%"=="" (
   echo.
 )
 
+echo [Sego] Active workspace: %CD%
+echo [Sego] Tip: inside Sego, type /cd "D:\YourProject" or launch with:
+echo        Sego.cmd --cwd "D:\YourProject"
+echo.
+
 set "SEGO_PAUSE_ON_ERROR=1"
 "%~dp0sego.exe" %*
 set "SEGO_EXIT=%ERRORLEVEL%"
-echo.
-echo Sego exited with code %SEGO_EXIT%.
-pause
+if not "%SEGO_EXIT%"=="0" (
+  echo.
+  echo Sego exited with code %SEGO_EXIT%.
+)
 exit /b %SEGO_EXIT%
 '@
 Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ASCII
@@ -82,7 +87,7 @@ try {
         $Shell = New-Object -ComObject WScript.Shell
         $Shortcut = $Shell.CreateShortcut($ShortcutPath)
         $Shortcut.TargetPath = $LauncherPath
-        $Shortcut.WorkingDirectory = $env:USERPROFILE
+        $Shortcut.WorkingDirectory = $InstallDir
         $Shortcut.IconLocation = "$BinPath,0"
         $Shortcut.Description = "Open Sego Agent"
         $Shortcut.Save()
