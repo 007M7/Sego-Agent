@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use serde_json::{Map, Value};
 use telemetry::SessionTracer;
@@ -98,6 +102,28 @@ impl Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
+/// Shared cancellation flag for an in-flight conversation turn.
+#[derive(Debug, Clone, Default)]
+pub struct TurnAbortSignal {
+    aborted: Arc<AtomicBool>,
+}
+
+impl TurnAbortSignal {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn abort(&self) {
+        self.aborted.store(true, Ordering::SeqCst);
+    }
+
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        self.aborted.load(Ordering::SeqCst)
+    }
+}
+
 /// Summary of one completed runtime turn, including tool results and usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSummary {
@@ -127,6 +153,7 @@ pub struct ConversationRuntime<C, T> {
     hook_runner: HookRunner,
     auto_compaction_input_tokens_threshold: u32,
     hook_abort_signal: HookAbortSignal,
+    turn_abort_signal: TurnAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
 }
@@ -176,6 +203,7 @@ where
             hook_runner: HookRunner::from_feature_config(feature_config),
             auto_compaction_input_tokens_threshold: auto_compaction_threshold_from_env(),
             hook_abort_signal: HookAbortSignal::default(),
+            turn_abort_signal: TurnAbortSignal::default(),
             hook_progress_reporter: None,
             session_tracer: None,
         }
@@ -196,6 +224,12 @@ where
     #[must_use]
     pub fn with_hook_abort_signal(mut self, hook_abort_signal: HookAbortSignal) -> Self {
         self.hook_abort_signal = hook_abort_signal;
+        self
+    }
+
+    #[must_use]
+    pub fn with_turn_abort_signal(mut self, turn_abort_signal: TurnAbortSignal) -> Self {
+        self.turn_abort_signal = turn_abort_signal;
         self
     }
 
@@ -303,6 +337,12 @@ where
         let mut iterations = 0;
 
         loop {
+            if self.turn_abort_signal.is_aborted() {
+                let error = RuntimeError::new("conversation turn cancelled by user");
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
+
             iterations += 1;
             if iterations > self.max_iterations {
                 let error = RuntimeError::new(
@@ -342,6 +382,11 @@ where
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
             };
+            if self.turn_abort_signal.is_aborted() {
+                let error = RuntimeError::new("conversation turn cancelled by user");
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
             let events = match self.api_client.stream(request) {
                 Ok(events) => events,
                 Err(error) => {
@@ -357,6 +402,11 @@ where
                         return Err(error);
                     }
                 };
+            if self.turn_abort_signal.is_aborted() {
+                let error = RuntimeError::new("conversation turn cancelled by user");
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
             }
@@ -387,6 +437,11 @@ where
             }
 
             for (tool_use_id, tool_name, input) in pending_tool_uses {
+                if self.turn_abort_signal.is_aborted() {
+                    let error = RuntimeError::new("conversation turn cancelled by user");
+                    self.record_turn_failed(iterations, &error);
+                    return Err(error);
+                }
                 let pre_hook_result = self.run_pre_tool_use_hook(&tool_name, &input);
                 let effective_input = pre_hook_result
                     .updated_input()
@@ -435,12 +490,22 @@ where
 
                 let result_message = match permission_outcome {
                     PermissionOutcome::Allow => {
+                        if self.turn_abort_signal.is_aborted() {
+                            let error = RuntimeError::new("conversation turn cancelled by user");
+                            self.record_turn_failed(iterations, &error);
+                            return Err(error);
+                        }
                         self.record_tool_started(iterations, &tool_name);
                         let (mut output, mut is_error) =
                             match self.tool_executor.execute(&tool_name, &effective_input) {
                                 Ok(output) => (output, false),
                                 Err(error) => (error.to_string(), true),
                             };
+                        if self.turn_abort_signal.is_aborted() {
+                            let error = RuntimeError::new("conversation turn cancelled by user");
+                            self.record_turn_failed(iterations, &error);
+                            return Err(error);
+                        }
                         output = merge_hook_feedback(pre_hook_result.messages(), output, false);
 
                         let post_hook_result = if is_error {
@@ -769,7 +834,8 @@ mod tests {
     use super::{
         build_assistant_message, parse_auto_compaction_threshold, ApiClient, ApiRequest,
         AssistantEvent, AutoCompactionEvent, ConversationRuntime, PromptCacheEvent, RuntimeError,
-        StaticToolExecutor, ToolExecutor, DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
+        StaticToolExecutor, ToolExecutor, TurnAbortSignal,
+        DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
     };
     use crate::compact::CompactionConfig;
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
@@ -1555,6 +1621,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("conversation loop exceeded the maximum number of iterations"));
+    }
+
+    #[test]
+    fn run_turn_cancels_before_request_when_signal_is_aborted() {
+        struct PanickingApi;
+
+        impl ApiClient for PanickingApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                panic!("API should not be called after turn cancellation");
+            }
+        }
+
+        let turn_abort_signal = TurnAbortSignal::new();
+        turn_abort_signal.abort();
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            PanickingApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        )
+        .with_turn_abort_signal(turn_abort_signal);
+
+        let error = runtime
+            .run_turn("cancel this turn", None)
+            .expect_err("aborted turn should return a cancellation error");
+
+        assert!(error.to_string().contains("conversation turn cancelled by user"));
     }
 
     #[test]

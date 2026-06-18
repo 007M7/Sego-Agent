@@ -1727,11 +1727,104 @@ fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> 
 }
 
 fn run_bash(input: BashCommandInput) -> Result<String, String> {
+    if let Some(output) = bash_file_authoring_guard(&input.command) {
+        return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
+    }
     if let Some(output) = workspace_test_branch_preflight(&input.command) {
         return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
     }
     serde_json::to_string_pretty(&execute_bash(input).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())
+}
+
+fn bash_file_authoring_guard(command: &str) -> Option<BashCommandOutput> {
+    if !looks_like_shell_file_authoring_misuse(command) {
+        return None;
+    }
+
+    let stderr = concat!(
+        "Sego blocked this shell file-writing pattern. ",
+        "Use the write_file or edit_file tool to create Markdown, JSON, or source files; ",
+        "do not compose text files through bash echo, PowerShell, Node, or Python quoting loops."
+    )
+    .to_string();
+
+    Some(BashCommandOutput {
+        stdout: String::new(),
+        stderr: stderr.clone(),
+        raw_output_path: None,
+        interrupted: false,
+        is_image: None,
+        background_task_id: None,
+        backgrounded_by_user: None,
+        assistant_auto_backgrounded: None,
+        dangerously_disable_sandbox: None,
+        return_code_interpretation: Some(
+            "preflight_blocked:file_authoring_tool_misuse".to_string(),
+        ),
+        no_output_expected: Some(true),
+        structured_content: Some(vec![serde_json::to_value(
+            LaneEvent::new(LaneEventName::Blocked, LaneEventStatus::Blocked, iso8601_now())
+                .with_failure_class(LaneFailureClass::ToolRuntime)
+                .with_detail(stderr)
+                .with_data(json!({
+                    "blockedCommand": command,
+                    "recommendedTool": "write_file",
+                    "reason": "file_authoring_tool_misuse"
+                })),
+        )
+        .expect("lane event should serialize")]),
+        persisted_output_path: None,
+        persisted_output_size: None,
+        sandbox_status: None,
+    })
+}
+
+fn looks_like_shell_file_authoring_misuse(command: &str) -> bool {
+    let lower = format!(" {} ", command.to_ascii_lowercase());
+    let targets_text_file = [
+        ".md",
+        ".markdown",
+        ".txt",
+        ".json",
+        ".rs",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".toml",
+        ".yaml",
+        ".yml",
+    ]
+    .iter()
+    .any(|extension| lower.contains(extension));
+    if !targets_text_file {
+        return false;
+    }
+
+    let shell_write = lower.contains(" > ")
+        || lower.contains(">>")
+        || lower.contains(" set-content ")
+        || lower.contains(" out-file ")
+        || lower.contains("writefile")
+        || lower.contains("writefilesync")
+        || lower.contains("python -c")
+        || lower.contains("node -e");
+    if !shell_write {
+        return false;
+    }
+
+    let echo_count = lower.matches(" echo ").count()
+        + lower.matches("&echo ").count()
+        + lower.matches(";echo ").count();
+    echo_count >= 2
+        || lower.contains(" set-content ")
+        || lower.contains(" out-file ")
+        || lower.contains("writefile")
+        || lower.contains("writefilesync")
+        || lower.contains("python -c")
+        || lower.contains("node -e")
 }
 
 fn workspace_test_branch_preflight(command: &str) -> Option<BashCommandOutput> {
@@ -6136,6 +6229,37 @@ mod tests {
         let background_output: serde_json::Value = serde_json::from_str(&background).expect("json");
         assert!(background_output["backgroundTaskId"].as_str().is_some());
         assert_eq!(background_output["noOutputExpected"], true);
+    }
+
+    #[test]
+    fn bash_blocks_shell_text_file_authoring_loops() {
+        let output = execute_tool(
+            "bash",
+            &json!({
+                "command": "echo # Review > E:\\code\\PR43-review.md & echo finding >> E:\\code\\PR43-review.md"
+            }),
+        )
+        .expect("bash guard should return structured output");
+        let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+        assert_eq!(
+            output_json["returnCodeInterpretation"],
+            "preflight_blocked:file_authoring_tool_misuse"
+        );
+        assert!(output_json["stderr"].as_str().expect("stderr").contains("write_file"));
+        assert_eq!(output_json["structuredContent"][0]["event"], "lane.blocked");
+        assert_eq!(output_json["structuredContent"][0]["failureClass"], "tool_runtime");
+    }
+
+    #[test]
+    fn bash_allows_simple_echo_without_file_authoring() {
+        let output = execute_tool("bash", &json!({ "command": shell_stdout_command("hello") }))
+            .expect("simple echo should still execute");
+        let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+        assert_eq!(output_json["stdout"].as_str().expect("stdout").trim(), "hello");
+        assert_ne!(
+            output_json["returnCodeInterpretation"],
+            "preflight_blocked:file_authoring_tool_misuse"
+        );
     }
 
     #[test]

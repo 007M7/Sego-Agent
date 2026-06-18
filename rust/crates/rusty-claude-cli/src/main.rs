@@ -851,6 +851,11 @@ enum WorkspaceIntent {
     Switch(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExportLastResponseIntent {
+    path: Option<String>,
+}
+
 fn parse_workspace_natural_language_intent(input: &str) -> Option<WorkspaceIntent> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.starts_with('/') {
@@ -887,6 +892,105 @@ fn parse_workspace_natural_language_intent(input: &str) -> Option<WorkspaceInten
     }
 
     None
+}
+
+fn parse_export_last_response_intent(input: &str) -> Option<ExportLastResponseIntent> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let has_export_verb = lower.contains("export")
+        || lower.contains("save")
+        || lower.contains("write")
+        || trimmed.contains("导出")
+        || trimmed.contains("保存")
+        || trimmed.contains("写入")
+        || trimmed.contains("写成")
+        || trimmed.contains("生成");
+    if !has_export_verb {
+        return None;
+    }
+
+    let targets_last_response = lower.contains("last")
+        || lower.contains("previous")
+        || lower.contains("review")
+        || lower.contains("report")
+        || trimmed.contains("刚才")
+        || trimmed.contains("上一条")
+        || trimmed.contains("上一次")
+        || trimmed.contains("审查")
+        || trimmed.contains("审核")
+        || trimmed.contains("报告")
+        || trimmed.contains("结果");
+    if !targets_last_response {
+        return None;
+    }
+
+    let path = extract_export_path(trimmed);
+    if path.is_none()
+        && !(lower.contains(".md") || lower.contains("markdown") || trimmed.contains("md"))
+    {
+        return None;
+    }
+
+    Some(ExportLastResponseIntent { path })
+}
+
+fn extract_export_path(input: &str) -> Option<String> {
+    for quoted in extract_quoted_segments(input) {
+        if looks_like_export_path(&quoted) {
+            return Some(quoted);
+        }
+    }
+
+    input
+        .split_whitespace()
+        .rev()
+        .map(|part| {
+            part.trim_matches(|ch: char| {
+                matches!(ch, '"' | '\'' | '`' | '。' | '，' | ',' | ';' | '；' | ':' | '：')
+            })
+        })
+        .find(|part| looks_like_export_path(part))
+        .map(ToOwned::to_owned)
+}
+
+fn extract_quoted_segments(input: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in input.chars() {
+        match quote {
+            Some(end) if ch == end => {
+                let value = current.trim();
+                if !value.is_empty() {
+                    segments.push(value.to_string());
+                }
+                current.clear();
+                quote = None;
+            }
+            Some(_) => current.push(ch),
+            None if matches!(ch, '"' | '\'' | '`' | '“' | '‘') => {
+                quote = Some(match ch {
+                    '“' => '”',
+                    '‘' => '’',
+                    other => other,
+                });
+            }
+            None => {}
+        }
+    }
+    segments
+}
+
+fn looks_like_export_path(value: &str) -> bool {
+    let path = Path::new(value);
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+        || value.contains('\\')
+        || value.contains('/')
 }
 
 fn strip_intent_prefix<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
@@ -1961,6 +2065,10 @@ fn run_repl(
                     }
                     continue;
                 }
+                if let Some(intent) = parse_export_last_response_intent(&trimmed) {
+                    cli.export_last_assistant_response(intent.path.as_deref())?;
+                    continue;
+                }
                 cli.run_turn(&trimmed)?;
             }
             input::ReadOutcome::Cancel => {}
@@ -2052,6 +2160,13 @@ impl BuiltRuntime {
         let runtime =
             self.runtime.take().expect("runtime should exist before installing hook abort signal");
         self.runtime = Some(runtime.with_hook_abort_signal(hook_abort_signal));
+        self
+    }
+
+    fn with_turn_abort_signal(mut self, turn_abort_signal: runtime::TurnAbortSignal) -> Self {
+        let runtime =
+            self.runtime.take().expect("runtime should exist before installing turn abort signal");
+        self.runtime = Some(runtime.with_turn_abort_signal(turn_abort_signal));
         self
     }
 
@@ -2400,36 +2515,72 @@ struct HookAbortMonitor {
 }
 
 impl HookAbortMonitor {
-    fn spawn(abort_signal: runtime::HookAbortSignal) -> Self {
-        Self::spawn_with_waiter(abort_signal, move |stop_rx, abort_signal| {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build()
-            else {
-                return;
-            };
+    fn spawn(
+        hook_abort_signal: runtime::HookAbortSignal,
+        turn_abort_signal: runtime::TurnAbortSignal,
+        emit_output: bool,
+    ) -> Self {
+        Self::spawn_with_waiter(
+            hook_abort_signal,
+            turn_abort_signal,
+            emit_output,
+            move |stop_rx, hook_abort_signal, turn_abort_signal, emit_output| {
+                let Ok(runtime) =
+                    tokio::runtime::Builder::new_current_thread().enable_all().build()
+                else {
+                    return;
+                };
 
-            runtime.block_on(async move {
+                runtime.block_on(async move {
                 let wait_for_stop = tokio::task::spawn_blocking(move || {
                     let _ = stop_rx.recv();
                 });
+                tokio::pin!(wait_for_stop);
+                let mut cancelled_once = false;
 
-                tokio::select! {
-                    result = tokio::signal::ctrl_c() => {
-                        if result.is_ok() {
-                            abort_signal.abort();
+                loop {
+                    tokio::select! {
+                        _ = &mut wait_for_stop => break,
+                        result = tokio::signal::ctrl_c() => {
+                            if result.is_err() {
+                                break;
+                            }
+                            if cancelled_once {
+                                if emit_output {
+                                    eprintln!("Sego force exiting.");
+                                }
+                                std::process::exit(130);
+                            }
+                            cancelled_once = true;
+                            hook_abort_signal.abort();
+                            turn_abort_signal.abort();
+                            if emit_output {
+                                eprintln!();
+                                eprintln!("Sego cancelled the current task. Press Ctrl+C again to force exit.");
+                            }
                         }
                     }
-                    _ = wait_for_stop => {}
                 }
             });
-        })
+            },
+        )
     }
 
-    fn spawn_with_waiter<F>(abort_signal: runtime::HookAbortSignal, wait_for_interrupt: F) -> Self
+    fn spawn_with_waiter<F>(
+        abort_signal: runtime::HookAbortSignal,
+        turn_abort_signal: runtime::TurnAbortSignal,
+        emit_output: bool,
+        wait_for_interrupt: F,
+    ) -> Self
     where
-        F: FnOnce(Receiver<()>, runtime::HookAbortSignal) + Send + 'static,
+        F: FnOnce(Receiver<()>, runtime::HookAbortSignal, runtime::TurnAbortSignal, bool)
+            + Send
+            + 'static,
     {
         let (stop_tx, stop_rx) = mpsc::channel();
-        let join_handle = thread::spawn(move || wait_for_interrupt(stop_rx, abort_signal));
+        let join_handle = thread::spawn(move || {
+            wait_for_interrupt(stop_rx, abort_signal, turn_abort_signal, emit_output);
+        });
 
         Self { stop_tx: Some(stop_tx), join_handle: Some(join_handle) }
     }
@@ -2612,6 +2763,7 @@ impl LiveCli {
         emit_output: bool,
     ) -> Result<(BuiltRuntime, HookAbortMonitor), Box<dyn std::error::Error>> {
         let hook_abort_signal = runtime::HookAbortSignal::new();
+        let turn_abort_signal = runtime::TurnAbortSignal::new();
         let runtime = build_runtime(
             self.runtime.session().clone(),
             &self.session.id,
@@ -2623,8 +2775,10 @@ impl LiveCli {
             self.permission_mode,
             None,
         )?
-        .with_hook_abort_signal(hook_abort_signal.clone());
-        let hook_abort_monitor = HookAbortMonitor::spawn(hook_abort_signal);
+        .with_hook_abort_signal(hook_abort_signal.clone())
+        .with_turn_abort_signal(turn_abort_signal.clone());
+        let hook_abort_monitor =
+            HookAbortMonitor::spawn(hook_abort_signal, turn_abort_signal, emit_output);
 
         Ok((runtime, hook_abort_monitor))
     }
@@ -3280,6 +3434,23 @@ impl LiveCli {
             "Export\n  Result           wrote transcript\n  File             {}\n  Messages         {}",
             export_path.display(),
             self.runtime.session().messages.len(),
+        );
+        Ok(())
+    }
+
+    fn export_last_assistant_response(
+        &self,
+        requested_path: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let text = latest_assistant_text(self.runtime.session())
+            .ok_or("no assistant response is available to export yet")?;
+        let export_path = resolve_direct_export_path(requested_path, || {
+            format!("sego-response-{}.md", default_date().replace('-', ""))
+        })?;
+        fs::write(&export_path, text)?;
+        println!(
+            "Export\n  Result           wrote latest assistant response\n  File             {}",
+            export_path.display()
         );
         Ok(())
     }
@@ -5978,6 +6149,26 @@ fn render_export_text(session: &Session) -> String {
     lines.join("\n")
 }
 
+fn latest_assistant_text(session: &Session) -> Option<String> {
+    session.messages.iter().rev().find_map(|message| {
+        if message.role != MessageRole::Assistant {
+            return None;
+        }
+
+        let text = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        (!text.is_empty()).then_some(text)
+    })
+}
+
 fn default_export_filename(session: &Session) -> String {
     let stem = session
         .messages
@@ -6016,6 +6207,21 @@ fn resolve_export_path(
             format!("{file_name}.txt")
         };
     Ok(cwd.join(final_name))
+}
+
+fn resolve_direct_export_path(
+    requested_path: Option<&str>,
+    default_name: impl FnOnce() -> String,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let file_name = requested_path.map_or_else(default_name, |path| path.trim().to_string());
+    let candidate = PathBuf::from(file_name);
+    let candidate = if candidate.is_absolute() { candidate } else { cwd.join(candidate) };
+    if candidate.extension().is_some() {
+        Ok(candidate)
+    } else {
+        Ok(candidate.with_extension("md"))
+    }
 }
 
 fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -7727,16 +7933,18 @@ mod tests {
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, normalize_permission_mode, parse_args,
-        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
-        parse_workspace_natural_language_intent, permission_policy, print_help_to,
-        push_output_block, render_code_review_readiness_for, render_code_review_summary_for,
-        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
-        response_to_events, resume_supported_slash_commands, run_resume_command,
+        parse_export_last_response_intent, parse_git_status_branch, parse_git_status_metadata_for,
+        parse_git_workspace_summary, parse_workspace_natural_language_intent, permission_policy,
+        print_help_to, push_output_block, render_code_review_readiness_for,
+        render_code_review_summary_for, render_config_report, render_diff_report,
+        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
+        resolve_model_alias, resolve_session_reference, response_to_events,
+        resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
-        SlashCommand, StatusUsage, WorkspaceIntent,
+        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
+        ExportLastResponseIntent, GitWorkspaceSummary, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, SafetyReviewScope, SlashCommand, StatusUsage,
+        WorkspaceIntent,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -8123,6 +8331,19 @@ mod tests {
             Some(WorkspaceIntent::Switch("E:\\中文项目".to_string()))
         );
         assert_eq!(parse_workspace_natural_language_intent("帮我 review 当前改动"), None);
+    }
+
+    #[test]
+    fn parses_export_last_response_natural_language_intents() {
+        assert_eq!(
+            parse_export_last_response_intent("把刚才的审查结果写成 E:\\code\\PR43-review.md"),
+            Some(ExportLastResponseIntent { path: Some("E:\\code\\PR43-review.md".to_string()) })
+        );
+        assert_eq!(
+            parse_export_last_response_intent("save the last review report to PR43-review.md"),
+            Some(ExportLastResponseIntent { path: Some("PR43-review.md".to_string()) })
+        );
+        assert_eq!(parse_export_last_response_intent("帮我写一个 markdown parser"), None);
     }
 
     #[test]
@@ -10001,10 +10222,13 @@ mod sandbox_report_tests {
         let (ready_tx, ready_rx) = mpsc::channel();
         let monitor = HookAbortMonitor::spawn_with_waiter(
             abort_signal.clone(),
-            move |stop_rx, abort_signal| {
+            runtime::TurnAbortSignal::new(),
+            false,
+            move |stop_rx, abort_signal, turn_abort_signal, _emit_output| {
                 ready_tx.send(()).expect("ready signal");
                 let _ = stop_rx.recv();
                 assert!(!abort_signal.is_aborted());
+                assert!(!turn_abort_signal.is_aborted());
             },
         );
 
@@ -10020,8 +10244,11 @@ mod sandbox_report_tests {
         let (done_tx, done_rx) = mpsc::channel();
         let monitor = HookAbortMonitor::spawn_with_waiter(
             abort_signal.clone(),
-            move |_stop_rx, abort_signal| {
+            runtime::TurnAbortSignal::new(),
+            false,
+            move |_stop_rx, abort_signal, turn_abort_signal, _emit_output| {
                 abort_signal.abort();
+                turn_abort_signal.abort();
                 done_tx.send(()).expect("done signal");
             },
         );
