@@ -7,6 +7,7 @@ $Binary = "sego.exe"
 $InstallDir = "$env:USERPROFILE\sego"
 $BinPath = "$InstallDir\$Binary"
 $LauncherPath = "$InstallDir\Sego.cmd"
+$UpdaterPath = "$InstallDir\Update Sego.cmd"
 
 Write-Host "Sego Agent Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -62,6 +63,17 @@ exit /b %SEGO_EXIT%
 Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ASCII
 Write-Host "Created launcher: $LauncherPath" -ForegroundColor Green
 
+$UpdaterContent = @'
+@echo off
+setlocal EnableExtensions
+title Update Sego
+"%~dp0sego.exe" update
+echo.
+pause
+'@
+Set-Content -Path $UpdaterPath -Value $UpdaterContent -Encoding ASCII
+Write-Host "Created updater: $UpdaterPath" -ForegroundColor Green
+
 # Create desktop shortcut for normal Windows users.
 try {
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -75,6 +87,15 @@ try {
         $Shortcut.Description = "Open Sego Agent"
         $Shortcut.Save()
         Write-Host "Created desktop shortcut: $ShortcutPath" -ForegroundColor Green
+
+        $UpdateShortcutPath = Join-Path $DesktopPath "Update Sego.lnk"
+        $UpdateShortcut = $Shell.CreateShortcut($UpdateShortcutPath)
+        $UpdateShortcut.TargetPath = $UpdaterPath
+        $UpdateShortcut.WorkingDirectory = $env:USERPROFILE
+        $UpdateShortcut.IconLocation = "$BinPath,0"
+        $UpdateShortcut.Description = "Update Sego Agent"
+        $UpdateShortcut.Save()
+        Write-Host "Created desktop shortcut: $UpdateShortcutPath" -ForegroundColor Green
     }
 } catch {
     Write-Host "Could not create desktop shortcut: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -100,5 +121,7 @@ Write-Host "  # Or Anthropic (alternative)" -ForegroundColor White
 Write-Host "  setx ANTHROPIC_API_KEY ""sk-your-anthropic-key""" -ForegroundColor White
 Write-Host ""
 Write-Host "Run from terminal: sego" -ForegroundColor White
+Write-Host "Update from terminal: sego update" -ForegroundColor White
 Write-Host "Or double-click the Sego desktop shortcut / $LauncherPath." -ForegroundColor White
+Write-Host "Or double-click Update Sego / $UpdaterPath." -ForegroundColor White
 Write-Host "Tip: do not double-click sego.exe directly; use Sego.cmd so errors stay visible." -ForegroundColor Yellow
