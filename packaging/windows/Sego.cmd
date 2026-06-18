@@ -1,7 +1,6 @@
 @echo off
 setlocal EnableExtensions
 title Sego Agent
-cd /d "%USERPROFILE%"
 
 if not exist "%~dp0sego.exe" (
   echo [Sego] sego.exe was not found next to this launcher.
@@ -18,6 +17,12 @@ if "%DEEPSEEK_API_KEY%%ANTHROPIC_API_KEY%"=="" (
   echo.
 )
 
+echo [Sego] Active workspace: %CD%
+echo [Sego] Tip: you can say "切换到 D:\YourProject" inside Sego, or launch with:
+echo        Sego.cmd --cwd "D:\YourProject"
+echo.
+
+set "SEGO_PAUSE_ON_ERROR=1"
 "%~dp0sego.exe" %*
 set "SEGO_EXIT=%ERRORLEVEL%"
 echo.

@@ -72,6 +72,27 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "pwd",
+        aliases: &["cwd"],
+        summary: "Show the active workspace directory",
+        argument_hint: None,
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "cd",
+        aliases: &[],
+        summary: "Switch the active workspace directory",
+        argument_hint: Some("<path>"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "workspace",
+        aliases: &["workdir"],
+        summary: "Show workspace and sandbox path context",
+        argument_hint: Some("[path]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
         name: "compact",
         aliases: &[],
         summary: "Compact local session history",
@@ -1060,6 +1081,9 @@ pub enum SlashCommand {
     Help,
     Status,
     Sandbox,
+    Pwd,
+    Cd { path: Option<String> },
+    Workspace { path: Option<String> },
     Compact,
     Bughunter { scope: Option<String> },
     Commit,
@@ -1187,6 +1211,12 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Sandbox
         }
+        "pwd" | "cwd" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Pwd
+        }
+        "cd" => SlashCommand::Cd { path: remainder },
+        "workspace" | "workdir" => SlashCommand::Workspace { path: remainder },
         "compact" => {
             validate_no_args(command, &args)?;
             SlashCommand::Compact
@@ -3001,6 +3031,9 @@ pub fn handle_slash_command(
         | SlashCommand::Teleport { .. }
         | SlashCommand::DebugToolCall
         | SlashCommand::Sandbox
+        | SlashCommand::Pwd
+        | SlashCommand::Cd { .. }
+        | SlashCommand::Workspace { .. }
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
         | SlashCommand::Clear { .. }
@@ -3152,6 +3185,20 @@ mod tests {
         assert_eq!(SlashCommand::parse("/help"), Ok(Some(SlashCommand::Help)));
         assert_eq!(SlashCommand::parse(" /status "), Ok(Some(SlashCommand::Status)));
         assert_eq!(SlashCommand::parse("/sandbox"), Ok(Some(SlashCommand::Sandbox)));
+        assert_eq!(SlashCommand::parse("/pwd"), Ok(Some(SlashCommand::Pwd)));
+        assert_eq!(SlashCommand::parse("/cwd"), Ok(Some(SlashCommand::Pwd)));
+        assert_eq!(
+            SlashCommand::parse("/cd D:\\Project"),
+            Ok(Some(SlashCommand::Cd { path: Some("D:\\Project".to_string()) }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/workspace D:\\Project"),
+            Ok(Some(SlashCommand::Workspace { path: Some("D:\\Project".to_string()) }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/workdir"),
+            Ok(Some(SlashCommand::Workspace { path: None }))
+        );
         assert_eq!(
             SlashCommand::parse("/bughunter runtime"),
             Ok(Some(SlashCommand::Bughunter { scope: Some("runtime".to_string()) }))

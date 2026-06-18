@@ -54,6 +54,26 @@ cd rust
 ./target/debug/sego
 ```
 
+Inside the REPL, Sego supports natural workspace language for normal users:
+
+```text
+当前工作区
+切换到 D:\YourProject
+打开项目 E:\YourProject
+```
+
+For stricter CLI usage, the same workflow is available as commands:
+
+```bash
+sego --cwd "D:\YourProject" workspace
+```
+
+```text
+/workspace
+/pwd
+/cd D:\YourProject
+```
+
 ### One-shot prompt
 
 ```bash
