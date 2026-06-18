@@ -349,6 +349,21 @@
       box-shadow: var(--shadow);
     }
 
+    .cta-panel .cta-group {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      max-width: 520px;
+      margin: 0 auto;
+      gap: 14px;
+    }
+
+    .cta-panel .btn {
+      width: 100%;
+      padding-right: 18px;
+      padding-left: 18px;
+      white-space: nowrap;
+    }
+
     .cta-section p {
       max-width: 600px;
       margin: 14px auto 28px;
@@ -438,6 +453,11 @@
 
       .btn {
         width: 100%;
+      }
+
+      .cta-panel .cta-group {
+        grid-template-columns: 1fr;
+        max-width: 100%;
       }
     }
   </style>
