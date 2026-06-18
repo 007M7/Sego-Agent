@@ -179,8 +179,20 @@ fn main() {
 Run `sego --help` for usage."
             );
         }
+        maybe_pause_after_error();
         std::process::exit(1);
     }
+}
+
+fn maybe_pause_after_error() {
+    if !cfg!(windows) || env::var_os("SEGO_PAUSE_ON_ERROR").is_none() {
+        return;
+    }
+
+    eprintln!();
+    eprintln!("Press Enter to close this window.");
+    let mut buffer = String::new();
+    let _ = io::stdin().read_line(&mut buffer);
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {

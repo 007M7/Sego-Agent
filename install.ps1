@@ -47,8 +47,11 @@ if "%DEEPSEEK_API_KEY%%ANTHROPIC_API_KEY%"=="" (
   echo   setx DEEPSEEK_API_KEY "your-key"
   echo   setx ANTHROPIC_API_KEY "your-key"
   echo.
+  echo [Sego] After running setx, close this window and open Sego again.
+  echo.
 )
 
+set "SEGO_PAUSE_ON_ERROR=1"
 "%~dp0sego.exe" %*
 set "SEGO_EXIT=%ERRORLEVEL%"
 echo.
@@ -97,4 +100,5 @@ Write-Host "  # Or Anthropic (alternative)" -ForegroundColor White
 Write-Host "  setx ANTHROPIC_API_KEY ""sk-your-anthropic-key""" -ForegroundColor White
 Write-Host ""
 Write-Host "Run from terminal: sego" -ForegroundColor White
-Write-Host "Or double-click the Sego desktop shortcut." -ForegroundColor White
+Write-Host "Or double-click the Sego desktop shortcut / $LauncherPath." -ForegroundColor White
+Write-Host "Tip: do not double-click sego.exe directly; use Sego.cmd so errors stay visible." -ForegroundColor Yellow
