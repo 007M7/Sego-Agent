@@ -1,28 +1,44 @@
 # Security Policy
 
-## Reporting a Vulnerability
+Sego currently publishes a static launch site on Cloudflare Pages and releases binaries through GitHub Releases.
 
-If you discover a security vulnerability in Sego Agent, please report it responsibly.
+## Official channels
 
-**Do not open a public GitHub issue.**
+- Website: https://sego-8dw.pages.dev/
+- Repository: https://github.com/007M7/Sego-Agent
+- Releases: https://github.com/007M7/Sego-Agent/releases/latest
 
-Instead, please:
+If another site asks you to download Sego, submit private source code, or pay for an audit, verify it against the official repository first.
 
-1. Email the maintainer directly at the address listed on the GitHub profile
-2. Provide a detailed description of the vulnerability
-3. Include steps to reproduce if possible
-4. Allow reasonable time for a fix before public disclosure
+## Reporting security issues
 
-## Supported Versions
+Please do not post secrets, private source code, customer data, wallet private keys, or production credentials in public GitHub issues.
 
-| Version | Supported |
-|---------|-----------|
-| Latest main branch | ✅ |
+For now, open a GitHub issue with a minimal description and mark that it is security-related. We will confirm a private handoff path before requesting sensitive details.
 
-## Security Considerations for Users
+## Payment safety
 
-- **API Keys**: Never commit API keys to version control. Use environment variables or the config system.
-- **Permission Modes**: Use the most restrictive permission mode needed for your task (`read-only` > `workspace-write` > `danger-full-access`).
-- **Sandbox**: Sego Agent includes sandboxing for shell commands. Review sandbox behavior for your platform.
-- **MCP Servers**: Only connect to trusted MCP servers. MCP connections can execute arbitrary code.
-- **Session Data**: Session data stored in `.sego/sessions/` may contain sensitive conversation context. Add to `.gitignore`.
+Overseas private audits currently use BNB Chain only after scope confirmation.
+
+Do not send payment before the audit scope, price, delivery window, and payment details are confirmed. Do not trust wallet addresses posted by third parties. Treat any unsolicited payment request as suspicious.
+
+## Release safety
+
+Before running a downloaded binary:
+
+1. Download from the official GitHub Releases page.
+2. Prefer the latest release unless a specific version is required.
+3. Check the file name and version.
+4. If checksums are provided for a release, compare the local file hash before running it.
+
+## Website hardening
+
+The Cloudflare Pages site uses security headers in `docs/_headers` to reduce common browser-side risks:
+
+- deny iframe embedding
+- disable MIME sniffing
+- restrict referrer leakage
+- disable browser permissions that the static site does not need
+- apply a restrictive Content Security Policy
+
+These headers do not replace account security. GitHub and Cloudflare accounts must still use strong passwords and two-factor authentication.
