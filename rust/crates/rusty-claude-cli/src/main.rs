@@ -170,10 +170,16 @@ const CLI_OPTION_SUGGESTIONS: &[&str] = &[
 
 type AllowedToolSet = BTreeSet<String>;
 
+const TURN_CANCELLED_MESSAGE: &str = "conversation turn cancelled by user";
+
 fn main() {
     if let Err(error) = run() {
         let message = error.to_string();
-        if message.contains("`sego --help`") || message == "verification failed" {
+        if is_turn_cancelled_message(&message) {
+            eprintln!("Sego cancelled the current task.");
+            maybe_pause_after_error();
+            std::process::exit(130);
+        } else if message.contains("`sego --help`") || message == "verification failed" {
             eprintln!("error: {message}");
         } else {
             eprintln!(
@@ -185,6 +191,14 @@ Run `sego --help` for usage."
         maybe_pause_after_error();
         std::process::exit(1);
     }
+}
+
+fn is_turn_cancelled_message(message: &str) -> bool {
+    message.contains(TURN_CANCELLED_MESSAGE)
+}
+
+fn is_turn_cancelled_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    is_turn_cancelled_message(&error.to_string())
 }
 
 fn maybe_pause_after_error() {
@@ -2069,7 +2083,14 @@ fn run_repl(
                     cli.export_last_assistant_response(intent.path.as_deref())?;
                     continue;
                 }
-                cli.run_turn(&trimmed)?;
+                match cli.run_turn(&trimmed) {
+                    Ok(()) => {}
+                    Err(error) if is_turn_cancelled_error(error.as_ref()) => {
+                        eprintln!("Sego cancelled the current task. You can continue.");
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             input::ReadOutcome::Cancel => {}
             input::ReadOutcome::Exit => {
@@ -7932,19 +7953,19 @@ mod tests {
         format_permissions_report, format_permissions_switch_report, format_pr_report,
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, normalize_permission_mode, parse_args,
-        parse_export_last_response_intent, parse_git_status_branch, parse_git_status_metadata_for,
-        parse_git_workspace_summary, parse_workspace_natural_language_intent, permission_policy,
-        print_help_to, push_output_block, render_code_review_readiness_for,
-        render_code_review_summary_for, render_config_report, render_diff_report,
-        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
-        resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
+        format_unknown_slash_command_message, is_turn_cancelled_message, normalize_permission_mode,
+        parse_args, parse_export_last_response_intent, parse_git_status_branch,
+        parse_git_status_metadata_for, parse_git_workspace_summary,
+        parse_workspace_natural_language_intent, permission_policy, print_help_to,
+        push_output_block, render_code_review_readiness_for, render_code_review_summary_for,
+        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
+        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
+        response_to_events, resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
         ExportLastResponseIntent, GitWorkspaceSummary, InternalPromptProgressEvent,
         InternalPromptProgressState, LiveCli, SafetyReviewScope, SlashCommand, StatusUsage,
-        WorkspaceIntent,
+        WorkspaceIntent, TURN_CANCELLED_MESSAGE,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -8043,6 +8064,13 @@ mod tests {
                 "python3".to_string()
             }
         })
+    }
+
+    #[test]
+    fn identifies_turn_cancelled_errors_without_usage_hint() {
+        assert!(is_turn_cancelled_message(TURN_CANCELLED_MESSAGE));
+        assert!(is_turn_cancelled_message("runtime failed: conversation turn cancelled by user"));
+        assert!(!is_turn_cancelled_message("missing DeepSeek credentials; set DEEPSEEK_API_KEY"));
     }
 
     fn git(args: &[&str], cwd: &Path) {
