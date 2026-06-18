@@ -370,6 +370,23 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
         output.push('\n');
     }
 
+    output.push_str("## Verification Self-check\n\n");
+    output.push_str("- Sego only treats tests, lint checks, syntax checks, dry-runs, generated files, and runtime outputs as verified when the evidence is present in the captured review context.\n");
+    output.push_str("- Claims without captured evidence should be treated as unverified recommendations, not completed validation.\n");
+    output.push_str("- Reviewers should double-check behavior changes such as output schema, column names, retry semantics, request headers, filesystem paths, and data-flow changes before accepting fixes.\n");
+    if report.findings.is_empty() {
+        output.push_str("- No structured verification hints were captured.\n");
+    } else {
+        let hint_count =
+            report.findings.iter().filter(|finding| finding.verification_hint.is_some()).count();
+        let _ = writeln!(
+            output,
+            "- Structured findings with verification hints: `{hint_count}/{}`.",
+            report.findings.len()
+        );
+    }
+    output.push('\n');
+
     if report.raw_text.trim().is_empty() {
         output.push_str("## Review Output\n\nNo review output captured.\n");
     } else {
@@ -502,6 +519,7 @@ mod tests {
         let markdown = std::fs::read_to_string(&artifact.markdown_path).expect("read markdown");
         assert!(markdown.contains("# Sego Review Report"));
         assert!(markdown.contains("No findings."));
+        assert!(markdown.contains("## Verification Self-check"));
         let index = std::fs::read_to_string(&artifact.index_path).expect("read index");
         assert!(index.contains(&artifact.id));
 
@@ -692,6 +710,7 @@ mod tests {
         let markdown = std::fs::read_to_string(&artifact.markdown_path).expect("read markdown");
         assert!(markdown.contains("## Findings"));
         assert!(markdown.contains("Credential leak"));
+        assert!(markdown.contains("Structured findings with verification hints: `1/1`"));
 
         let index = std::fs::read_to_string(&artifact.index_path).expect("read index");
         assert!(index.contains("\"finding_count\":1"));
