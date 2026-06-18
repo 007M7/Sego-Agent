@@ -18,7 +18,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -149,6 +149,9 @@ const PRIMARY_SESSION_EXTENSION: &str = "jsonl";
 const LEGACY_SESSION_EXTENSION: &str = "json";
 const LATEST_SESSION_REFERENCE: &str = "latest";
 const SESSION_REFERENCE_ALIASES: &[&str] = &[LATEST_SESSION_REFERENCE, "last", "recent"];
+const UPDATE_CHECK_ENV: &str = "SEGO_SKIP_UPDATE_CHECK";
+const UPDATE_LATEST_URL: &str = "https://api.github.com/repos/007M7/Sego-Agent/releases/latest";
+const UPDATE_WINDOWS_ASSET: &str = "sego.exe";
 const CLI_OPTION_SUGGESTIONS: &[&str] = &[
     "--help",
     "-h",
@@ -208,6 +211,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | CliAction::CodeReview { .. }
             | CliAction::ResumeSession { .. }
     );
+    let triggers_update_check = matches!(
+        action,
+        CliAction::Repl { .. } | CliAction::Prompt { .. } | CliAction::CodeReview { .. }
+    );
+    maybe_print_update_notice(triggers_update_check);
     maybe_print_recovery_notice(triggers_recovery);
 
     match action {
@@ -223,6 +231,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Skills { args } => LiveCli::print_skills(args.as_deref())?,
         CliAction::PrintSystemPrompt { cwd, date } => print_system_prompt(cwd, date),
         CliAction::Version => print_version(),
+        CliAction::Update => run_update()?,
         CliAction::ResumeSession { session_path, commands } => {
             resume_session(&session_path, &commands);
         }
@@ -302,6 +311,7 @@ enum CliAction {
         date: String,
     },
     Version,
+    Update,
     ResumeSession {
         session_path: PathBuf,
         commands: Vec<String>,
@@ -587,6 +597,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "mcp" => Ok(CliAction::Mcp { args: join_optional_args(&rest[1..]) }),
         "skills" => Ok(CliAction::Skills { args: join_optional_args(&rest[1..]) }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
+        "update" => Ok(CliAction::Update),
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
@@ -623,6 +634,7 @@ fn parse_single_word_command_alias(
     match rest[0].as_str() {
         "help" => Some(Ok(CliAction::Help)),
         "version" => Some(Ok(CliAction::Version)),
+        "update" => Some(Ok(CliAction::Update)),
         "status" => Some(Ok(CliAction::Status {
             model: model.to_string(),
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
@@ -651,6 +663,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "mcp"
             | "skills"
             | "system-prompt"
+            | "update"
             | "login"
             | "logout"
             | "init"
@@ -4066,6 +4079,147 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GithubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+fn maybe_print_update_notice(enabled: bool) {
+    if !enabled || env::var_os(UPDATE_CHECK_ENV).is_some() {
+        return;
+    }
+
+    let Ok(Some(release)) = fetch_latest_release() else {
+        return;
+    };
+    if is_newer_version(&release.tag_name, VERSION) {
+        eprintln!(
+            "Sego update available: current v{VERSION}, latest {}. Run `sego update` to install.",
+            release.tag_name
+        );
+    }
+}
+
+fn run_update() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(release) = fetch_latest_release()? else {
+        println!("Could not check for updates. Please try again later.");
+        return Ok(());
+    };
+
+    println!("Current version: v{VERSION}");
+    println!("Latest version:  {}", release.tag_name);
+
+    if !is_newer_version(&release.tag_name, VERSION) {
+        println!("Sego is already up to date.");
+        return Ok(());
+    }
+
+    let Some(asset) = release.assets.iter().find(|asset| asset.name == UPDATE_WINDOWS_ASSET) else {
+        println!(
+            "Latest release does not include {UPDATE_WINDOWS_ASSET}. Download manually: {}",
+            release.html_url
+        );
+        return Ok(());
+    };
+
+    if !cfg!(windows) {
+        println!(
+            "Automatic update is currently Windows-only. Download manually: {}",
+            release.html_url
+        );
+        return Ok(());
+    }
+
+    let current_exe = env::current_exe()?;
+    let install_dir = current_exe.parent().ok_or("could not resolve Sego install directory")?;
+    let temp_exe = install_dir.join("sego.update.exe");
+
+    println!("Downloading {} ...", asset.browser_download_url);
+    download_file(&asset.browser_download_url, &temp_exe)?;
+
+    let script_path = install_dir.join("sego-update.cmd");
+    let backup_exe = install_dir.join("sego.previous.exe");
+    let script = format!(
+        "@echo off\r\n\
+         setlocal EnableExtensions\r\n\
+         echo Updating Sego to {tag}...\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         if exist \"{backup}\" del /f /q \"{backup}\"\r\n\
+         if exist \"{current}\" move /y \"{current}\" \"{backup}\" >nul\r\n\
+         move /y \"{temp}\" \"{current}\" >nul\r\n\
+         echo Sego updated to {tag}.\r\n\
+         \"{current}\" --version\r\n\
+         pause\r\n",
+        tag = release.tag_name,
+        backup = backup_exe.display(),
+        current = current_exe.display(),
+        temp = temp_exe.display(),
+    );
+    fs::write(&script_path, script)?;
+
+    println!("Updater prepared. Sego will close and finish the replacement in a new window.");
+    Command::new("cmd")
+        .args(["/C", "start", "Sego Update", &script_path.display().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+fn fetch_latest_release() -> Result<Option<GithubRelease>, Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
+        let response = client
+            .get(UPDATE_LATEST_URL)
+            .header("user-agent", concat!("sego/", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let release = response.json::<GithubRelease>().await?;
+        Ok(Some(release))
+    })
+}
+
+fn download_file(url: &str, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let bytes = runtime.block_on(async {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
+        let response = client
+            .get(url)
+            .header("user-agent", concat!("sego/", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(format!("download failed with {}", response.status()).into());
+        }
+        Ok::<_, Box<dyn std::error::Error>>(response.bytes().await?)
+    })?;
+    fs::write(destination, bytes)?;
+    Ok(())
+}
+
+fn is_newer_version(latest_tag: &str, current_version: &str) -> bool {
+    parse_version_triplet(latest_tag) > parse_version_triplet(current_version)
+}
+
+fn parse_version_triplet(value: &str) -> (u64, u64, u64) {
+    let normalized = value.trim().trim_start_matches('v');
+    let mut parts = normalized.split('.').map(|part| part.parse::<u64>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
 fn print_telemetry(
     action: Option<&str>,
     output_format: CliOutputFormat,
@@ -7196,6 +7350,8 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "      Alias for --help")?;
     writeln!(out, "  sego version")?;
     writeln!(out, "      Alias for --version")?;
+    writeln!(out, "  sego update")?;
+    writeln!(out, "      Check GitHub Releases and install the latest Sego on Windows")?;
     writeln!(out, "  sego status")?;
     writeln!(out, "      Show the current local workspace status snapshot")?;
     writeln!(out, "  sego sandbox")?;
@@ -7622,6 +7778,21 @@ mod tests {
             CliAction::Version
         );
         assert_eq!(parse_args(&["-V".to_string()]).expect("args should parse"), CliAction::Version);
+    }
+
+    #[test]
+    fn parses_update_command_without_initializing_prompt_mode() {
+        assert_eq!(
+            parse_args(&["update".to_string()]).expect("update should parse"),
+            CliAction::Update
+        );
+    }
+
+    #[test]
+    fn compares_release_versions() {
+        assert!(super::is_newer_version("v0.1.4", "0.1.3"));
+        assert!(!super::is_newer_version("v0.1.3", "0.1.3"));
+        assert!(!super::is_newer_version("v0.1.2", "0.1.3"));
     }
 
     #[test]
