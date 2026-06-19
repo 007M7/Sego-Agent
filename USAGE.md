@@ -415,3 +415,11 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 - ??? `review` action?verify/export ?????
 - Cursor ?? `.cursorrules` ?????????
 - ???????early integration??????? IDE ????
+
+
+## Windows Stability (v0.1.7)
+
+- **Non-Git directories**: Sego shows a friendly hint.
+- **Interactive command guard**: copy con, bare shells, pagers blocked.
+- **Shell guidance**: type/dir/where/powershell -Command tips.
+- **Update check**: sego update --check shows versions.

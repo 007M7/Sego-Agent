@@ -458,12 +458,26 @@ fn extract_json_candidate(text: &str) -> Option<&str> {
         return Some(trimmed);
     }
 
-    let fence_start = trimmed.find("```json").or_else(|| trimmed.find("```JSON"))?;
-    let after_fence = &trimmed[fence_start..];
-    let content_start = after_fence.find('\n')? + 1;
-    let content = &after_fence[content_start..];
-    let content_end = content.find("```")?;
-    Some(content[..content_end].trim())
+    let mut offset = 0;
+    for line in trimmed.split_inclusive('\n') {
+        let line_without_eol = line.trim_end_matches(&['\r', '\n'][..]);
+        if line_without_eol.trim().eq_ignore_ascii_case("```json") {
+            let content_start = offset + line.len();
+            let content = &trimmed[content_start..];
+            let mut content_offset = 0;
+            for content_line in content.split_inclusive('\n') {
+                let candidate = content_line.trim_end_matches(&['\r', '\n'][..]).trim();
+                if candidate == "```" {
+                    return Some(content[..content_offset].trim());
+                }
+                content_offset += content_line.len();
+            }
+            return None;
+        }
+        offset += line.len();
+    }
+
+    None
 }
 
 fn path_for_index(path: &Path) -> String {
@@ -680,6 +694,17 @@ mod tests {
         assert_eq!(report.parse_status, ReviewParseStatus::Structured);
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].severity, ReviewSeverity::Low);
+    }
+
+    #[test]
+    fn parses_fenced_json_with_markdown_fence_inside_string_field() {
+        let report = ReviewReport::from_model_output(
+            "```json\n{\"findings\":[{\"severity\":\"medium\",\"file\":\"src/main.rs\",\"line\":1970,\"title\":\"Nested fence\",\"evidence\":\"```rust\\nprintln!(\\\"hello\\\");\\n```\",\"risk\":\"parser may truncate the JSON at the nested fence\",\"suggestion\":\"only treat a line-level fence as the outer closing fence\",\"confidence\":0.8,\"verification_hint\":\"cargo test\"}]}\n```",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert!(report.findings[0].evidence.contains("```rust"));
     }
 
     #[test]

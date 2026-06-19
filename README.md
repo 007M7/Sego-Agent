@@ -129,6 +129,7 @@ sego /review safety staged # staged 安全锁
 - **安全锁**：检测疑似密钥、硬编码凭据、危险命令、本机绝对路径
 - **审查历史**：findings 持久化到 `.sego/reviews/`，支持查看、标记状态、复盘
 - **多模型支持**：DeepSeek（含推理模式）和 Anthropic
+- **Windows 稳定增强**：非 Git 目录友好提示、交互命令防挂死、Shell 写文件拦截修正
 
 ### 2. 自然语言本地动作（NL Intent Router）
 

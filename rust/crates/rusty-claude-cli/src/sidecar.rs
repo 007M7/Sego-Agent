@@ -114,7 +114,7 @@ fn execute_review(
 
     let context = ReviewContext::new(target);
     let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
-    let review_text = cli.run_turn_capture_text(&prompt)?;
+    let review_text = cli.run_turn_capture_text(&prompt, false)?;
     let report = ReviewReport::from_model_output(review_text);
     let artifact = persist_review_artifact(&cwd, &context.target, &report)?;
 
