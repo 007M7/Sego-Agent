@@ -612,6 +612,22 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     if rest.first().map(String::as_str) == Some("--resume") {
         return parse_resume_args(&rest[1..]);
     }
+    if rest.first().map(String::as_str) == Some("review") {
+        if rest.get(1).is_some_and(|value| value.starts_with("--last")) {
+            return Err(
+                "`sego review --last` now belongs to workflow review. Use `sego workflow-review --last N` for session analysis, or `sego review [staged|workspace|<path>]` for code review."
+                    .to_string(),
+            );
+        }
+        let scope = join_optional_args(&rest[1..]);
+        return parse_code_review_slash_action(scope.as_deref(), model, allowed_tools);
+    }
+    if rest
+        .first()
+        .is_some_and(|command| matches!(command.as_str(), "workflow-review" | "session-review"))
+    {
+        return parse_workflow_review_args(&rest[1..], output_format);
+    }
     if let Some(action) =
         parse_single_word_command_alias(&rest, &model, permission_mode_override, output_format)
     {
@@ -688,9 +704,6 @@ fn parse_single_word_command_alias(
         })),
         "sandbox" => Some(Ok(CliAction::Sandbox { output_format })),
         "workspace" | "workdir" | "pwd" | "cwd" => Some(Ok(CliAction::Workspace { output_format })),
-        "review" => {
-            Some(Ok(CliAction::Review { last_n: None, output_format: CliOutputFormat::Text }))
-        }
         "learn" => Some(Ok(CliAction::Learn { output_format: CliOutputFormat::Text })),
         "doctor" => Some(Ok(CliAction::Doctor { output_format: CliOutputFormat::Text })),
         "telemetry" => {
@@ -699,6 +712,49 @@ fn parse_single_word_command_alias(
         }
         other => bare_slash_command_guidance(other).map(Err),
     }
+}
+
+fn parse_workflow_review_args(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    let mut last_n = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--last" | "--last-n" => {
+                let value =
+                    args.get(index + 1).ok_or_else(|| "missing value for --last".to_string())?;
+                last_n = Some(parse_positive_usize(value, "--last")?);
+                index += 2;
+            }
+            flag if flag.starts_with("--last=") => {
+                last_n = Some(parse_positive_usize(&flag[7..], "--last")?);
+                index += 1;
+            }
+            flag if flag.starts_with("--last-n=") => {
+                last_n = Some(parse_positive_usize(&flag[9..], "--last-n")?);
+                index += 1;
+            }
+            other => {
+                return Err(format!(
+                    "unexpected argument for workflow review: {other}. Use `sego workflow-review [--last N]`."
+                ));
+            }
+        }
+    }
+
+    Ok(CliAction::Review { last_n, output_format })
+}
+
+fn parse_positive_usize(value: &str, flag_name: &str) -> Result<usize, String> {
+    let parsed =
+        value.parse::<usize>().map_err(|_| format!("{flag_name} expects a positive integer"))?;
+    if parsed == 0 {
+        return Err(format!("{flag_name} expects a positive integer"));
+    }
+    Ok(parsed)
 }
 
 fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
@@ -4498,7 +4554,7 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
                 println!("  Git state:        {}", status.git_summary.headline());
             }
             println!();
-            println!("  Run `sego review` for session analysis.");
+            println!("  Run `sego workflow-review` for session analysis.");
             println!("  Run `sego learn` for optimization suggestions.");
         }
     }
@@ -7835,7 +7891,13 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  sego logout")?;
     writeln!(out, "  sego init")?;
     writeln!(out, "  sego review")?;
-    writeln!(out, "      Show workflow analysis for the most recent session")?;
+    writeln!(out, "      Run code review for the current workspace and save review artifacts")?;
+    writeln!(out, "  sego review [staged|unstaged|workspace|PATH]")?;
+    writeln!(out, "      Run code review for a specific diff scope or file path")?;
+    writeln!(out, "  sego workflow-review [--last N]")?;
+    writeln!(out, "      Show workflow analysis for recent sessions")?;
+    writeln!(out, "  sego session-review [--last N]")?;
+    writeln!(out, "      Alias for workflow-review")?;
     writeln!(out, "  sego learn")?;
     writeln!(out, "      Show learning suggestions based on workflow history")?;
     writeln!(out, "  sego doctor")?;
@@ -8604,11 +8666,52 @@ mod tests {
     }
 
     #[test]
-    fn keeps_bare_review_as_workflow_review() {
+    fn parses_bare_review_as_code_review() {
         assert_eq!(
             parse_args(&["review".to_string()]).expect("review should parse"),
+            CliAction::CodeReview {
+                scope: None,
+                model: default_model(),
+                allowed_tools: None,
+                permission_mode: PermissionMode::ReadOnly,
+            }
+        );
+        assert_eq!(
+            parse_args(&["review".to_string(), "staged".to_string()])
+                .expect("review staged should parse"),
+            CliAction::CodeReview {
+                scope: Some("staged".to_string()),
+                model: default_model(),
+                allowed_tools: None,
+                permission_mode: PermissionMode::ReadOnly,
+            }
+        );
+        assert_eq!(
+            parse_args(&["review".to_string(), "list".to_string()])
+                .expect("review list should parse"),
+            CliAction::CodeReviewList
+        );
+    }
+
+    #[test]
+    fn parses_explicit_workflow_review_commands() {
+        assert_eq!(
+            parse_args(&["workflow-review".to_string()]).expect("workflow-review should parse"),
             CliAction::Review { last_n: None, output_format: CliOutputFormat::Text }
         );
+        assert_eq!(
+            parse_args(&["session-review".to_string(), "--last".to_string(), "5".to_string()])
+                .expect("session-review --last should parse"),
+            CliAction::Review { last_n: Some(5), output_format: CliOutputFormat::Text }
+        );
+        let legacy_error =
+            parse_args(&["review".to_string(), "--last".to_string(), "5".to_string()])
+                .expect_err("legacy review --last should point to workflow-review");
+        assert!(legacy_error.contains("sego workflow-review --last N"));
+        let invalid_last =
+            parse_args(&["workflow-review".to_string(), "--last".to_string(), "0".to_string()])
+                .expect_err("workflow-review --last 0 should fail");
+        assert!(invalid_last.contains("positive integer"));
     }
 
     #[test]

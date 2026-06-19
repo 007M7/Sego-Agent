@@ -157,10 +157,10 @@ Recommended staged workflow:
 
 ```bash
 git add <files>
+./target/debug/sego review staged
 ./target/debug/sego /review ready
 ./target/debug/sego /review summary
 ./target/debug/sego /review safety staged
-./target/debug/sego /review staged
 ./target/debug/sego /verify fast
 ```
 
@@ -168,6 +168,10 @@ Review commands:
 
 | Command | Purpose |
 |---|---|
+| `sego review` | Model-assisted review for the current workspace diff; saves `.sego/reviews/*.md`, `.json`, and `INDEX.md` |
+| `sego review staged` | Model-assisted review for staged diff; same behavior as `/review staged` |
+| `sego review list` | List persisted review reports; same behavior as `/review list` |
+| `sego review show <review-id>` | Print a persisted review markdown report; same behavior as `/review show <review-id>` |
 | `/review ready` | Read-only staged readiness report with safety and verify-plan hints |
 | `/review summary` | Read-only delivery summary for demo, PR handoff, and agent handoff |
 | `/review safety staged` | Local staged safety lock for obvious secrets, dangerous commands, and hardcoded local paths |
@@ -185,19 +189,19 @@ Review commands:
 ## Workflow review & learning (built-in)
 
 sego automatically records every session as structured Lane Events.
-Use `review` and `learn` to analyze your AI coding workflows.
+Use `workflow-review` and `learn` to analyze your AI coding workflows.
 
 ### Review recent sessions
 
 ```bash
 # Review the last session
-./target/debug/sego review
+./target/debug/sego workflow-review
 
 # Review last 5 sessions
-./target/debug/sego review --last 5
+./target/debug/sego workflow-review --last 5
 
 # JSON output for scripting
-./target/debug/sego review --output-format json
+./target/debug/sego --output-format json workflow-review
 ```
 
 ### Learning & optimization
