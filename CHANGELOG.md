@@ -4,6 +4,12 @@ All notable changes to the Sego Agent project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-06-20
+- Improved ordinary `sego review` terminal output with a human-readable structured report while keeping Markdown/JSON/index artifacts.
+- Fixed fenced JSON parsing when review finding fields contain nested Markdown code fences.
+- Narrowed natural-language latest-response export routing to avoid accidental export on phrases such as "输出结论" or "write report".
+- Improved Windows startup/update guidance and refreshed README, USAGE, and the Chinese user guide for the v0.1.7 behavior.
+
 ### Added
 - Initial open-source release of Sego Agent
 - Rust-native AI coding agent with 40+ built-in tools
