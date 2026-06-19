@@ -130,7 +130,26 @@ sego /review safety staged # staged 安全锁
 - **审查历史**：findings 持久化到 `.sego/reviews/`，支持查看、标记状态、复盘
 - **多模型支持**：DeepSeek（含推理模式）和 Anthropic
 
-### 2. Crash Recovery（崩溃恢复）
+### 2. 自然语言本地动作（NL Intent Router）
+
+在交互窗口里，常见控制动作可以直接用口语表达，Sego 会在本地确定执行，不把这些请求交给模型乱试命令：
+
+```text
+当前工作区
+切换到 D:\YourProject
+帮我 review 当前改动
+检查安全问题
+把刚才的审查结果写成 E:\code\review.md
+导出当前会话
+检查更新
+退出
+```
+
+更严谨的命令式入口仍然保留：`/workspace`、`/cd`、`/review`、`/export`、`sego update --check`。
+
+如果 Sego 判断你像是在说本地控制动作、但缺少路径或对象，会提示你补全说法；输入 `/dir` 可以查看常用指令和自然语言示例。
+
+### 3. Crash Recovery（崩溃恢复）
 
 ```bash
 sego --resume latest           # 恢复最近一次会话
@@ -141,7 +160,7 @@ sego --resume latest /status   # 查看恢复状态
 - 恢复时不重放旧工具调用（安全边界）
 - 正常退出的会话不会触发恢复提示
 
-### 3. Review-Trust 权限画像
+### 4. Review-Trust 权限画像
 
 ```bash
 sego --permission-profile review-trust
@@ -155,7 +174,7 @@ sego --permission-profile review-trust
 
 `--permission-mode` 和 `--permission-profile` 互斥（不能同时使用）。
 
-### 4. Sidecar JSON 接口（PoC）
+### 5. Sidecar JSON 接口（PoC）
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' \
@@ -168,9 +187,9 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 - skill 包（`skills/sego-review/`）可被 Claude Code / Codex / Cursor / 任何 SKILL.md 兼容工具调用
 - 错误时返回结构化 error envelope（不崩溃）
 
-> **PoC 状态**：sidecar 当前仅支持 `review` action。stdout 混入 banner 输出的已知限制将在后续修复。
+> **PoC 状态**：sidecar 当前仅支持 `review` action；stdout 保持 JSON 输出，诊断信息走 stderr。
 
-### 5. 验证计划
+### 6. 验证计划
 
 ```bash
 sego /verify fast    # 快速验证计划
@@ -179,7 +198,7 @@ sego /verify         # 完整验证
 
 根据项目类型识别验证命令（Rust: cargo build/test，Node: npm test/build）。
 
-### 6. 接入 AI 编码工具（Sidecar skill PoC）
+### 7. 接入 AI 编码工具（Sidecar skill PoC）
 
 Sego 提供一个 sidecar skill 包，让你的 AI 编码工具（Claude Code、Codex、Cursor 等）能自动调用 Sego review。
 

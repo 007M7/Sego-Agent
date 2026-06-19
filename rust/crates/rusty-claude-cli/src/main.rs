@@ -8,6 +8,7 @@
 )]
 mod init;
 mod input;
+mod nl_intent;
 mod render;
 mod sidecar;
 
@@ -37,6 +38,7 @@ use commands::{
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
+use nl_intent::{classify_nl_intent_miss, parse_nl_intent, NlIntent, NlIntentMiss};
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
@@ -245,7 +247,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Skills { args } => LiveCli::print_skills(args.as_deref())?,
         CliAction::PrintSystemPrompt { cwd, date } => print_system_prompt(cwd, date),
         CliAction::Version => print_version(),
-        CliAction::Update => run_update()?,
+        CliAction::Update { check_only } => run_update(check_only)?,
         CliAction::Workspace { output_format } => print_workspace_snapshot(output_format)?,
         CliAction::ResumeSession { session_path, commands } => {
             resume_session(&session_path, &commands);
@@ -295,6 +297,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             run_repl(model, allowed_tools, permission_mode)?;
         }
         CliAction::Help => print_help(),
+        CliAction::Dir => println!("{}", render_natural_language_directory()),
         CliAction::Review { last_n, output_format } => {
             print_workflow_review(last_n, output_format)?;
         }
@@ -326,7 +329,10 @@ enum CliAction {
         date: String,
     },
     Version,
-    Update,
+    Dir,
+    Update {
+        check_only: bool,
+    },
     Workspace {
         output_format: CliOutputFormat,
     },
@@ -629,7 +635,15 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "mcp" => Ok(CliAction::Mcp { args: join_optional_args(&rest[1..]) }),
         "skills" => Ok(CliAction::Skills { args: join_optional_args(&rest[1..]) }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
-        "update" => Ok(CliAction::Update),
+        "update" => {
+            if rest.len() == 2 && matches!(rest[1].as_str(), "--check" | "check") {
+                Ok(CliAction::Update { check_only: true })
+            } else if rest.len() == 1 {
+                Ok(CliAction::Update { check_only: false })
+            } else {
+                Err("update accepts no arguments except --check".to_string())
+            }
+        }
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
@@ -666,7 +680,7 @@ fn parse_single_word_command_alias(
     match rest[0].as_str() {
         "help" => Some(Ok(CliAction::Help)),
         "version" => Some(Ok(CliAction::Version)),
-        "update" => Some(Ok(CliAction::Update)),
+        "update" => Some(Ok(CliAction::Update { check_only: false })),
         "status" => Some(Ok(CliAction::Status {
             model: model.to_string(),
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
@@ -732,6 +746,7 @@ fn parse_direct_slash_cli_action(
     let raw = rest.join(" ");
     match SlashCommand::parse(&raw) {
         Ok(Some(SlashCommand::Help)) => Ok(CliAction::Help),
+        Ok(Some(SlashCommand::Dir)) => Ok(CliAction::Dir),
         Ok(Some(SlashCommand::Agents { args })) => Ok(CliAction::Agents { args }),
         Ok(Some(SlashCommand::Mcp { action, target })) => Ok(CliAction::Mcp {
             args: match (action, target) {
@@ -857,166 +872,6 @@ fn apply_requested_cwd(cwd: Option<&PathBuf>) -> Result<(), String> {
             .map_err(|error| format!("failed to switch --cwd to {}: {error}", cwd.display()))?;
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum WorkspaceIntent {
-    Show,
-    Switch(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExportLastResponseIntent {
-    path: Option<String>,
-}
-
-fn parse_workspace_natural_language_intent(input: &str) -> Option<WorkspaceIntent> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.starts_with('/') {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "pwd" | "cwd" | "where am i" | "show workspace" | "current workspace"
-    ) || trimmed.contains("当前目录")
-        || trimmed.contains("工作目录")
-        || trimmed.contains("当前工作区")
-    {
-        return Some(WorkspaceIntent::Show);
-    }
-
-    for prefix in [
-        "切换到",
-        "切换工作区到",
-        "切换工作目录到",
-        "打开项目",
-        "进入项目",
-        "进入目录",
-        "把工作目录切到",
-        "change directory to",
-        "switch workspace to",
-        "open project",
-        "use workspace",
-        "cd ",
-    ] {
-        if let Some(path) = strip_intent_prefix(trimmed, prefix) {
-            return Some(WorkspaceIntent::Switch(path.to_string()));
-        }
-    }
-
-    None
-}
-
-fn parse_export_last_response_intent(input: &str) -> Option<ExportLastResponseIntent> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.starts_with('/') {
-        return None;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    let has_export_verb = lower.contains("export")
-        || lower.contains("save")
-        || lower.contains("write")
-        || trimmed.contains("导出")
-        || trimmed.contains("保存")
-        || trimmed.contains("写入")
-        || trimmed.contains("写成")
-        || trimmed.contains("生成");
-    if !has_export_verb {
-        return None;
-    }
-
-    let targets_last_response = lower.contains("last")
-        || lower.contains("previous")
-        || lower.contains("review")
-        || lower.contains("report")
-        || trimmed.contains("刚才")
-        || trimmed.contains("上一条")
-        || trimmed.contains("上一次")
-        || trimmed.contains("审查")
-        || trimmed.contains("审核")
-        || trimmed.contains("报告")
-        || trimmed.contains("结果");
-    if !targets_last_response {
-        return None;
-    }
-
-    let path = extract_export_path(trimmed);
-    if path.is_none()
-        && !(lower.contains(".md") || lower.contains("markdown") || trimmed.contains("md"))
-    {
-        return None;
-    }
-
-    Some(ExportLastResponseIntent { path })
-}
-
-fn extract_export_path(input: &str) -> Option<String> {
-    for quoted in extract_quoted_segments(input) {
-        if looks_like_export_path(&quoted) {
-            return Some(quoted);
-        }
-    }
-
-    input
-        .split_whitespace()
-        .rev()
-        .map(|part| {
-            part.trim_matches(|ch: char| {
-                matches!(ch, '"' | '\'' | '`' | '。' | '，' | ',' | ';' | '；' | ':' | '：')
-            })
-        })
-        .find(|part| looks_like_export_path(part))
-        .map(ToOwned::to_owned)
-}
-
-fn extract_quoted_segments(input: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    for ch in input.chars() {
-        match quote {
-            Some(end) if ch == end => {
-                let value = current.trim();
-                if !value.is_empty() {
-                    segments.push(value.to_string());
-                }
-                current.clear();
-                quote = None;
-            }
-            Some(_) => current.push(ch),
-            None if matches!(ch, '"' | '\'' | '`' | '“' | '‘') => {
-                quote = Some(match ch {
-                    '“' => '”',
-                    '‘' => '’',
-                    other => other,
-                });
-            }
-            None => {}
-        }
-    }
-    segments
-}
-
-fn looks_like_export_path(value: &str) -> bool {
-    let path = Path::new(value);
-    path.extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
-        || value.contains('\\')
-        || value.contains('/')
-}
-
-fn strip_intent_prefix<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
-    if prefix.is_ascii() {
-        let lower = input.to_ascii_lowercase();
-        let lower_prefix = prefix.to_ascii_lowercase();
-        if lower.starts_with(&lower_prefix) {
-            return Some(input[prefix.len()..].trim().trim_matches('"'));
-        }
-        return None;
-    }
-    input.strip_prefix(prefix).map(|path| path.trim().trim_matches('"'))
 }
 
 fn render_suggestion_line(label: &str, suggestions: &[String]) -> Option<String> {
@@ -1807,6 +1662,10 @@ fn run_resume_command(
         SlashCommand::Help => {
             Ok(ResumeCommandOutcome { session: session.clone(), message: Some(render_repl_help()) })
         }
+        SlashCommand::Dir => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(render_natural_language_directory()),
+        }),
         SlashCommand::Compact => {
             let result = runtime::compact_session(
                 session,
@@ -2070,17 +1929,22 @@ fn run_repl(
                     }
                 }
                 editor.push_history(input);
-                if let Some(intent) = parse_workspace_natural_language_intent(&trimmed) {
-                    match intent {
-                        WorkspaceIntent::Show => LiveCli::print_workspace_status()?,
-                        WorkspaceIntent::Switch(path) => {
-                            cli.switch_workspace(&path)?;
-                        }
+                if let Some(intent) = parse_nl_intent(&trimmed) {
+                    if cli.handle_nl_intent(intent)? {
+                        cli.persist_session()?;
+                        persist_recovery_for_cli(
+                            runtime::recovery::RecoveryExitState::Graceful,
+                            cli.session_id(),
+                            cli.session_path(),
+                            Some(cli.model_name()),
+                            None,
+                        );
+                        break;
                     }
                     continue;
                 }
-                if let Some(intent) = parse_export_last_response_intent(&trimmed) {
-                    cli.export_last_assistant_response(intent.path.as_deref())?;
+                if let Some(miss) = classify_nl_intent_miss(&trimmed) {
+                    println!("{}", render_nl_intent_miss(&miss));
                     continue;
                 }
                 match cli.run_turn(&trimmed) {
@@ -2982,6 +2846,46 @@ impl LiveCli {
         Ok(())
     }
 
+    fn handle_nl_intent(&mut self, intent: NlIntent) -> Result<bool, Box<dyn std::error::Error>> {
+        match intent {
+            NlIntent::WorkspaceShow => {
+                Self::print_workspace_status()?;
+                Ok(false)
+            }
+            NlIntent::WorkspaceSwitch { path } => {
+                self.switch_workspace(&path)?;
+                Ok(false)
+            }
+            NlIntent::Review { scope } => {
+                self.handle_review_command(scope.as_deref())?;
+                Ok(false)
+            }
+            NlIntent::ReviewSafety { staged } => {
+                let scope =
+                    if staged { SafetyReviewScope::Staged } else { SafetyReviewScope::Workspace };
+                print_code_review_safety(scope)?;
+                Ok(false)
+            }
+            NlIntent::ExportLastResponse { path } => {
+                self.export_last_assistant_response(path.as_deref())?;
+                Ok(false)
+            }
+            NlIntent::ExportSession { path } => {
+                self.export_session(path.as_deref())?;
+                Ok(false)
+            }
+            NlIntent::UpdateCheck => {
+                run_update(true)?;
+                Ok(false)
+            }
+            NlIntent::UpdateApply => {
+                run_update(false)?;
+                Ok(false)
+            }
+            NlIntent::Exit => Ok(true),
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn handle_repl_command(
         &mut self,
@@ -2990,6 +2894,10 @@ impl LiveCli {
         Ok(match command {
             SlashCommand::Help => {
                 println!("{}", render_repl_help());
+                false
+            }
+            SlashCommand::Dir => {
+                println!("{}", render_natural_language_directory());
                 false
             }
             SlashCommand::Status => {
@@ -4031,6 +3939,7 @@ fn render_repl_help() -> String {
         "REPL".to_string(),
         "  /exit                Quit the REPL".to_string(),
         "  /quit                Quit the REPL".to_string(),
+        "  /dir                 Show common commands and natural-language examples".to_string(),
         "  Up/Down              Navigate prompt history".to_string(),
         "  Tab                  Complete commands, modes, and recent sessions".to_string(),
         "  Ctrl-C               Clear input (or exit on empty prompt)".to_string(),
@@ -4047,6 +3956,40 @@ fn render_repl_help() -> String {
         "
 ",
     )
+}
+
+fn render_natural_language_directory() -> String {
+    [
+        "Sego 常用动作目录".to_string(),
+        "  工作区".to_string(),
+        "    /workspace                 当前工作区 / 当前目录".to_string(),
+        "    /cd D:\\YourProject         切换到 D:\\YourProject / 打开项目 D:\\YourProject"
+            .to_string(),
+        "  审查".to_string(),
+        "    /review                    帮我 review 当前改动".to_string(),
+        "    /review staged             review staged changes / 审查已暂存改动".to_string(),
+        "    /review workspace          审查整个项目代码".to_string(),
+        "    /review safety staged      检查已暂存代码的安全风险".to_string(),
+        "  导出".to_string(),
+        "    /export                    导出当前会话".to_string(),
+        "    /export E:\\code\\session.md 导出当前会话到 E:\\code\\session.md".to_string(),
+        "    本地动作                    把刚才的审查结果写成 E:\\code\\review.md".to_string(),
+        "  更新与退出".to_string(),
+        "    sego update --check         检查更新".to_string(),
+        "    sego update                 更新到最新版".to_string(),
+        "    /exit                       退出 / 关闭 Sego".to_string(),
+        "  说明".to_string(),
+        "    未列出的普通编码、解释、讨论请求会继续交给模型处理。".to_string(),
+    ]
+    .join("\n")
+}
+
+fn render_nl_intent_miss(miss: &NlIntentMiss) -> String {
+    match miss {
+        NlIntentMiss::NeedsMoreDetail { action, example } => format!(
+            "Sego 没能确定要执行的本地动作。\n  疑似动作        {action}\n  可以这样说      {example}\n  查看更多        /dir"
+        ),
+    }
 }
 
 fn print_status_snapshot(
@@ -4591,7 +4534,7 @@ fn maybe_print_update_notice(enabled: bool) {
     }
 }
 
-fn run_update() -> Result<(), Box<dyn std::error::Error>> {
+fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     let Some(release) = fetch_latest_release()? else {
         println!("Could not check for updates. Please try again later.");
         return Ok(());
@@ -4602,6 +4545,14 @@ fn run_update() -> Result<(), Box<dyn std::error::Error>> {
 
     if !is_newer_version(&release.tag_name, VERSION) {
         println!("Sego is already up to date.");
+        return Ok(());
+    }
+
+    if check_only {
+        println!(
+            "Update available. Run `sego update` to install or download manually: {}",
+            release.html_url
+        );
         return Ok(());
     }
 
@@ -7954,18 +7905,17 @@ mod tests {
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, is_turn_cancelled_message, normalize_permission_mode,
-        parse_args, parse_export_last_response_intent, parse_git_status_branch,
-        parse_git_status_metadata_for, parse_git_workspace_summary,
-        parse_workspace_natural_language_intent, permission_policy, print_help_to,
-        push_output_block, render_code_review_readiness_for, render_code_review_summary_for,
-        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
-        response_to_events, resume_supported_slash_commands, run_resume_command,
+        parse_args, parse_git_status_branch, parse_git_status_metadata_for,
+        parse_git_workspace_summary, permission_policy, print_help_to, push_output_block,
+        render_code_review_readiness_for, render_code_review_summary_for, render_config_report,
+        render_diff_report, render_diff_report_for, render_memory_report,
+        render_natural_language_directory, render_repl_help, render_resume_usage,
+        resolve_model_alias, resolve_session_reference, response_to_events,
+        resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
-        ExportLastResponseIntent, GitWorkspaceSummary, InternalPromptProgressEvent,
-        InternalPromptProgressState, LiveCli, SafetyReviewScope, SlashCommand, StatusUsage,
-        WorkspaceIntent, TURN_CANCELLED_MESSAGE,
+        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
+        SlashCommand, StatusUsage, TURN_CANCELLED_MESSAGE,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -8311,7 +8261,12 @@ mod tests {
     fn parses_update_command_without_initializing_prompt_mode() {
         assert_eq!(
             parse_args(&["update".to_string()]).expect("update should parse"),
-            CliAction::Update
+            CliAction::Update { check_only: false }
+        );
+        assert_eq!(
+            parse_args(&["update".to_string(), "--check".to_string()])
+                .expect("update should parse"),
+            CliAction::Update { check_only: true }
         );
     }
 
@@ -8323,6 +8278,15 @@ mod tests {
                 CliAction::Workspace { output_format: CliOutputFormat::Text }
             );
         }
+    }
+
+    #[test]
+    fn parses_direct_dir_slash_command_without_prompt_mode() {
+        assert_eq!(parse_args(&["/dir".to_string()]).expect("/dir should parse"), CliAction::Dir);
+        let directory = render_natural_language_directory();
+        assert!(directory.contains("Sego 常用动作目录"));
+        assert!(directory.contains("切换到 D:\\YourProject"));
+        assert!(directory.contains("把刚才的审查结果写成 E:\\code\\review.md"));
     }
 
     #[test]
@@ -8342,36 +8306,6 @@ mod tests {
 
         fs::remove_dir_all(root).expect("temp workspace should clean up");
         assert_eq!(action, CliAction::Workspace { output_format: CliOutputFormat::Text });
-    }
-
-    #[test]
-    fn parses_workspace_natural_language_intents() {
-        assert_eq!(
-            parse_workspace_natural_language_intent("当前工作区"),
-            Some(WorkspaceIntent::Show)
-        );
-        assert_eq!(
-            parse_workspace_natural_language_intent("切换到 D:\\Project"),
-            Some(WorkspaceIntent::Switch("D:\\Project".to_string()))
-        );
-        assert_eq!(
-            parse_workspace_natural_language_intent("打开项目 E:\\中文项目"),
-            Some(WorkspaceIntent::Switch("E:\\中文项目".to_string()))
-        );
-        assert_eq!(parse_workspace_natural_language_intent("帮我 review 当前改动"), None);
-    }
-
-    #[test]
-    fn parses_export_last_response_natural_language_intents() {
-        assert_eq!(
-            parse_export_last_response_intent("把刚才的审查结果写成 E:\\code\\PR43-review.md"),
-            Some(ExportLastResponseIntent { path: Some("E:\\code\\PR43-review.md".to_string()) })
-        );
-        assert_eq!(
-            parse_export_last_response_intent("save the last review report to PR43-review.md"),
-            Some(ExportLastResponseIntent { path: Some("PR43-review.md".to_string()) })
-        );
-        assert_eq!(parse_export_last_response_intent("帮我写一个 markdown parser"), None);
     }
 
     #[test]
@@ -8832,6 +8766,7 @@ mod tests {
         let help = render_repl_help();
         assert!(help.contains("REPL"));
         assert!(help.contains("/help"));
+        assert!(help.contains("/dir"));
         assert!(help.contains("Complete commands, modes, and recent sessions"));
         assert!(help.contains("/status"));
         assert!(help.contains("/sandbox"));
