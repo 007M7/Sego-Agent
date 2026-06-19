@@ -29,3 +29,8 @@ All notable changes to the Sego Agent project will be documented in this file.
 - ROADMAP.md with active development roadmap
 - CONTRIBUTING.md with guidelines for contributors
 - Parity tracking documentation
+
+## [0.1.6] - 2026-06-19
+- Added deterministic natural-language local action routing and /dir action directory.
+- Changed bare sego review to run code review by default and persist .sego/reviews artifacts.
+- Added explicit workflow/session review entrypoints: sego workflow-review / sego session-review.
