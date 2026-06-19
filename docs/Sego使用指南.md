@@ -356,3 +356,11 @@ E:\YourProject\.sego\reviews\
 | 恢复会话 | `sego --resume latest` |
 
 最后提醒：Sego 是 AI coding 的工程信任层，不是万能安全扫描器。重要项目仍建议人工 review、测试和备份。
+
+
+## Windows 运行提示（v0.1.7）
+
+- **非 Git 目录**：启动时提示切换工作区。
+- **交互命令防护**：copy con、裸 shell 等自动阻止。
+- **Shell 命令提示**：Windows 下使用 type/dir/where。
+- **更新检查**：sego update --check 查看并升级。

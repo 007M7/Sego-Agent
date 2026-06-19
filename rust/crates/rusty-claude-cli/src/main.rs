@@ -1963,6 +1963,15 @@ fn run_repl(
         input::LineEditor::new("> ", cli.repl_completion_candidates().unwrap_or_default());
     println!("{}", cli.startup_banner());
 
+    if let Ok(cwd) = env::current_dir() {
+        if !is_git_worktree(&cwd) {
+            eprintln!();
+            eprintln!("Note: the current directory is not a Git project.");
+            eprintln!("  Use /cd D:/YourProject to switch, or sego --cwd D:/YourProject");
+            eprintln!();
+        }
+    }
+
     // A2 session 状态写入：进入 REPL 写 active。
     // 正常退出（/exit、/quit、ReadOutcome::Exit）写 graceful。
     // 错误路径（?返回 / 崩溃 / Ctrl+C）不写 graceful，保留 active，下次启动提示可恢复。
@@ -2805,12 +2814,16 @@ impl LiveCli {
         }
     }
 
-    fn run_turn_capture_text(&mut self, input: &str) -> Result<String, Box<dyn std::error::Error>> {
+    fn run_turn_capture_text(
+        &mut self,
+        input: &str,
+        emit_output: bool,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let machine = self.machine_output;
         // C-light (D-IDE-1): machine mode uses emit_output=false to suppress
         // conversation runtime rendering, and a fail-closed prompter that never
         // writes to stdout or reads from stdin.
-        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(!machine)?;
+        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(emit_output)?;
         if machine {
             // Machine mode: no ProgressUI, no stdout output, fail-closed permissions.
             let mut prompter = MachinePermissionPrompter;
@@ -3719,25 +3732,107 @@ impl LiveCli {
         }
         let context = ReviewContext::new(target);
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
-        let review_text = self.run_turn_capture_text(&prompt)?;
+        let review_text = self.run_turn_capture_text(&prompt, false)?;
         let report = ReviewReport::from_model_output(review_text);
         let artifact = persist_review_artifact(&env::current_dir()?, &context.target, &report)?;
-        let highest_severity =
-            report.highest_severity().map_or("none", runtime::ReviewSeverity::label);
-
-        println!(
-            "Review Report\n  ID               {}\n  Diff hash        {}\n  Parse status     {}\n  Findings         {}\n  Highest severity {}\n  Markdown         {}\n  JSON             {}\n  Index            {}",
-            artifact.id,
-            artifact.diff_hash,
-            report.parse_status.label(),
-            report.findings.len(),
-            highest_severity,
-            artifact.markdown_path.display(),
-            artifact.json_path.display(),
-            artifact.index_path.display()
-        );
+        println!("{}", format_review_completion_summary(&report, &artifact));
         Ok(())
     }
+}
+
+fn format_review_completion_summary(
+    report: &ReviewReport,
+    artifact: &runtime::PersistedReviewArtifact,
+) -> String {
+    const TERMINAL_FINDING_LIMIT: usize = 10;
+
+    let highest_severity = report.highest_severity().map_or("none", runtime::ReviewSeverity::label);
+    let mut lines = vec![
+        "Review Report".to_string(),
+        format!("  ID               {}", artifact.id),
+        format!("  Diff hash        {}", artifact.diff_hash),
+        format!("  Parse status     {}", report.parse_status.label()),
+        format!("  Findings         {}", report.findings.len()),
+        format!("  Highest severity {highest_severity}"),
+        String::new(),
+        "Findings".to_string(),
+    ];
+
+    if report.findings.is_empty() {
+        lines.push("  No structured findings.".to_string());
+    } else {
+        for (index, finding) in report.findings.iter().take(TERMINAL_FINDING_LIMIT).enumerate() {
+            let line = finding.line.map_or_else(|| "-".to_string(), |line| line.to_string());
+            lines.push(format!(
+                "  {}. [{}] {}:{}",
+                index + 1,
+                finding.severity.label(),
+                finding.file,
+                line
+            ));
+            lines.push(format!("     Title          {}", finding.title.trim()));
+            push_review_summary_field(&mut lines, "Evidence", &finding.evidence);
+            push_review_summary_field(&mut lines, "Risk", &finding.risk);
+            push_review_summary_field(&mut lines, "Suggestion", &finding.suggestion);
+            if let Some(hint) = &finding.verification_hint {
+                push_review_summary_field(&mut lines, "Verify", hint);
+            }
+            lines.push(String::new());
+        }
+        if report.findings.len() > TERMINAL_FINDING_LIMIT {
+            lines.push(format!(
+                "  ... {} more finding(s). Open the Markdown report for the complete list.",
+                report.findings.len() - TERMINAL_FINDING_LIMIT
+            ));
+        }
+    }
+    if report.parse_status == runtime::ReviewParseStatus::FallbackRawText {
+        lines.push(
+            "  Structured parsing failed; open the Markdown report to inspect raw output."
+                .to_string(),
+        );
+    }
+
+    lines.extend([
+        String::new(),
+        "Reports".to_string(),
+        format!("  Markdown         {}", display_path_for_user(&artifact.markdown_path)),
+        format!("  JSON             {}", display_path_for_user(&artifact.json_path)),
+        format!("  Index            {}", display_path_for_user(&artifact.index_path)),
+        String::new(),
+        "Next step".to_string(),
+        format!("  Open the Markdown report for details, or run /review show {}.", artifact.id),
+    ]);
+
+    lines.join("\n")
+}
+
+fn push_review_summary_field(lines: &mut Vec<String>, label: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+
+    let mut value_lines = value.lines();
+    if let Some(first) = value_lines.next() {
+        lines.push(format!("     {label:<14} {first}"));
+    }
+    for line in value_lines {
+        lines.push(format!("     {:<14} {line}", ""));
+    }
+}
+
+fn display_path_for_user(path: &std::path::Path) -> String {
+    let value = path.display().to_string();
+    if cfg!(windows) {
+        if let Some(rest) = value.strip_prefix("\\\\?\\UNC\\") {
+            return format!("\\\\{rest}");
+        }
+        if let Some(rest) = value.strip_prefix("\\\\?\\") {
+            return rest.to_string();
+        }
+    }
+    value
 }
 
 fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -4637,10 +4732,9 @@ fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if check_only {
-        println!(
-            "Update available. Run `sego update` to install or download manually: {}",
-            release.html_url
-        );
+        println!("Update available: {0} -> {1}", VERSION, release.tag_name);
+        println!("To install:  sego update");
+        println!("Or download: {0}", release.html_url);
         return Ok(());
     }
 
@@ -8016,13 +8110,14 @@ fn print_help() {
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, default_model, describe_tool_progress, filter_tool_specs,
-        format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
-        format_compact_report, format_cost_report, format_internal_prompt_progress_line,
-        format_issue_report, format_model_report, format_model_switch_report,
-        format_permissions_report, format_permissions_switch_report, format_pr_report,
-        format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
-        format_ultraplan_report, format_unknown_slash_command,
+        create_managed_session_handle, default_model, describe_tool_progress,
+        display_path_for_user, filter_tool_specs, format_bughunter_report,
+        format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
+        format_cost_report, format_internal_prompt_progress_line, format_issue_report,
+        format_model_report, format_model_switch_report, format_permissions_report,
+        format_permissions_switch_report, format_pr_report, format_resume_report,
+        format_review_completion_summary, format_status_report, format_tool_call_start,
+        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, is_git_worktree, is_turn_cancelled_message,
         non_git_review_error, normalize_permission_mode, parse_args, parse_git_status_branch,
         parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
@@ -9379,6 +9474,121 @@ UU conflicted.rs",
         git(&["init", "--quiet"], &root);
         assert!(is_git_worktree(&root));
         fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn review_completion_summary_includes_expected_sections() {
+        let report = runtime::ReviewReport {
+            findings: vec![runtime::ReviewFinding {
+                id: "f1".into(),
+                severity: runtime::ReviewSeverity::Low,
+                file: "src/main.rs".into(),
+                line: Some(1966),
+                title: "REPL non-Git warning".into(),
+                evidence: "warning appears before the prompt".into(),
+                risk: "users may miss the active workspace".into(),
+                suggestion: "show the active workspace clearly".into(),
+                confidence: 0.8,
+                verification_hint: Some("run sego from a non-Git folder".into()),
+            }],
+            raw_text: String::new(),
+            parse_status: runtime::ReviewParseStatus::Structured,
+        };
+        let artifact = runtime::PersistedReviewArtifact {
+            id: "review-abc123".into(),
+            diff_hash: "hash123".into(),
+            json_path: std::path::PathBuf::from(".sego/reviews/r.json"),
+            markdown_path: std::path::PathBuf::from(".sego/reviews/r.md"),
+            index_path: std::path::PathBuf::from(".sego/reviews/index.jsonl"),
+        };
+        let summary = format_review_completion_summary(&report, &artifact);
+        assert!(summary.contains("Review Report"));
+        assert!(summary.contains("Diff hash        hash123"));
+        assert!(summary.contains("Parse status     structured"));
+        assert!(summary.contains("Findings         1"));
+        assert!(summary.contains("Highest severity low"));
+        assert!(summary.contains("Findings"));
+        assert!(summary.contains("1. [low] src/main.rs:1966"));
+        assert!(summary.contains("Title          REPL non-Git warning"));
+        assert!(summary.contains("Evidence       warning appears before the prompt"));
+        assert!(summary.contains("Risk           users may miss the active workspace"));
+        assert!(summary.contains("Suggestion     show the active workspace clearly"));
+        assert!(summary.contains("Verify         run sego from a non-Git folder"));
+        assert!(summary.contains("Reports"));
+        assert!(summary.contains("Markdown"));
+        assert!(summary.contains("JSON"));
+        assert!(!summary.contains("\"findings\":["));
+        assert!(summary.contains("Next step"));
+    }
+
+    #[test]
+    fn review_completion_summary_shows_at_most_ten_terminal_findings() {
+        let findings: Vec<_> = (1..=11)
+            .map(|i| runtime::ReviewFinding {
+                id: format!("f{i}"),
+                severity: runtime::ReviewSeverity::Low,
+                file: format!("src/file{i}.rs"),
+                line: Some(i as u32 * 10),
+                title: format!("Finding number {i}"),
+                evidence: "...".into(),
+                risk: "low".into(),
+                suggestion: "...".into(),
+                confidence: 0.5,
+                verification_hint: None,
+            })
+            .collect();
+        let report = runtime::ReviewReport {
+            findings,
+            raw_text: String::new(),
+            parse_status: runtime::ReviewParseStatus::Structured,
+        };
+        let artifact = runtime::PersistedReviewArtifact {
+            id: "review-limit".into(),
+            diff_hash: "hash".into(),
+            json_path: std::path::PathBuf::from(".sego/reviews/r.json"),
+            markdown_path: std::path::PathBuf::from(".sego/reviews/r.md"),
+            index_path: std::path::PathBuf::from(".sego/reviews/index.jsonl"),
+        };
+        let summary = format_review_completion_summary(&report, &artifact);
+        assert!(summary.contains("Finding number 1"));
+        assert!(summary.contains("Finding number 10"));
+        assert!(!summary.contains("Finding number 11"));
+        assert!(summary.contains("... 1 more finding(s)"));
+    }
+
+    #[test]
+    fn review_completion_summary_shows_no_findings() {
+        let report = runtime::ReviewReport {
+            findings: vec![],
+            raw_text: String::new(),
+            parse_status: runtime::ReviewParseStatus::FallbackRawText,
+        };
+        let artifact = runtime::PersistedReviewArtifact {
+            id: "review-empty".into(),
+            diff_hash: "hash0".into(),
+            json_path: std::path::PathBuf::from(".sego/reviews/r.json"),
+            markdown_path: std::path::PathBuf::from(".sego/reviews/r.md"),
+            index_path: std::path::PathBuf::from(".sego/reviews/index.jsonl"),
+        };
+        let summary = format_review_completion_summary(&report, &artifact);
+        assert!(summary.contains("No structured findings."));
+        assert!(summary.contains("Structured parsing failed"));
+    }
+
+    #[test]
+    fn display_path_for_user_strips_windows_long_path_prefixes() {
+        if cfg!(windows) {
+            assert_eq!(
+                display_path_for_user(std::path::Path::new(r"\\?\E:\Sego\source\.sego\r.md")),
+                r"E:\Sego\source\.sego\r.md"
+            );
+            assert_eq!(
+                display_path_for_user(std::path::Path::new(r"\\?\UNC\server\share\r.md")),
+                r"\\server\share\r.md"
+            );
+        } else {
+            assert_eq!(display_path_for_user(std::path::Path::new("/tmp/r.md")), "/tmp/r.md");
+        }
     }
 
     #[test]

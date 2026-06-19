@@ -143,15 +143,9 @@ fn parse_export_last_response_intent(input: &str) -> Option<NlIntent> {
 
     let targets_last_response = lower.contains("last")
         || lower.contains("previous")
-        || lower.contains("review")
-        || lower.contains("report")
         || input.contains("刚才")
         || input.contains("上一条")
-        || input.contains("上一次")
-        || input.contains("审查")
-        || input.contains("审核")
-        || input.contains("报告")
-        || input.contains("结果");
+        || input.contains("上一次");
     if !targets_last_response {
         return None;
     }
@@ -559,6 +553,25 @@ mod tests {
             Some(NlIntent::ExportLastResponse {
                 path: Some("E:\\code\\PR43 review.md".to_string())
             })
+        );
+    }
+
+    #[test]
+    fn export_last_response_requires_explicit_previous_response_target() {
+        assert_eq!(
+            parse_nl_intent("审查当前改动，完成后输出结论"),
+            Some(NlIntent::Review { scope: None })
+        );
+        assert_eq!(
+            parse_nl_intent(
+                "请审查 E:\\Sego\\source 当前 C16 最终改动，审查完成后输出结论和阻塞问题"
+            ),
+            Some(NlIntent::Review { scope: None })
+        );
+        assert_eq!(parse_nl_intent("save review report to PR43-review.md"), None);
+        assert_eq!(
+            parse_nl_intent("save the last review report to PR43-review.md"),
+            Some(NlIntent::ExportLastResponse { path: Some("PR43-review.md".to_string()) })
         );
     }
 
