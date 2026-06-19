@@ -577,13 +577,20 @@ mod tests {
     #[test]
     fn parses_review_intents() {
         assert_eq!(parse_nl_intent("帮我 review 当前改动"), Some(NlIntent::Review { scope: None }));
+        assert_eq!(parse_nl_intent("帮我review当前改动"), Some(NlIntent::Review { scope: None }));
         assert_eq!(parse_nl_intent("请审查当前修改"), Some(NlIntent::Review { scope: None }));
+        assert_eq!(parse_nl_intent("检查当前改动"), Some(NlIntent::Review { scope: None }));
+        assert_eq!(parse_nl_intent("审查当前改动"), Some(NlIntent::Review { scope: None }));
         assert_eq!(
             parse_nl_intent("审查整个项目代码"),
             Some(NlIntent::Review { scope: Some("workspace".to_string()) })
         );
         assert_eq!(
             parse_nl_intent("review staged changes"),
+            Some(NlIntent::Review { scope: Some("staged".to_string()) })
+        );
+        assert_eq!(
+            parse_nl_intent("检查已暂存代码"),
             Some(NlIntent::Review { scope: Some("staged".to_string()) })
         );
     }

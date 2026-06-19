@@ -257,6 +257,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
+            // Route high-confidence NL review intents to deterministic code review
+            // before falling through to the model conversation path. (Cycle 15 P0-B)
+            if let Some(intent) = parse_nl_intent(&prompt) {
+                match intent {
+                    NlIntent::Review { scope } => {
+                        run_code_review_cli(
+                            model,
+                            allowed_tools,
+                            permission_mode,
+                            scope.as_deref(),
+                        )?;
+                        return Ok(());
+                    }
+                    NlIntent::ReviewSafety { staged } => {
+                        let scope = if staged { Some("staged") } else { Some("workspace") };
+                        run_code_review_cli(model, allowed_tools, permission_mode, scope)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             // A2 session 状态写入：active 在 LiveCli 创建后写，graceful 在成功返回后写。
             // 错误路径（?返回 / 崩溃）不写 graceful，保留 active，下次启动提示可恢复。
             let mut cli = LiveCli::new(model.clone(), true, allowed_tools, permission_mode)?;
@@ -3661,8 +3683,13 @@ impl LiveCli {
     }
 
     fn run_review(&mut self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+        if !is_git_worktree(&cwd) {
+            eprintln!("{}", non_git_review_error(&cwd));
+            return Ok(());
+        }
         let review_scope = ReviewScope::parse(scope)?;
-        let target = collect_review_target(&env::current_dir()?, review_scope)?;
+        let target = collect_review_target(&cwd, review_scope)?;
         if target.is_empty() {
             print_clean_review_scope(&target);
             return Ok(());
@@ -3685,6 +3712,11 @@ impl LiveCli {
         &mut self,
         target: ReviewTarget,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+        if !is_git_worktree(&cwd) {
+            eprintln!("{}", non_git_review_error(&cwd));
+            return Ok(()); // REPL: print friendly message and continue, do not exit process
+        }
         let context = ReviewContext::new(target);
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
         let review_text = self.run_turn_capture_text(&prompt)?;
@@ -4982,8 +5014,13 @@ fn run_code_review_cli(
     permission_mode: PermissionMode,
     scope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    if !is_git_worktree(&cwd) {
+        eprintln!("{}", non_git_review_error(&cwd));
+        std::process::exit(1);
+    }
     let review_scope = ReviewScope::parse(scope)?;
-    let target = collect_review_target(&env::current_dir()?, review_scope)?;
+    let target = collect_review_target(&cwd, review_scope)?;
     if target.is_empty() {
         print_clean_review_scope(&target);
         return Ok(());
@@ -5903,6 +5940,26 @@ fn run_git_diff_command_in(
         return Err(format!("git {} failed: {stderr}", args.join(" ")).into());
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+fn is_git_worktree(cwd: &Path) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn non_git_review_error(cwd: &Path) -> String {
+    format!(
+        "Sego review needs a Git project.\n\
+         Current directory: {}\n\
+         Try:\n  sego --cwd \"D:\\YourProject\" review\n  /cd \"D:\\YourProject\"\n  cd D:\\YourProject; sego review",
+        cwd.display()
+    )
 }
 
 fn render_teleport_report(target: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -7966,14 +8023,14 @@ mod tests {
         format_permissions_report, format_permissions_switch_report, format_pr_report,
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, is_turn_cancelled_message, normalize_permission_mode,
-        parse_args, parse_git_status_branch, parse_git_status_metadata_for,
-        parse_git_workspace_summary, permission_policy, print_help_to, push_output_block,
-        render_code_review_readiness_for, render_code_review_summary_for, render_config_report,
-        render_diff_report, render_diff_report_for, render_memory_report,
-        render_natural_language_directory, render_repl_help, render_resume_usage,
-        resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
+        format_unknown_slash_command_message, is_git_worktree, is_turn_cancelled_message,
+        non_git_review_error, normalize_permission_mode, parse_args, parse_git_status_branch,
+        parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
+        print_help_to, push_output_block, render_code_review_readiness_for,
+        render_code_review_summary_for, render_config_report, render_diff_report,
+        render_diff_report_for, render_memory_report, render_natural_language_directory,
+        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
+        response_to_events, resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
@@ -9306,6 +9363,21 @@ UU conflicted.rs",
         assert!(report.contains("Staged files     0"));
         assert!(report.contains("stage changes before running /review ready"));
 
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn non_git_directory_review_shows_friendly_error() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        assert!(!is_git_worktree(&root));
+        let error = non_git_review_error(&root);
+        assert!(error.contains("needs a Git project"));
+        assert!(error.contains("sego --cwd"));
+        assert!(!error.contains("fatal:"));
+        git(&["init", "--quiet"], &root);
+        assert!(is_git_worktree(&root));
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 

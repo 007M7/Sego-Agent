@@ -1727,6 +1727,9 @@ fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> 
 }
 
 fn run_bash(input: BashCommandInput) -> Result<String, String> {
+    if let Some(output) = interactive_command_guard(&input.command) {
+        return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
+    }
     if let Some(output) = bash_file_authoring_guard(&input.command) {
         return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
     }
@@ -1737,15 +1740,51 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+fn interactive_command_guard(command: &str) -> Option<BashCommandOutput> {
+    if !runtime::bash_command_classifier::is_interactive_command(command) {
+        return None;
+    }
+
+    let stderr = format!(
+        "Sego blocked this interactive command to prevent the process from hanging. {command}"
+    );
+
+    Some(BashCommandOutput {
+        stdout: String::new(),
+        stderr: stderr.clone(),
+        raw_output_path: None,
+        interrupted: false,
+        is_image: None,
+        background_task_id: None,
+        backgrounded_by_user: None,
+        assistant_auto_backgrounded: None,
+        dangerously_disable_sandbox: None,
+        return_code_interpretation: Some("preflight_blocked:interactive_command".to_string()),
+        no_output_expected: Some(true),
+        structured_content: Some(vec![serde_json::to_value(
+            LaneEvent::new(LaneEventName::Blocked, LaneEventStatus::Blocked, iso8601_now())
+                .with_failure_class(LaneFailureClass::ToolRuntime)
+                .with_detail(stderr)
+                .with_data(json!({
+                    "blockedCommand": command,
+                    "reason": "interactive_command"
+                })),
+        )
+        .expect("lane event should serialize")]),
+        persisted_output_path: None,
+        persisted_output_size: None,
+        sandbox_status: None,
+    })
+}
 fn bash_file_authoring_guard(command: &str) -> Option<BashCommandOutput> {
     if !looks_like_shell_file_authoring_misuse(command) {
         return None;
     }
 
     let stderr = concat!(
-        "Sego blocked this shell file-writing pattern. ",
-        "Use the write_file or edit_file tool to create Markdown, JSON, or source files; ",
-        "do not compose text files through bash echo, PowerShell, Node, or Python quoting loops."
+        "Sego blocked this shell file-writing pattern because this build does not support creating ",
+        "text files through shell commands. To create Markdown, JSON, or source files, use an ",
+        "external editor or a supported export command like /export or sego review."
     )
     .to_string();
 
@@ -1769,7 +1808,7 @@ fn bash_file_authoring_guard(command: &str) -> Option<BashCommandOutput> {
                 .with_detail(stderr)
                 .with_data(json!({
                     "blockedCommand": command,
-                    "recommendedTool": "write_file",
+                    "recommendedAction": "external_editor_or_export",
                     "reason": "file_authoring_tool_misuse"
                 })),
         )
@@ -6245,9 +6284,22 @@ mod tests {
             output_json["returnCodeInterpretation"],
             "preflight_blocked:file_authoring_tool_misuse"
         );
-        assert!(output_json["stderr"].as_str().expect("stderr").contains("write_file"));
+        assert!(output_json["stderr"]
+            .as_str()
+            .expect("stderr")
+            .contains("does not support creating text files through shell commands"));
+        assert!(!output_json["stderr"].as_str().expect("stderr").contains("write_file"));
+        assert!(!output_json["stderr"].as_str().expect("stderr").contains("edit_file"));
         assert_eq!(output_json["structuredContent"][0]["event"], "lane.blocked");
         assert_eq!(output_json["structuredContent"][0]["failureClass"], "tool_runtime");
+        assert_eq!(
+            output_json["structuredContent"][0]["data"]["recommendedAction"],
+            "external_editor_or_export"
+        );
+        assert_eq!(
+            output_json["returnCodeInterpretation"],
+            "preflight_blocked:file_authoring_tool_misuse"
+        );
     }
 
     #[test]
@@ -6260,6 +6312,92 @@ mod tests {
             output_json["returnCodeInterpretation"],
             "preflight_blocked:file_authoring_tool_misuse"
         );
+    }
+
+    #[test]
+    fn bash_blocks_copy_con_interactive_command() {
+        let cases = ["copy con SEGO_WRITE_TEST.md", "copy con file.txt", "COPY CON something"];
+        for cmd in cases {
+            let output = execute_tool("bash", &json!({ "command": cmd }))
+                .expect("bash guard should return structured output");
+            let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+            assert_eq!(
+                output_json["returnCodeInterpretation"],
+                "preflight_blocked:interactive_command"
+            );
+            assert!(output_json["stderr"]
+                .as_str()
+                .expect("stderr")
+                .contains("interactive command"));
+            assert_eq!(
+                output_json["structuredContent"][0]["data"]["reason"],
+                "interactive_command"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_blocks_cmd_wrapped_copy_con() {
+        let output =
+            execute_tool("bash", &json!({ "command": "cmd /c copy con SEGO_WRITE_TEST.md" }))
+                .expect("bash guard should return structured output");
+        let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+        assert_eq!(
+            output_json["returnCodeInterpretation"],
+            "preflight_blocked:interactive_command"
+        );
+    }
+
+    #[test]
+    fn bash_blocks_bare_python_powershell_cmd() {
+        let cases = [
+            "python",
+            "python3",
+            "powershell",
+            "pwsh",
+            "cmd",
+            "vim file.txt",
+            "nano file.txt",
+            "powershell -NoExit",
+            "cmd /k echo hello",
+            "less file.txt",
+            "more file.txt",
+        ];
+        for cmd in cases {
+            let output = execute_tool("bash", &json!({ "command": cmd }))
+                .expect("bash guard should return structured output");
+            let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+            assert_eq!(
+                output_json["returnCodeInterpretation"], "preflight_blocked:interactive_command",
+                "failed for command: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_allows_non_interactive_shell_commands() {
+        let cases = [
+            ("git status", "SafeReadonly"),
+            ("echo hello", "SafeReadonly"),
+            ("dir", "SafeReadonly"),
+            ("python -c \"print(1)\"", "SafeVerify"),
+            ("powershell -Command \"Get-Date\"", "SafeVerify"),
+            ("cmd /c \"echo hello\"", "SafeReadonly"),
+            ("python -c\"print(1)\"", "SafeVerify"),
+            ("python -c'print(1)'", "SafeVerify"),
+            ("python -c=print(1)", "SafeVerify"),
+            ("powershell -EncodedCommand abc", "SafeVerify"),
+            ("echo copy con something", "SafeReadonly"),
+        ];
+        for (cmd, _expected) in cases {
+            let output =
+                execute_tool("bash", &json!({ "command": cmd })).expect("bash should execute");
+            let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
+            assert_ne!(
+                output_json["returnCodeInterpretation"], "preflight_blocked:interactive_command",
+                "non-interactive command '{cmd}' was incorrectly blocked"
+            );
+        }
     }
 
     #[test]
