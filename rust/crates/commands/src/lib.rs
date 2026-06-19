@@ -58,6 +58,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "dir",
+        aliases: &[],
+        summary: "Show common local actions and natural-language examples",
+        argument_hint: None,
+        resume_supported: true,
+    },
+    SlashCommandSpec {
         name: "status",
         aliases: &[],
         summary: "Show current session status",
@@ -1079,6 +1086,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
     Help,
+    Dir,
     Status,
     Sandbox,
     Pwd,
@@ -1202,6 +1210,10 @@ pub fn validate_slash_command_input(
         "help" => {
             validate_no_args(command, &args)?;
             SlashCommand::Help
+        }
+        "dir" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Dir
         }
         "status" => {
             validate_no_args(command, &args)?;
@@ -1716,10 +1728,9 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
 
 fn slash_command_category(name: &str) -> &'static str {
     match name {
-        "help" | "status" | "sandbox" | "model" | "permissions" | "cost" | "resume" | "session"
-        | "version" | "login" | "logout" | "usage" | "stats" | "rename" | "privacy-settings" => {
-            "Session & visibility"
-        }
+        "help" | "dir" | "status" | "sandbox" | "model" | "permissions" | "cost" | "resume"
+        | "session" | "version" | "login" | "logout" | "usage" | "stats" | "rename"
+        | "privacy-settings" => "Session & visibility",
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
         | "export" | "recovery-export" | "plugin" | "branch" | "add-dir" | "files" | "hooks"
         | "release-notes" => "Workspace & git",
@@ -3018,7 +3029,7 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message, session: result.compacted_session })
         }
-        SlashCommand::Help => Some(SlashCommandResult {
+        SlashCommand::Help | SlashCommand::Dir => Some(SlashCommandResult {
             message: render_slash_command_help(),
             session: session.clone(),
         }),
@@ -3183,6 +3194,7 @@ mod tests {
     #[test]
     fn parses_supported_slash_commands() {
         assert_eq!(SlashCommand::parse("/help"), Ok(Some(SlashCommand::Help)));
+        assert_eq!(SlashCommand::parse("/dir"), Ok(Some(SlashCommand::Dir)));
         assert_eq!(SlashCommand::parse(" /status "), Ok(Some(SlashCommand::Status)));
         assert_eq!(SlashCommand::parse("/sandbox"), Ok(Some(SlashCommand::Sandbox)));
         assert_eq!(SlashCommand::parse("/pwd"), Ok(Some(SlashCommand::Pwd)));
@@ -3440,6 +3452,7 @@ mod tests {
         assert!(help.contains("Discovery & debugging"));
         assert!(help.contains("Analysis & automation"));
         assert!(help.contains("/help"));
+        assert!(help.contains("/dir"));
         assert!(help.contains("/status"));
         assert!(help.contains("/sandbox"));
         assert!(help.contains("/compact"));
@@ -3472,7 +3485,7 @@ mod tests {
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
         assert!(help.contains("/verify [auto|fast|full]"));
-        assert_eq!(slash_command_specs().len(), 146);
+        assert_eq!(slash_command_specs().len(), 147);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 

@@ -54,25 +54,38 @@ cd rust
 ./target/debug/sego
 ```
 
-Inside the REPL, Sego supports natural workspace language for normal users:
+Inside the REPL, Sego supports deterministic natural-language shortcuts for common local actions:
 
 ```text
 当前工作区
 切换到 D:\YourProject
 打开项目 E:\YourProject
+帮我 review 当前改动
+检查安全问题
+把刚才的审查结果写成 E:\code\review.md
+导出当前会话
+检查更新
+退出
 ```
 
-For stricter CLI usage, the same workflow is available as commands:
+These shortcuts are local control actions. Sego handles them before model calls, so they do not trigger exploratory shell commands. For stricter CLI usage, the same workflows are available as commands:
 
 ```bash
 sego --cwd "D:\YourProject" workspace
+sego update --check
 ```
 
 ```text
 /workspace
 /pwd
 /cd D:\YourProject
+/review
+/review safety staged
+/export
+/dir
 ```
+
+If a sentence looks like a local control action but lacks a path or target, Sego prints a short hint and points you to `/dir`. Normal coding, explanation, and discussion prompts still go to the model.
 
 ### One-shot prompt
 
