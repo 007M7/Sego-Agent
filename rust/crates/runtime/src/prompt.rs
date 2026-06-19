@@ -471,7 +471,7 @@ fn get_simple_doing_tasks_section() -> String {
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
-        "When generating shell commands, match syntax to the actual target shell. On Windows, do not mix CMD-only syntax such as `cd /d` or `^` escaping with Bash/Git Bash commands, and do not mix Bash-only here-doc or POSIX path syntax with CMD/PowerShell.".to_string(),
+        "When generating shell commands, match syntax to the actual target shell. On Windows, do not mix CMD-only syntax such as `cd /d` or `^` escaping with Bash/Git Bash commands, and do not mix Bash-only here-doc or POSIX path syntax with CMD/PowerShell. Windows file viewing: use `type`, not `cat`. Windows directory listing: use `dir`, not `ls`. Windows command lookup: use `where`, not `which`. PowerShell cmdlets must be invoked via `powershell -Command \"...\"`; do not run bare `Get-Content` or other cmdlets outside PowerShell.".to_string(),
         "Avoid writing source files line-by-line with long `echo >>` command chains. Prefer the available file editing tools; if shell writing is unavoidable, use a shell-appropriate bulk write pattern and verify the file exists before claiming it was created.".to_string(),
         "Do not claim generated files, tests, lint checks, syntax checks, dry-runs, or runtime outputs exist or passed unless you observed that evidence in tool output.".to_string(),
     ]);

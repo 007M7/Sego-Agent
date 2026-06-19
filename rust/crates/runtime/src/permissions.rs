@@ -204,6 +204,11 @@ impl PermissionPolicy {
                         reason: format!("review-trust denied bash command as dangerous: {input}"),
                     };
                 }
+                crate::bash_command_classifier::BashCommandRisk::DenyInteractive => {
+                    return PermissionOutcome::Deny {
+                        reason: format!("review-trust denied interactive command: {input}"),
+                    };
+                }
                 crate::bash_command_classifier::BashCommandRisk::AskMutation
                 | crate::bash_command_classifier::BashCommandRisk::UnknownAsk => {
                     return Self::prompt_or_deny(

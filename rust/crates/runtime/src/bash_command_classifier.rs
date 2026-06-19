@@ -28,6 +28,10 @@ pub enum BashCommandRisk {
     /// Destructive or irreversible commands: `rm -rf`, `git reset --hard`, `git push`, `sudo`.
     /// Denied outright under `review-trust`.
     DenyDangerous,
+    /// Interactive commands that wait for user input and will hang non-interactive sessions.
+    /// `copy con`, `less`, `vim`, `nano`, bare `python`/`powershell`/`cmd`.
+    /// Denied outright.
+    DenyInteractive,
     /// Anything the classifier cannot confidently categorise.
     /// Requires confirmation (fail-safe).
     UnknownAsk,
@@ -69,6 +73,11 @@ pub fn classify_bash_command(command: &str) -> BashCommandRisk {
     // Destructive commands are denied first, even if they start with a safe verb.
     if is_dangerous(trimmed) {
         return BashCommandRisk::DenyDangerous;
+    }
+
+    // Interactive commands that hang non-interactive sessions are denied.
+    if is_interactive_command(trimmed) {
+        return BashCommandRisk::DenyInteractive;
     }
 
     // Read-only inspection commands.
@@ -183,6 +192,67 @@ fn is_dangerous(command: &str) -> bool {
     // Format / mkfs
     if lower.starts_with("format ") || lower.starts_with("mkfs") {
         return true;
+    }
+    false
+}
+
+/// Shared interactive-command detector used by [`classify_bash_command`] and the
+/// tools-layer [`interactive_command_guard`].  Returns `true` when a command is
+/// likely to block waiting for user input (REPL, editor, pager, `copy con`).
+pub fn is_interactive_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    let first = tokens.first().copied().unwrap_or("");
+    let second = tokens.get(1).copied().unwrap_or("");
+
+    // `copy con` -- token-level: first two tokens, or after `cmd /c` / `cmd /r`
+    // `echo copy con something` must NOT match.
+    if first == "copy" && second == "con" {
+        return true;
+    }
+    // `cmd /c copy con file.txt`: /c or /r then copy con
+    if first == "cmd" {
+        if let Some(pos) = tokens.iter().position(|t| *t == "/c" || *t == "/r") {
+            if tokens.len() > pos + 2 && tokens[pos + 1] == "copy" && tokens[pos + 2] == "con" {
+                return true;
+            }
+        }
+    }
+    // Interactive pagers/readers
+    if first == "less" || first == "more" {
+        return true;
+    }
+    // Editors
+    if matches!(first, "vim" | "vi" | "nano" | "emacs" | "nvim") {
+        return true;
+    }
+    // Bare python REPL -- only allowed when a -c/-m flag, .py file, heredoc, or pipe is present.
+    // Token-prefix matching accepts `-c"..."`, `-c'...'`, `-c=...`.
+    if first == "python" || first == "python3" {
+        let has_script = tokens.iter().any(|t| t.starts_with("-c") || t.starts_with("-m"))
+            || lower.contains(".py")
+            || lower.contains("<<")
+            || lower.contains('|');
+        if !has_script {
+            return true;
+        }
+    }
+    // Bare powershell -- only allowed when a non-interactive flag is present.
+    // Token-exact matching prevents substring false-positives.
+    if first == "powershell" || first == "pwsh" {
+        let has_flag =
+            tokens.iter().any(|t| matches!(*t, "-command" | "-c" | "-file" | "-encodedcommand"))
+                || lower.contains('|');
+        if !has_flag {
+            return true;
+        }
+    }
+    // Bare cmd -- only allowed when /c or /r is present.  /k is interactive.
+    if first == "cmd" {
+        let has_flag = tokens.iter().any(|t| matches!(*t, "/c" | "/r"));
+        if !has_flag {
+            return true;
+        }
     }
     false
 }
@@ -417,7 +487,65 @@ mod tests {
         assert!(BashCommandRisk::SegaMetadataWrite.is_auto_allow());
         assert!(!BashCommandRisk::AskMutation.is_auto_allow());
         assert!(!BashCommandRisk::DenyDangerous.is_auto_allow());
+        assert!(!BashCommandRisk::DenyInteractive.is_auto_allow());
         assert!(!BashCommandRisk::UnknownAsk.is_auto_allow());
+    }
+
+    #[test]
+    fn interactive_commands_are_denied() {
+        // copy con -- token-level (first two tokens = "copy" "con")
+        assert_eq!(classify_bash_command("copy con"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("copy con file.txt"), BashCommandRisk::DenyInteractive);
+        assert_eq!(
+            classify_bash_command("cmd /c copy con file.txt"),
+            BashCommandRisk::DenyInteractive
+        );
+        // echo copy con NOT interactive (substring false-positive)
+        assert_ne!(
+            classify_bash_command("echo copy con something"),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_eq!(
+            classify_bash_command("cmd /c copy con file.txt"),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_eq!(classify_bash_command("less"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("less file.txt"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("more"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("more file.txt"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("vim file.txt"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("nano file.txt"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("python"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("powershell"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("powershell -NoExit"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("cmd"), BashCommandRisk::DenyInteractive);
+        assert_eq!(classify_bash_command("cmd /k echo hello"), BashCommandRisk::DenyInteractive);
+        // Safe non-interactive variants (using raw string literals)
+        assert_ne!(
+            classify_bash_command(r###"powershell -Command "Get-Date""###),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_ne!(
+            classify_bash_command(r###"cmd /c "echo hello""###),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_ne!(
+            classify_bash_command(r###"python -c "print(1)""###),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_ne!(
+            classify_bash_command(r#"python -c"print(1)""#),
+            BashCommandRisk::DenyInteractive
+        );
+        assert_ne!(classify_bash_command("python -c'print(1)'"), BashCommandRisk::DenyInteractive);
+        assert_ne!(classify_bash_command("python -c=print(1)"), BashCommandRisk::DenyInteractive);
+        assert_ne!(
+            classify_bash_command("powershell -EncodedCommand abc"),
+            BashCommandRisk::DenyInteractive
+        );
+        // Normal read-only commands are unaffected
+        assert_eq!(classify_bash_command("git status"), BashCommandRisk::SafeReadonly);
+        assert_eq!(classify_bash_command("dir"), BashCommandRisk::SafeReadonly);
     }
 
     #[test]
