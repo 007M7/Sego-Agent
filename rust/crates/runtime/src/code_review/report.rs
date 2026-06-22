@@ -30,6 +30,9 @@ pub struct ReviewFinding {
 pub enum ReviewParseStatus {
     Structured,
     FallbackRawText,
+    /// C20.5-A: raw text contains findings-like content but JSON could not be parsed.
+    /// Prevents misleading "0 findings" display when the model clearly produced findings.
+    ParseAttemptedButFailed,
 }
 
 impl ReviewParseStatus {
@@ -38,6 +41,7 @@ impl ReviewParseStatus {
         match self {
             Self::Structured => "structured",
             Self::FallbackRawText => "fallback_raw_text",
+            Self::ParseAttemptedButFailed => "parse_attempted_but_failed",
         }
     }
 }
@@ -74,6 +78,14 @@ impl ReviewReport {
         }
 
         let Some(json_candidate) = extract_json_candidate(trimmed) else {
+            // C20.5-A: if text looks like it contains findings, don't silently report 0.
+            if trimmed.contains("\"findings\"") || trimmed.contains("\"findings\":") {
+                return Self {
+                    findings: Vec::new(),
+                    raw_text,
+                    parse_status: ReviewParseStatus::ParseAttemptedButFailed,
+                };
+            }
             return Self::no_findings(raw_text);
         };
 
@@ -87,7 +99,17 @@ impl ReviewReport {
                 raw_text,
                 parse_status: ReviewParseStatus::Structured,
             },
-            Err(_) => Self::no_findings(raw_text),
+            Err(_) => {
+                // C20.5-A: parsing failed but candidate text was found.
+                if trimmed.contains("\"findings\"") || trimmed.contains("\"findings\":") {
+                    return Self {
+                        findings: Vec::new(),
+                        raw_text,
+                        parse_status: ReviewParseStatus::ParseAttemptedButFailed,
+                    };
+                }
+                Self::no_findings(raw_text)
+            }
         }
     }
 
@@ -463,6 +485,7 @@ fn extract_json_candidate(text: &str) -> Option<&str> {
         return Some(trimmed);
     }
 
+    // Check for fenced JSON block: ```json ... ```
     let mut offset = 0;
     for line in trimmed.split_inclusive('\n') {
         let line_without_eol = line.trim_end_matches(&['\r', '\n'][..]);
@@ -482,6 +505,65 @@ fn extract_json_candidate(text: &str) -> Option<&str> {
         offset += line.len();
     }
 
+    // C20.5-A: fallback — search for a JSON object containing "findings" in prose text.
+    extract_json_from_prose(trimmed)
+}
+
+/// C20.5-A: Search for a `{...}` JSON object in arbitrary prose text.
+/// Scans every `{` in the text, extracts the balanced brace object,
+/// and returns the first one that contains `"findings"`.
+fn extract_json_from_prose(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut search_start = 0;
+    while let Some(rel_pos) = bytes[search_start..].iter().position(|&b| b == b'{') {
+        let abs_pos = search_start + rel_pos;
+        let slice = &text[abs_pos..];
+        if let Some(end_offset) = find_balanced_json_end(slice) {
+            let candidate = &slice[..end_offset];
+            if candidate.contains("\"findings\"") {
+                return Some(candidate);
+            }
+            // Skip past this object to continue searching.
+            search_start = abs_pos + end_offset;
+        } else {
+            search_start = abs_pos + 1;
+        }
+    }
+    None
+}
+
+/// Given a string slice that starts with `{`, find the byte offset of the
+/// matching closing `}` (respecting string escapes). Returns `None` if the
+/// braces are not balanced. `char_indices()` yields byte offsets, so the
+/// returned offset is safe for slicing the original UTF-8 string.
+fn find_balanced_json_end(slice: &str) -> Option<usize> {
+    let mut brace_depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, ch) in slice.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            if ch == '{' {
+                brace_depth += 1;
+            } else if ch == '}' {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    return Some(i + ch.len_utf8());
+                }
+            }
+        }
+    }
     None
 }
 
@@ -719,6 +801,94 @@ mod tests {
         assert_eq!(report.parse_status, ReviewParseStatus::FallbackRawText);
         assert!(report.findings.is_empty());
         assert!(report.raw_text.contains("no JSON"));
+    }
+
+    // C20.5-A: parser robustness tests.
+
+    #[test]
+    fn parses_raw_json_findings_in_prose_text() {
+        let report = ReviewReport::from_model_output(
+            "Here is my review analysis.\n\n{\"findings\":[{\"severity\":\"high\",\"file\":\"src/lib.rs\",\"line\":42,\"title\":\"Missing error handling\",\"evidence\":\"unwrap on result\",\"risk\":\"panic\",\"suggestion\":\"propagate error\",\"confidence\":0.91}]}\n\nLet me know if you need more detail.",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].severity, ReviewSeverity::High);
+    }
+
+    #[test]
+    fn parses_fenced_json_embedded_in_prose() {
+        let report = ReviewReport::from_model_output(
+            "Review complete. Here is the output:\n\n```json\n{\"findings\":[{\"severity\":\"low\",\"file\":\"src/main.rs\",\"line\":null,\"title\":\"Missing test\",\"evidence\":\"no test changed\",\"risk\":\"regression\",\"suggestion\":\"add test\",\"confidence\":0.5}]}\n```\n\nDone.",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].severity, ReviewSeverity::Low);
+    }
+
+    #[test]
+    fn reports_parse_attempted_when_findings_like_content_present_but_not_parsable() {
+        let report = ReviewReport::from_model_output(
+            "I found some issues: {\"findings\": [malformed json here}",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::ParseAttemptedButFailed);
+        assert!(report.findings.is_empty());
+        // Must not silently show 0 findings as if the review was clean.
+    }
+
+    #[test]
+    fn parses_prose_with_json_containing_nested_braces_in_strings() {
+        let report = ReviewReport::from_model_output(
+            "Result:\n{\"findings\":[{\"severity\":\"medium\",\"file\":\"src/main.rs\",\"line\":10,\"title\":\"Nested braces\",\"evidence\":\"found { and } in string\",\"risk\":\"parser bug\",\"suggestion\":\"escape properly\",\"confidence\":0.8}]}\nEnd.",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].evidence, "found { and } in string");
+    }
+
+    #[test]
+    fn parses_raw_json_no_findings_as_structured() {
+        // C20.5-A R2: {"findings":[]} must parse as Structured, not fallback.
+        let report = ReviewReport::from_model_output(r#"{"findings":[]}"#);
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn parses_pretty_json_object_embedded_in_prose() {
+        // C20.5-A R3: pretty-printed JSON with newlines after `{` must parse.
+        let report = ReviewReport::from_model_output(
+            "Here is output:\n\n{\n  \"findings\": [\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/lib.rs\",\n      \"line\": 1,\n      \"title\": \"Pretty JSON\",\n      \"evidence\": \"pretty printed\",\n      \"risk\": \"none\",\n      \"suggestion\": \"none\",\n      \"confidence\": 0.5\n    }\n  ]\n}\n\nDone.",
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].title, "Pretty JSON");
+    }
+
+    #[test]
+    fn parses_pretty_json_with_cjk_and_emoji_in_string_fields() {
+        let report = ReviewReport::from_model_output(
+            "Review:\n{\n  \"findings\": [\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/中文.rs\",\n      \"line\": 8,\n      \"title\": \"中文路径 ✅\",\n      \"evidence\": \"含有 emoji 🚀 和中文字符\",\n      \"risk\": \"低风险\",\n      \"suggestion\": \"保持 UTF-8 字节边界安全\",\n      \"confidence\": 0.7\n    }\n  ]\n}\nEnd.",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].title, "中文路径 ✅");
+        assert!(report.findings[0].evidence.contains("🚀"));
+    }
+
+    #[test]
+    fn parses_json_after_unbalanced_brace_noise() {
+        let report = ReviewReport::from_model_output(
+            "Model note with an unmatched brace { before the real JSON.\n{\"findings\":[{\"severity\":\"low\",\"file\":\"src/lib.rs\",\"line\":2,\"title\":\"After noise\",\"evidence\":\"valid object after noise\",\"risk\":\"low\",\"suggestion\":\"keep scanning\",\"confidence\":0.6}]}",
+        );
+
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].title, "After noise");
     }
 
     #[test]

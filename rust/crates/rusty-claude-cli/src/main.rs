@@ -3467,9 +3467,10 @@ impl LiveCli {
         let export_path = resolve_direct_export_path(requested_path, || {
             format!("sego-response-{}.md", default_date().replace('-', ""))
         })?;
-        fs::write(&export_path, text)?;
+        fs::write(&export_path, &text)?;
+        let bytes = fs::metadata(&export_path).map_or(text.len() as u64, |metadata| metadata.len());
         println!(
-            "Export\n  Result           wrote latest assistant response\n  File             {}",
+            "Export\n  Result           wrote latest assistant response\n  Kind             markdown\n  Bytes            {bytes}\n  File             {}",
             export_path.display()
         );
         Ok(())
@@ -3753,18 +3754,31 @@ fn format_review_completion_summary(
     const TERMINAL_FINDING_LIMIT: usize = 10;
 
     let highest_severity = report.highest_severity().map_or("none", runtime::ReviewSeverity::label);
+    // C20.5-A R2: do not display "Findings 0" when parsing was attempted but failed.
+    let findings_display =
+        if report.parse_status == runtime::ReviewParseStatus::ParseAttemptedButFailed {
+            "unknown (parse failed)".to_string()
+        } else {
+            report.findings.len().to_string()
+        };
     let mut lines = vec![
         "Review Report".to_string(),
         format!("  ID               {}", artifact.id),
         format!("  Diff hash        {}", artifact.diff_hash),
         format!("  Parse status     {}", report.parse_status.label()),
-        format!("  Findings         {}", report.findings.len()),
+        format!("  Findings         {findings_display}"),
         format!("  Highest severity {highest_severity}"),
         String::new(),
         "Findings".to_string(),
     ];
 
-    if report.findings.is_empty() {
+    if report.parse_status == runtime::ReviewParseStatus::ParseAttemptedButFailed {
+        lines.push(
+            "  Structured findings could not be parsed, but the raw output appears to contain findings."
+                .to_string(),
+        );
+        lines.push("  Open the Markdown report to inspect the raw output.".to_string());
+    } else if report.findings.is_empty() {
         lines.push("  No structured findings.".to_string());
     } else {
         for (index, finding) in report.findings.iter().take(TERMINAL_FINDING_LIMIT).enumerate() {
@@ -9926,6 +9940,32 @@ UU conflicted.rs",
         let summary = format_review_completion_summary(&report, &artifact);
         assert!(summary.contains("No structured findings."));
         assert!(summary.contains("Structured parsing failed"));
+    }
+
+    #[test]
+    fn review_completion_summary_marks_parse_attempted_as_unknown() {
+        // C20.5-A R3: ParseAttemptedButFailed must show "unknown (parse failed)",
+        // not misleading "Findings 0" / "No structured findings."
+        let report = runtime::ReviewReport {
+            findings: vec![],
+            raw_text: String::new(),
+            parse_status: runtime::ReviewParseStatus::ParseAttemptedButFailed,
+        };
+        let artifact = runtime::PersistedReviewArtifact {
+            id: "review-parse-failed".into(),
+            diff_hash: "hash1".into(),
+            json_path: std::path::PathBuf::from(".sego/reviews/r.json"),
+            markdown_path: std::path::PathBuf::from(".sego/reviews/r.md"),
+            index_path: std::path::PathBuf::from(".sego/reviews/index.jsonl"),
+        };
+        let summary = format_review_completion_summary(&report, &artifact);
+
+        assert!(summary.contains("parse_attempted_but_failed"));
+        assert!(summary.contains("unknown (parse failed)"));
+        assert!(summary.contains("Structured findings could not be parsed"));
+        assert!(summary.contains("Open the Markdown report"));
+        assert!(!summary.contains("Findings         0"));
+        assert!(!summary.contains("No structured findings."));
     }
 
     #[test]
