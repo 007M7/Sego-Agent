@@ -4449,21 +4449,37 @@ fn resolve_repl_runtime(language: &str) -> Result<ReplRuntime, String> {
     match language.trim().to_ascii_lowercase().as_str() {
         "python" | "py" => Ok(ReplRuntime {
             program: std::env::var("PYTHON")
-                .map(Cow::Owned)
                 .ok()
-                .or_else(|| detect_first_command(&["python3", "python"]).map(Cow::Borrowed))
+                .filter(|value| !value.trim().is_empty())
+                .map(Cow::Owned)
+                .or_else(|| {
+                    #[cfg(windows)]
+                    {
+                        // On Windows, prefer `python` / `py` before `python3` because
+                        // `python3` is often a Microsoft Store alias stub that cannot run.
+                        // Also filter Store app stubs specifically for Python (not globally).
+                        ["python", "py", "python3"]
+                            .iter()
+                            .find_map(|c| python_command_path(c))
+                            .map(Cow::Owned)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        resolve_first_command(&["python3", "python"]).map(Cow::Owned)
+                    }
+                })
                 .ok_or_else(|| String::from("python runtime not found"))?,
             args: &["-c"],
         }),
         "javascript" | "js" | "node" => Ok(ReplRuntime {
-            program: detect_first_command(&["node"])
-                .map(Cow::Borrowed)
+            program: resolve_first_command(&["node"])
+                .map(Cow::Owned)
                 .ok_or_else(|| String::from("node runtime not found"))?,
             args: &["-e"],
         }),
         "sh" | "shell" | "bash" => Ok(ReplRuntime {
-            program: detect_first_command(&["bash", "sh"])
-                .map(Cow::Borrowed)
+            program: resolve_first_command(&["bash", "sh"])
+                .map(Cow::Owned)
                 .ok_or_else(|| String::from("shell runtime not found"))?,
             args: &["-lc"],
         }),
@@ -4471,8 +4487,28 @@ fn resolve_repl_runtime(language: &str) -> Result<ReplRuntime, String> {
     }
 }
 
-fn detect_first_command(commands: &[&'static str]) -> Option<&'static str> {
-    commands.iter().copied().find(|command| command_exists(command))
+/// Find the first command from `candidates` whose resolved full path passes
+/// `command_path` (i.e. exists and is not a known-broken alias). Returns the
+/// full path so `Command::new` uses an exact executable, avoiding PATH ambiguity.
+fn resolve_first_command(candidates: &[&'static str]) -> Option<String> {
+    candidates.iter().find_map(|c| command_path(c))
+}
+
+/// Like `command_path`, but also excludes Microsoft Store app stubs
+/// (e.g. `WindowsApps\python3.exe`) that report exit code 9009.
+/// Only used for Python runtime detection, not general command lookup.
+#[cfg(windows)]
+fn python_command_path(command: &str) -> Option<String> {
+    let output = std::process::Command::new("where").arg(command).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find(|line| !line.contains("\\Microsoft\\WindowsApps\\"))
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Clone, Copy)]
@@ -4787,10 +4823,6 @@ fn detect_powershell_shell() -> std::io::Result<String> {
             "PowerShell executable not found (expected `pwsh` or `powershell` in PATH)",
         ))
     }
-}
-
-fn command_exists(command: &str) -> bool {
-    command_path(command).is_some()
 }
 
 fn command_path(command: &str) -> Option<String> {
