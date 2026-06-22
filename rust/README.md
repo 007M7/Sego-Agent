@@ -1,8 +1,10 @@
-# 🦞 Claw Code — Rust Implementation
+# Sego Agent ? Rust Implementation
 
-A high-performance Rust rewrite of the Claw Code CLI agent harness. Built for speed, safety, and native tool execution.
+A high-performance Rust implementation of the Sego AI coding agent. Built for speed, safety, and native tool execution.
 
-For a task-oriented guide with copy/paste examples, see [`../USAGE.md`](../USAGE.md).
+Sego is an engineering trust layer / review layer for AI-generated code: let your AI coding tool (Claude Code, Codex, Cursor, Zcode, etc.) write the code, then run Sego to independently verify correctness, regressions, security risks, and data-flow drift before you commit.
+
+For a task-oriented guide with copy/paste examples, see [`USAGE.md`](USAGE.md).
 
 ## Quick Start
 
@@ -24,6 +26,52 @@ cargo run -p rusty-claude-cli -- prompt "explain this codebase"
 cargo run -p rusty-claude-cli -- --output-format json prompt "summarize src/main.rs"
 ```
 
+## Code Review
+
+Sego supports multiple review scopes:
+
+```bash
+# Review current workspace changes
+cargo run -p rusty-claude-cli -- review
+
+# Review staged changes only
+cargo run -p rusty-claude-cli -- review staged
+
+# Full repository audit (clean clones, non-Git directories)
+cargo run -p rusty-claude-cli -- review --full E:\repo
+
+# Inspect saved review artifacts
+cargo run -p rusty-claude-cli -- review list
+cargo run -p rusty-claude-cli -- review show <id>
+```
+
+Review artifacts are saved to `.sego/reviews/` in the workspace root. Each review produces a Markdown report, a JSON findings file, and an index entry in `index.jsonl`.
+
+### Export / Save
+
+```bash
+# In the REPL, export the latest assistant response:
+/export E:\code\review.md
+
+# Or via natural language (requires explicit "last/previous/??/???"):
+# "?????????? E:\review.md"
+# "save the last review report to PR43-review.md"
+```
+
+## Natural-Language Local Actions
+
+Sego supports deterministic natural-language triggers for local actions. Say `/dir` to see the action directory, or try:
+
+| Natural language | What Sego does |
+|---|---|
+| `?? review ????` | Code review |
+| `?????? D:\Project` | Switch workspace |
+| `????????? E:\out.md` | Export latest response |
+| `????` | Check for updates |
+| `??` | Exit Sego |
+
+The export/save action has a **safety boundary**: it requires explicit `last/previous/??/???/??`. Bare phrases like "????" or "??? md" without a clear target will show `/dir` guidance instead of guessing.
+
 ## Configuration
 
 Set your API credentials:
@@ -42,7 +90,7 @@ cargo run -p rusty-claude-cli -- login
 
 ## Mock parity harness
 
-The workspace now includes a deterministic Anthropic-compatible mock service and a clean-environment CLI harness for end-to-end parity checks.
+The workspace includes a deterministic Anthropic-compatible mock service and a clean-environment CLI harness for end-to-end parity checks.
 
 ```bash
 cd rust/
@@ -69,38 +117,39 @@ Harness coverage:
 
 Primary artifacts:
 
-- `crates/mock-anthropic-service/` — reusable mock Anthropic-compatible service
-- `crates/rusty-claude-cli/tests/mock_parity_harness.rs` — clean-env CLI harness
-- `scripts/run_mock_parity_harness.sh` — reproducible wrapper
-- `scripts/run_mock_parity_diff.py` — scenario checklist + PARITY mapping runner
-- `mock_parity_scenarios.json` — scenario-to-PARITY manifest
+- `crates/mock-anthropic-service/` ? reusable mock Anthropic-compatible service
+- `crates/rusty-claude-cli/tests/mock_parity_harness.rs` ? clean-env CLI harness
+- `scripts/run_mock_parity_harness.sh` ? reproducible wrapper
+- `scripts/run_mock_parity_diff.py` ? scenario checklist + PARITY mapping runner
+- `mock_parity_scenarios.json` ? scenario-to-PARITY manifest
 
 ## Features
 
 | Feature | Status |
 |---------|--------|
-| Anthropic API + streaming | ✅ |
-| OAuth login/logout | ✅ |
-| Interactive REPL (rustyline) | ✅ |
-| Tool system (bash, read, write, edit, grep, glob) | ✅ |
-| Web tools (search, fetch) | ✅ |
-| Sub-agent orchestration | ✅ |
-| Todo tracking | ✅ |
-| Notebook editing | ✅ |
-| CLAUDE.md / project memory | ✅ |
-| Config file hierarchy (.claude.json) | ✅ |
-| Permission system | ✅ |
-| MCP server lifecycle | ✅ |
-| Session persistence + resume | ✅ |
-| Extended thinking (thinking blocks) | ✅ |
-| Cost tracking + usage display | ✅ |
-| Git integration | ✅ |
-| Markdown terminal rendering (ANSI) | ✅ |
-| Model aliases (opus/sonnet/haiku) | ✅ |
-| Slash commands (/status, /compact, /clear, etc.) | ✅ |
-| Hooks (PreToolUse/PostToolUse) | 🔧 Config only |
-| Plugin system | 📋 Planned |
-| Skills registry | 📋 Planned |
+| Anthropic API + streaming | ? |
+| OAuth login/logout | ? |
+| Interactive REPL (rustyline) | ? |
+| Tool system (bash, read, write, edit, grep, glob) | ? |
+| Web tools (search, fetch) | ? |
+| Sub-agent orchestration | ? |
+| Todo tracking | ? |
+| Notebook editing | ? |
+| CLAUDE.md / project memory | ? |
+| Config file hierarchy (.claude.json) | ? |
+| Permission system | ? |
+| MCP server lifecycle | ? |
+| Session persistence + resume | ? |
+| Extended thinking (thinking blocks) | ? |
+| Cost tracking + usage display | ? |
+| Git integration | ? |
+| Full repo audit (non-Git) | ? |
+| Markdown terminal rendering (ANSI) | ? |
+| Model aliases (opus/sonnet/haiku) | ? |
+| Slash commands (/status, /compact, /clear, etc.) | ? |
+| Hooks (PreToolUse/PostToolUse) | ?? Config only |
+| Plugin system | ?? Planned |
+| Skills registry | ?? Planned |
 
 ## Model Aliases
 
@@ -115,7 +164,7 @@ Short names resolve to the latest model versions:
 ## CLI Flags
 
 ```
-claw [OPTIONS] [COMMAND]
+sego [OPTIONS] [COMMAND]
 
 Options:
   --model MODEL                    Override the active model
@@ -161,44 +210,45 @@ Tab completion expands slash commands, model aliases, permission modes, and rece
 | `/resume [id]` | Resume a saved conversation |
 | `/session [id]` | Resume a previous session |
 | `/version` | Show version |
+| `/dir` | Show action directory with usage examples |
 
-See [`../USAGE.md`](../USAGE.md) for examples covering interactive use, JSON automation, sessions, permissions, and the mock parity harness.
+See [`USAGE.md`](USAGE.md) for examples covering interactive use, JSON automation, sessions, permissions, and the mock parity harness.
 
 ## Workspace Layout
 
 ```
 rust/
-├── Cargo.toml              # Workspace root
-├── Cargo.lock
-└── crates/
-    ├── api/                # Anthropic API client + SSE streaming
-    ├── commands/           # Shared slash-command registry
-    ├── compat-harness/     # TS manifest extraction harness
-    ├── mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
-    ├── plugins/            # Plugin registry and hook wiring primitives
-    ├── runtime/            # Session, config, permissions, MCP, prompts
-    ├── rusty-claude-cli/   # Main CLI binary (`claw`)
-    ├── telemetry/          # Session tracing and usage telemetry types
-    └── tools/              # Built-in tool implementations
+??? Cargo.toml              # Workspace root
+??? Cargo.lock
+??? crates/
+    ??? api/                # Anthropic API client + SSE streaming
+    ??? commands/           # Shared slash-command registry
+    ??? compat-harness/     # TS manifest extraction harness
+    ??? mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+    ??? plugins/            # Plugin registry and hook wiring primitives
+    ??? runtime/            # Session, config, permissions, MCP, prompts
+    ??? rusty-claude-cli/   # Main CLI binary (`sego`)
+    ??? telemetry/          # Session tracing and usage telemetry types
+    ??? tools/              # Built-in tool implementations
 ```
 
 ### Crate Responsibilities
 
-- **api** — HTTP client, SSE stream parser, request/response types, auth (API key + OAuth bearer)
-- **commands** — Slash command definitions and help text generation
-- **compat-harness** — Extracts tool/prompt manifests from upstream TS source
-- **mock-anthropic-service** — Deterministic `/v1/messages` mock for CLI parity tests and local harness runs
-- **plugins** — Plugin metadata, registries, and hook integration surfaces
-- **runtime** — `ConversationRuntime` agentic loop, `ConfigLoader` hierarchy, `Session` persistence, permission policy, MCP client, system prompt assembly, usage tracking
-- **rusty-claude-cli** — REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing
-- **telemetry** — Session trace events and supporting telemetry payloads
-- **tools** — Tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, REPL runtimes
+- **api** ? HTTP client, SSE stream parser, request/response types, auth (API key + OAuth bearer)
+- **commands** ? Slash command definitions and help text generation
+- **compat-harness** ? Extracts tool/prompt manifests from upstream TS source
+- **mock-anthropic-service** ? Deterministic `/v1/messages` mock for CLI parity tests and local harness runs
+- **plugins** ? Plugin metadata, registries, and hook integration surfaces
+- **runtime** ? `ConversationRuntime` agentic loop, `ConfigLoader` hierarchy, `Session` persistence, permission policy, MCP client, system prompt assembly, usage tracking
+- **rusty-claude-cli** ? REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing
+- **telemetry** ? Session trace events and supporting telemetry payloads
+- **tools** ? Tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, REPL runtimes
 
 ## Stats
 
 - **~20K lines** of Rust
 - **9 crates** in workspace
-- **Binary name:** `claw`
+- **Binary name:** `sego`
 - **Default model:** `claude-opus-4-6`
 - **Default permissions:** `danger-full-access`
 
