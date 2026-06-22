@@ -384,7 +384,18 @@ fn mentions_workspace_switch_without_path(input: &str, lower: &str) -> bool {
 
 fn mentions_export_without_target(input: &str, lower: &str) -> bool {
     matches!(lower, "export" | "save report" | "save review" | "export report")
-        || matches!(input, "导出" | "保存报告" | "导出报告" | "保存审查结果" | "导出审查结果")
+        || matches!(
+            input,
+            "导出"
+                | "保存报告"
+                | "导出报告"
+                | "保存审查结果"
+                | "导出审查结果"
+                | "保存审查报告"
+                | "导出审查报告"
+                | "保存为md"
+                | "写成md"
+        )
 }
 
 fn mentions_update_without_target(input: &str, lower: &str) -> bool {
@@ -568,6 +579,8 @@ mod tests {
             ),
             Some(NlIntent::Review { scope: None })
         );
+        // C20.5-A: bare "save review report" without "last" does NOT trigger export
+        // (preserves C16 safe boundary).
         assert_eq!(parse_nl_intent("save review report to PR43-review.md"), None);
         assert_eq!(
             parse_nl_intent("save the last review report to PR43-review.md"),
