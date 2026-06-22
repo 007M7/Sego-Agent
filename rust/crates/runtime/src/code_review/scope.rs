@@ -7,6 +7,9 @@ pub enum ReviewScope {
     Staged,
     Unstaged,
     Path(PathBuf),
+    /// Full repository audit: walk the entire directory tree (skipping
+    /// `.git`, `node_modules`, virtual envs, build artifacts, caches).
+    FullRepo(PathBuf),
 }
 
 impl ReviewScope {
@@ -19,6 +22,16 @@ impl ReviewScope {
             "workspace" | "all" | "." => Ok(Self::Workspace),
             "staged" | "--staged" | "cached" | "--cached" => Ok(Self::Staged),
             "unstaged" | "--unstaged" | "working" | "worktree" => Ok(Self::Unstaged),
+            // --full [path]  → FullRepo audit (C20)
+            raw if raw == "--full" => Ok(Self::FullRepo(PathBuf::from("."))),
+            raw if raw.starts_with("--full ") => {
+                let path = raw["--full ".len()..].trim();
+                if path.is_empty() {
+                    Ok(Self::FullRepo(PathBuf::from(".")))
+                } else {
+                    Ok(Self::FullRepo(PathBuf::from(path)))
+                }
+            }
             value if value.starts_with('-') => {
                 Err(ReviewScopeParseError::UnsupportedFlag { value: value.to_string() })
             }
@@ -33,6 +46,7 @@ impl ReviewScope {
             Self::Staged => "staged".to_string(),
             Self::Unstaged => "unstaged".to_string(),
             Self::Path(path) => format!("path:{}", path.display()),
+            Self::FullRepo(path) => format!("full_repo:{}", path.display()),
         }
     }
 }
@@ -88,5 +102,30 @@ mod tests {
             ReviewScope::parse(Some("--json")),
             Err(ReviewScopeParseError::UnsupportedFlag { value: "--json".to_string() })
         );
+    }
+
+    #[test]
+    fn parses_full_repo_scope() {
+        assert_eq!(ReviewScope::parse(Some("--full")), Ok(ReviewScope::FullRepo(".".into())));
+        assert_eq!(
+            ReviewScope::parse(Some("--full /home/user/project")),
+            Ok(ReviewScope::FullRepo("/home/user/project".into()))
+        );
+        assert_eq!(ReviewScope::parse(Some("--full ")), Ok(ReviewScope::FullRepo(".".into())));
+    }
+
+    #[test]
+    fn parses_full_repo_with_spaces_in_path() {
+        // R1: path with spaces must be parsed correctly.
+        assert_eq!(
+            ReviewScope::parse(Some("--full E:\\Path With Spaces")),
+            Ok(ReviewScope::FullRepo("E:\\Path With Spaces".into()))
+        );
+    }
+
+    #[test]
+    fn full_repo_label_includes_path() {
+        let scope = ReviewScope::FullRepo("/tmp/repo".into());
+        assert_eq!(scope.label(), "full_repo:/tmp/repo");
     }
 }

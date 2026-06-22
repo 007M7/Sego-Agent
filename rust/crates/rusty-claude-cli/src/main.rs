@@ -3697,11 +3697,13 @@ impl LiveCli {
 
     fn run_review(&mut self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
-        if !is_git_worktree(&cwd) {
+        let review_scope = ReviewScope::parse(scope)?;
+        let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
+        // Full repo audit works on non-Git directories too (C20).
+        if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(());
         }
-        let review_scope = ReviewScope::parse(scope)?;
         let target = collect_review_target(&cwd, review_scope)?;
         if target.is_empty() {
             print_clean_review_scope(&target);
@@ -3726,15 +3728,19 @@ impl LiveCli {
         target: ReviewTarget,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
-        if !is_git_worktree(&cwd) {
+        let is_full_repo = matches!(&target.scope, ReviewScope::FullRepo(_));
+        // Full repo audit works on non-Git directories too (C20).
+        if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(()); // REPL: print friendly message and continue, do not exit process
         }
+        // R1: for FullRepo, persist artifacts into the target repo, not cwd.
+        let workspace_root = target.workspace_root.clone().unwrap_or_else(|| cwd.clone());
         let context = ReviewContext::new(target);
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
         let review_text = self.run_turn_capture_text(&prompt, false)?;
         let report = ReviewReport::from_model_output(review_text);
-        let artifact = persist_review_artifact(&env::current_dir()?, &context.target, &report)?;
+        let artifact = persist_review_artifact(&workspace_root, &context.target, &report)?;
         println!("{}", format_review_completion_summary(&report, &artifact));
         Ok(())
     }
@@ -5074,6 +5080,39 @@ fn collect_review_target(
     cwd: &Path,
     scope: ReviewScope,
 ) -> Result<ReviewTarget, Box<dyn std::error::Error>> {
+    // C20: Full repository audit — walk the tree instead of running git diff.
+    if let ReviewScope::FullRepo(ref audit_path) = scope {
+        let repo_root_raw =
+            if audit_path.is_absolute() { audit_path.clone() } else { cwd.join(audit_path) };
+        // R2: canonicalize for stable hash/label.
+        let repo_root = std::fs::canonicalize(&repo_root_raw).map_err(|e| {
+            format!("cannot resolve full repo audit path {}: {e}", repo_root_raw.display())
+        })?;
+        if !repo_root.is_dir() {
+            return Err(format!(
+                "full repo audit target is not a directory: {}",
+                repo_root.display()
+            )
+            .into());
+        }
+        let full_tree = collect_full_repo_snapshot(&repo_root)?;
+        // R2: git_status from the target repo, not cwd.
+        let git_status = if is_git_worktree(&repo_root) {
+            run_git_diff_command_in(&repo_root, &["status", "--short", "--branch"])
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        return Ok(ReviewTarget {
+            scope,
+            git_status,
+            staged_diff: String::new(),
+            unstaged_diff: String::new(),
+            full_tree,
+            workspace_root: Some(repo_root),
+        });
+    }
+
     let git_status = run_git_diff_command_in(cwd, &["status", "--short", "--branch"])?;
     let (staged_diff, unstaged_diff) = match &scope {
         ReviewScope::Workspace => (
@@ -5091,15 +5130,327 @@ fn collect_review_target(
                 run_git_diff_command_in(cwd, &["diff", "--", path.as_ref()])?,
             )
         }
+        ReviewScope::FullRepo(_) => unreachable!("FullRepo handled above"),
     };
 
-    Ok(ReviewTarget { scope, git_status, staged_diff, unstaged_diff })
+    Ok(ReviewTarget {
+        scope,
+        git_status,
+        staged_diff,
+        unstaged_diff,
+        full_tree: String::new(),
+        workspace_root: None,
+    })
 }
 
 fn collect_staged_review_paths(cwd: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let output =
         run_git_diff_command_in(cwd, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
     Ok(output.lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).collect())
+}
+/// C20+R1: Walk a repository directory, collect file tree, manifest contents,
+/// and bounded key source file sampling.
+/// Skips `.git`, `node_modules`, virtual envs, build artifacts, and cache dirs.
+fn collect_full_repo_snapshot(repo_root: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "target",
+        "build",
+        "dist",
+        ".next",
+        ".nuxt",
+        "coverage",
+        ".cache",
+        ".idea",
+        ".vscode",
+        ".vs",
+        ".cargo",
+    ];
+
+    // R3: lock files excluded from key content (noisy, large). They still appear in file tree.
+    const KEY_MANIFEST_FILES: &[&str] = &[
+        "Cargo.toml",
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "setup.cfg",
+        "package.json",
+        "go.mod",
+        "go.sum",
+        "Makefile",
+        "CMakeLists.txt",
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        ".github/workflows",
+    ];
+
+    // R1: entry-point files.
+    const ENTRY_FILES: &[&str] = &[
+        "main.py",
+        "app.py",
+        "webapp.py",
+        "lib.rs",
+        "main.rs",
+        "index.ts",
+        "index.js",
+        "main.go",
+        "manage.py",
+        "cli.py",
+        "run.py",
+    ];
+
+    // R1: README-like files.
+    const README_FILES: &[&str] =
+        &["README.md", "README_zh.md", "README.txt", "README.rst", "README"];
+
+    // R1: key source dirs to sample.
+    const KEY_SOURCE_DIRS: &[&str] = &["src", "crates", "packages", "lib"];
+    const MAX_SOURCE_FILES_PER_DIR: usize = 8;
+    const MAX_SOURCE_FILE_CHARS: usize = 6_000;
+
+    const MAX_DEPTH: usize = 64;
+    // R3: aggregate byte cap on key_contents to avoid huge prompts.
+    const MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
+
+    let mut file_list: Vec<String> = Vec::new();
+    let mut key_contents: Vec<String> = Vec::new();
+    let mut total_key_bytes: usize = 0;
+    let mut skipped_large: usize = 0;
+    let mut unreadable: usize = 0;
+    // R2: key for sampling cap is the first matching key-source ancestor component.
+    let mut dir_source_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    // R2: stable ordering — collect top-level entries, sort, then walk.
+    if let Ok(entries) = std::fs::read_dir(repo_root) {
+        let mut top_entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
+        top_entries
+            .sort_by(|a, b| a.file_name().to_string_lossy().cmp(&b.file_name().to_string_lossy()));
+        for entry in top_entries {
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if SKIP_DIRS.contains(&file_name) {
+                continue;
+            }
+            walk_repo_dir_r2(
+                &path,
+                repo_root,
+                0,
+                MAX_DEPTH,
+                &mut file_list,
+                &mut key_contents,
+                &mut total_key_bytes,
+                MAX_SNAPSHOT_BYTES,
+                &mut skipped_large,
+                &mut unreadable,
+                SKIP_DIRS,
+                KEY_MANIFEST_FILES,
+                ENTRY_FILES,
+                README_FILES,
+                KEY_SOURCE_DIRS,
+                &mut dir_source_counts,
+                MAX_SOURCE_FILES_PER_DIR,
+                MAX_SOURCE_FILE_CHARS,
+            );
+        }
+    }
+
+    file_list.sort();
+    let mut output = String::new();
+    output.push_str("## File tree\n");
+    for f in &file_list {
+        output.push_str(f);
+        output.push('\n');
+    }
+    output.push('\n');
+
+    // R3: snapshot summary with limits info.
+    output.push_str("## Snapshot limits\n");
+    output.push_str(&format!(
+        "Key content cap reached: {}\n",
+        if total_key_bytes >= MAX_SNAPSHOT_BYTES { "yes" } else { "no" }
+    ));
+    output.push_str(&format!("Skipped large files: {skipped_large}\n"));
+    output.push_str(&format!("Unreadable files: {unreadable}\n"));
+    output.push('\n');
+
+    if !key_contents.is_empty() {
+        output.push_str("## Key files\n\n");
+        for block in &key_contents {
+            output.push_str(block);
+            output.push('\n');
+        }
+    }
+
+    Ok(output)
+}
+
+/// R2+R3: recursive directory walker with depth limit, symlink detection, stable ordering,
+/// aggregate byte cap, and unreadable-file tracking.
+#[allow(clippy::too_many_arguments)]
+fn walk_repo_dir_r2(
+    current: &Path,
+    repo_root: &Path,
+    depth: usize,
+    max_depth: usize,
+    file_list: &mut Vec<String>,
+    key_contents: &mut Vec<String>,
+    total_key_bytes: &mut usize,
+    max_snapshot_bytes: usize,
+    skipped_large: &mut usize,
+    unreadable: &mut usize,
+    skip_dirs: &[&str],
+    key_manifest_files: &[&str],
+    entry_files: &[&str],
+    readme_files: &[&str],
+    key_source_dirs: &[&str],
+    dir_source_counts: &mut std::collections::HashMap<String, usize>,
+    max_source_per_dir: usize,
+    max_source_chars: usize,
+) {
+    if depth > max_depth || !current.exists() {
+        return;
+    }
+    // R2: detect and skip symlinks to avoid loops.
+    if let Ok(meta) = current.symlink_metadata() {
+        if meta.file_type().is_symlink() {
+            return;
+        }
+    }
+    if current.is_dir() {
+        let dir_name = current.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if skip_dirs.contains(&dir_name) {
+            return;
+        }
+        // R2: stable ordering — collect entries, sort by name, then recurse.
+        if let Ok(entries) = std::fs::read_dir(current) {
+            let mut children: Vec<std::fs::DirEntry> = entries.flatten().collect();
+            children.sort_by(|a, b| {
+                a.file_name().to_string_lossy().cmp(&b.file_name().to_string_lossy())
+            });
+            for entry in children {
+                walk_repo_dir_r2(
+                    &entry.path(),
+                    repo_root,
+                    depth + 1,
+                    max_depth,
+                    file_list,
+                    key_contents,
+                    total_key_bytes,
+                    max_snapshot_bytes,
+                    skipped_large,
+                    unreadable,
+                    skip_dirs,
+                    key_manifest_files,
+                    entry_files,
+                    readme_files,
+                    key_source_dirs,
+                    dir_source_counts,
+                    max_source_per_dir,
+                    max_source_chars,
+                );
+            }
+        }
+        return;
+    }
+
+    let Ok(relative) = current.strip_prefix(repo_root) else {
+        return;
+    };
+    let rel_str = relative.to_string_lossy().replace('\\', "/");
+    file_list.push(rel_str.clone());
+
+    let file_name = current.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    let is_manifest = key_manifest_files.contains(&file_name)
+        || rel_str.ends_with("/Cargo.toml")
+        || rel_str.ends_with("/pyproject.toml")
+        || rel_str.ends_with("/package.json")
+        || rel_str.ends_with("/requirements.txt")
+        || rel_str.ends_with("/go.mod")
+        || rel_str.ends_with("/Makefile")
+        || rel_str.ends_with("/Dockerfile");
+
+    // R2: also match .yaml CI workflow files.
+    let is_ci_workflow = rel_str.contains(".github/workflows")
+        && (rel_str.ends_with(".yml") || rel_str.ends_with(".yaml"));
+    let is_readme = readme_files.contains(&file_name);
+    let is_entry = entry_files.contains(&file_name);
+
+    // R2: find the first matching key-source ancestor for the counter key.
+    let counter_key = relative
+        .components()
+        .filter_map(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            key_source_dirs.contains(&s.as_ref()).then(|| s.to_string())
+        })
+        .next()
+        .unwrap_or_else(|| {
+            relative
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        });
+
+    let is_in_key_dir = !counter_key.is_empty() && key_source_dirs.contains(&counter_key.as_str());
+
+    let mut should_sample_source = false;
+    if is_in_key_dir && !is_manifest && !is_ci_workflow && !is_readme && !is_entry {
+        let count = dir_source_counts.get(&counter_key).copied().unwrap_or(0);
+        if count < max_source_per_dir {
+            dir_source_counts.insert(counter_key.clone(), count + 1);
+            should_sample_source = true;
+        }
+    }
+
+    if is_manifest || is_ci_workflow || is_readme || is_entry || should_sample_source {
+        // R3: check aggregate cap before reading.
+        if *total_key_bytes >= max_snapshot_bytes {
+            return;
+        }
+        // R3: check file size before reading; skip very large files.
+        let file_size = current.metadata().map(|m| m.len()).unwrap_or(0);
+        const MAX_SINGLE_FILE_BYTES: u64 = 1_000_000;
+        if file_size > MAX_SINGLE_FILE_BYTES {
+            *skipped_large += 1;
+            key_contents.push(format!("### {} [skipped: {} bytes]\n", rel_str, file_size));
+            return;
+        }
+        match std::fs::read_to_string(current) {
+            Ok(content) => {
+                let max_chars = if should_sample_source { max_source_chars } else { 4000 };
+                let truncated = truncate_file_content(&content, max_chars);
+                let status =
+                    if content.chars().count() > max_chars { " [truncated]" } else { " [full]" };
+                let block = format!("### {}{}\n```\n{}\n```", rel_str, status, truncated);
+                *total_key_bytes += block.len();
+                key_contents.push(block);
+            }
+            Err(e) => {
+                *unreadable += 1;
+                key_contents.push(format!("### {} [unreadable: {}]\n", rel_str, e.kind()));
+            }
+        }
+    }
+}
+
+fn truncate_file_content(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    let truncated: String = content.chars().take(max_chars).collect();
+    format!("{truncated}\n\n[truncated: file exceeded {max_chars} characters]")
 }
 
 fn run_code_review_cli(
@@ -5109,11 +5460,13 @@ fn run_code_review_cli(
     scope: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    if !is_git_worktree(&cwd) {
+    let review_scope = ReviewScope::parse(scope)?;
+    let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
+    // Full repo audit works on non-Git directories too (C20).
+    if !is_full_repo && !is_git_worktree(&cwd) {
         eprintln!("{}", non_git_review_error(&cwd));
         std::process::exit(1);
     }
-    let review_scope = ReviewScope::parse(scope)?;
     let target = collect_review_target(&cwd, review_scope)?;
     if target.is_empty() {
         print_clean_review_scope(&target);

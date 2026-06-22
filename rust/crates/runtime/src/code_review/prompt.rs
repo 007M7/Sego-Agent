@@ -17,32 +17,63 @@ impl Default for ReviewPromptOptions {
 
 #[must_use]
 pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions) -> String {
+    let is_full_repo = matches!(&context.target.scope, ReviewScope::FullRepo(_));
+
     let mut prompt = vec![
         "You are Sego Review Agent.".to_string(),
         "Mode: read-only code review. Do not modify files, run write operations, commit, or change permissions.".to_string(),
         format!("Review scope: {}", context.target.scope.label()),
         String::new(),
-        "Task: review the current git diff for correctness, regressions, security risks, data-flow drift, missing tests, and maintainability issues.".to_string(),
-        "Findings must be specific and evidence-based. Avoid broad summaries unless there are no findings.".to_string(),
-        String::new(),
-        "Closed-loop verification requirements:".to_string(),
-        "- Do not claim a generated file, lint result, syntax check, test, dry-run, or runtime output exists/passed unless that evidence is present in the provided context.".to_string(),
-        "- If an output file or command result is proposed but not verified, label it as proposed/unverified and include the command needed to verify it.".to_string(),
-        "- Flag behavior changes separately from bug fixes, especially output schema, column names, request semantics, retry policy, filesystem paths, or data-flow changes.".to_string(),
-        "- For generated or optimized code, actively look for newly introduced regressions and include verification commands in each finding when practical.".to_string(),
-        String::new(),
-        "Domain review dimensions:".to_string(),
-        "- For network/crawler code, explicitly check URL construction, retry policy, non-retryable 4xx handling, timeout and exception handling, per-request User-Agent/header rotation if claimed, rate limiting/backoff, encoding fallback, SSRF/SSL/secrets/log leakage risks, output filename collision/overwrite behavior, dependency audit, and mockable network IO.".to_string(),
-        "- For shell command generation on Windows, flag cross-shell syntax mixing such as using CMD-only `cd /d` or `^` escaping in Bash/Git Bash, or Bash-only here-doc/path syntax in CMD/PowerShell.".to_string(),
-        String::new(),
-        "Output contract:".to_string(),
-        "- Prefer JSON only. Do not wrap the JSON in prose.".to_string(),
-        "- Shape: {\"findings\":[{\"severity\":\"critical|high|medium|low|info\",\"file\":\"path\",\"line\":123,\"title\":\"short title\",\"evidence\":\"specific diff evidence\",\"risk\":\"why it matters\",\"suggestion\":\"specific fix\",\"confidence\":0.0,\"verification_hint\":\"test or command to run\"}]}.".to_string(),
-        "- Order findings by severity.".to_string(),
-        "- If no issues are found, say exactly: No findings.".to_string(),
-        "- Do not claim tests passed unless evidence is provided in the context.".to_string(),
-        String::new(),
     ];
+
+    if is_full_repo {
+        prompt.push(
+            "Task: audit the full repository for correctness, regressions, security risks, data-flow drift, missing tests, and maintainability issues."
+                .to_string(),
+        );
+        prompt.push(
+            "The context below contains a file tree and the contents of key files (manifests, config, and entry points). Use this to identify structural issues, dependency risks, and code quality problems."
+                .to_string(),
+        );
+    } else {
+        prompt.push(
+            "Task: review the current git diff for correctness, regressions, security risks, data-flow drift, missing tests, and maintainability issues."
+                .to_string(),
+        );
+    }
+    prompt.push("Findings must be specific and evidence-based. Avoid broad summaries unless there are no findings.".to_string());
+    prompt.push(String::new());
+
+    prompt.push("Closed-loop verification requirements:".to_string());
+    prompt.push("- Do not claim a generated file, lint result, syntax check, test, dry-run, or runtime output exists/passed unless that evidence is present in the provided context.".to_string());
+    prompt.push("- If an output file or command result is proposed but not verified, label it as proposed/unverified and include the command needed to verify it.".to_string());
+    prompt.push("- Flag behavior changes separately from bug fixes, especially output schema, column names, request semantics, retry policy, filesystem paths, or data-flow changes.".to_string());
+    prompt.push("- For generated or optimized code, actively look for newly introduced regressions and include verification commands in each finding when practical.".to_string());
+    prompt.push(String::new());
+
+    if is_full_repo {
+        prompt.push("Evidence gate (full repository audit):".to_string());
+        prompt.push("- Every file path mentioned in a finding MUST appear in the file tree below. If you cannot locate a file, label it as unverified.".to_string());
+        prompt.push("- Dependency issues MUST reference a manifest file present in the tree (e.g., Cargo.toml, pyproject.toml, package.json, requirements.txt).".to_string());
+        prompt.push("- Do NOT assign critical/high severity to findings that lack direct evidence in the provided file contents.".to_string());
+        prompt.push("- For findings about missing tests or missing error handling, cite the specific file and line range from the file contents below.".to_string());
+        prompt.push(String::new());
+    }
+
+    prompt.push("Domain review dimensions:".to_string());
+    prompt.push("- For network/crawler code, explicitly check URL construction, retry policy, non-retryable 4xx handling, timeout and exception handling, per-request User-Agent/header rotation if claimed, rate limiting/backoff, encoding fallback, SSRF/SSL/secrets/log leakage risks, output filename collision/overwrite behavior, dependency audit, and mockable network IO.".to_string());
+    prompt.push("- For shell command generation on Windows, flag cross-shell syntax mixing such as using CMD-only `cd /d` or `^` escaping in Bash/Git Bash, or Bash-only here-doc/path syntax in CMD/PowerShell.".to_string());
+    prompt.push(String::new());
+
+    prompt.push("Output contract:".to_string());
+    prompt.push("- Prefer JSON only. Do not wrap the JSON in prose.".to_string());
+    prompt.push("- Shape: {\"findings\":[{\"severity\":\"critical|high|medium|low|info\",\"file\":\"path\",\"line\":123,\"title\":\"short title\",\"evidence\":\"specific diff evidence\",\"risk\":\"why it matters\",\"suggestion\":\"specific fix\",\"confidence\":0.0,\"verification_hint\":\"test or command to run\"}]}.".to_string());
+    prompt.push("- Order findings by severity.".to_string());
+    prompt.push("- If no issues are found, say exactly: No findings.".to_string());
+    prompt.push(
+        "- Do not claim tests passed unless evidence is provided in the context.".to_string(),
+    );
+    prompt.push(String::new());
 
     if !context.project_rules.is_empty() {
         prompt.push("Project rules:".to_string());
@@ -57,12 +88,22 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
         prompt.push(String::new());
     }
 
-    let diff = diff_for_scope(context);
-    if diff.trim().is_empty() {
-        prompt.push("Diff: no current changes for this review scope.".to_string());
+    if is_full_repo {
+        let tree = context.target.full_tree.trim();
+        if tree.is_empty() {
+            prompt.push("Repository snapshot: no files captured.".to_string());
+        } else {
+            prompt.push("Repository snapshot:".to_string());
+            prompt.push(fenced("text", &truncate_for_prompt(tree, options.max_diff_chars)));
+        }
     } else {
-        prompt.push("Diff:".to_string());
-        prompt.push(fenced("diff", &truncate_for_prompt(&diff, options.max_diff_chars)));
+        let diff = diff_for_scope(context);
+        if diff.trim().is_empty() {
+            prompt.push("Diff: no current changes for this review scope.".to_string());
+        } else {
+            prompt.push("Diff:".to_string());
+            prompt.push(fenced("diff", &truncate_for_prompt(&diff, options.max_diff_chars)));
+        }
     }
 
     prompt.join("\n")
@@ -86,6 +127,7 @@ fn diff_for_scope(context: &ReviewContext) -> String {
         }
         ReviewScope::Staged => context.target.staged_diff.clone(),
         ReviewScope::Unstaged => context.target.unstaged_diff.clone(),
+        ReviewScope::FullRepo(_) => String::new(),
     }
 }
 
@@ -114,6 +156,8 @@ mod tests {
             git_status: "## main\n M src/lib.rs".to_string(),
             staged_diff: String::new(),
             unstaged_diff: "diff --git a/src/lib.rs b/src/lib.rs\n".to_string(),
+            full_tree: String::new(),
+            workspace_root: None,
         });
 
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
@@ -132,6 +176,8 @@ mod tests {
             git_status: "## main".to_string(),
             staged_diff: String::new(),
             unstaged_diff: "diff --git a/src/lib.rs b/src/lib.rs\n".to_string(),
+            full_tree: String::new(),
+            workspace_root: None,
         });
 
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
@@ -148,6 +194,8 @@ mod tests {
             git_status: String::new(),
             staged_diff: String::new(),
             unstaged_diff: "x".repeat(100),
+            full_tree: String::new(),
+            workspace_root: None,
         });
 
         let prompt = build_review_prompt(
@@ -165,6 +213,8 @@ mod tests {
             git_status: String::new(),
             staged_diff: String::new(),
             unstaged_diff: String::new(),
+            full_tree: String::new(),
+            workspace_root: None,
         });
 
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
@@ -182,6 +232,8 @@ mod tests {
             git_status: String::new(),
             staged_diff: String::new(),
             unstaged_diff: String::new(),
+            full_tree: String::new(),
+            workspace_root: None,
         });
 
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
@@ -192,5 +244,27 @@ mod tests {
         assert!(prompt.contains("per-request User-Agent/header rotation"));
         assert!(prompt.contains("cross-shell syntax mixing"));
         assert!(prompt.contains("cd /d"));
+    }
+
+    #[test]
+    fn full_repo_prompt_includes_snapshot_and_evidence_gate() {
+        let context = ReviewContext::new(ReviewTarget {
+            scope: ReviewScope::FullRepo(".".into()),
+            git_status: String::new(),
+            staged_diff: String::new(),
+            unstaged_diff: String::new(),
+            full_tree: "## File tree\nsrc/lib.rs\n\n## Key files\n\n### Cargo.toml [full]\n```\n[package]\n```\n"
+                .to_string(),
+            workspace_root: Some(".".into()),
+        });
+
+        let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
+
+        assert!(prompt.contains("Review scope: full_repo:."));
+        assert!(prompt.contains("Repository snapshot:"));
+        assert!(prompt.contains("Evidence gate (full repository audit)"));
+        assert!(prompt.contains("## File tree"));
+        assert!(prompt.contains("### Cargo.toml"));
+        assert!(!prompt.contains("Diff:"));
     }
 }
