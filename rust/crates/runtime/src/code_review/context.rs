@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::ReviewScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,12 +8,22 @@ pub struct ReviewTarget {
     pub git_status: String,
     pub staged_diff: String,
     pub unstaged_diff: String,
+    /// For `FullRepo` scope: pre-collected file tree + key-file contents.
+    /// Empty for diff-based scopes.
+    pub full_tree: String,
+    /// For `FullRepo` scope: the root directory of the audited repository.
+    /// Used to place `.sego/reviews/` artifacts into the target repo, not cwd.
+    /// `None` for diff-based scopes (falls back to cwd).
+    pub workspace_root: Option<PathBuf>,
 }
 
 impl ReviewTarget {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.staged_diff.trim().is_empty() && self.unstaged_diff.trim().is_empty()
+        match &self.scope {
+            ReviewScope::FullRepo(_) => self.full_tree.trim().is_empty(),
+            _ => self.staged_diff.trim().is_empty() && self.unstaged_diff.trim().is_empty(),
+        }
     }
 }
 

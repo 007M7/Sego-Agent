@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ReviewSeverity, ReviewTarget};
+use super::{ReviewScope, ReviewSeverity, ReviewTarget};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewFinding {
@@ -313,10 +313,15 @@ pub fn latest_review_finding_statuses(
 pub fn review_diff_hash(target: &ReviewTarget) -> String {
     let mut hasher = Sha256::new();
     hasher.update(target.scope.label().as_bytes());
-    hasher.update(b"\n---staged---\n");
-    hasher.update(target.staged_diff.as_bytes());
-    hasher.update(b"\n---unstaged---\n");
-    hasher.update(target.unstaged_diff.as_bytes());
+    if matches!(&target.scope, ReviewScope::FullRepo(_)) {
+        hasher.update(b"\n---full_tree---\n");
+        hasher.update(target.full_tree.as_bytes());
+    } else {
+        hasher.update(b"\n---staged---\n");
+        hasher.update(target.staged_diff.as_bytes());
+        hasher.update(b"\n---unstaged---\n");
+        hasher.update(target.unstaged_diff.as_bytes());
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -833,7 +838,47 @@ mod tests {
             git_status: "## main\n M src/lib.rs".to_string(),
             staged_diff: String::new(),
             unstaged_diff: diff.to_string(),
+            full_tree: String::new(),
+            workspace_root: None,
         }
+    }
+
+    fn target_full_repo(full_tree: &str) -> ReviewTarget {
+        ReviewTarget {
+            scope: ReviewScope::FullRepo("/test/repo".into()),
+            git_status: String::new(),
+            staged_diff: String::new(),
+            unstaged_diff: String::new(),
+            full_tree: full_tree.to_string(),
+            workspace_root: Some("/test/repo".into()),
+        }
+    }
+
+    #[test]
+    fn full_repo_diff_hash_uses_full_tree_not_diffs() {
+        let t1 = target_full_repo("tree content A");
+        let t2 = target_full_repo("tree content B");
+        let t1_dup = target_full_repo("tree content A");
+
+        let h1 = review_diff_hash(&t1);
+        let h2 = review_diff_hash(&t2);
+        let h1_dup = review_diff_hash(&t1_dup);
+
+        assert_eq!(h1, h1_dup, "same full_tree should produce same hash");
+        assert_ne!(h1, h2, "different full_tree should produce different hash");
+        assert!(!h1.is_empty());
+        assert!(!h2.is_empty());
+    }
+
+    #[test]
+    fn full_repo_hash_differs_from_diff_based_hash() {
+        let full = target_full_repo("content");
+        let diff = target_with_diff("diff --git a/a b/a\n");
+
+        let h_full = review_diff_hash(&full);
+        let h_diff = review_diff_hash(&diff);
+
+        assert_ne!(h_full, h_diff, "FullRepo hash should differ from diff-based hash");
     }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
