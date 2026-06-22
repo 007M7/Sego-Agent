@@ -141,11 +141,13 @@ fn parse_export_last_response_intent(input: &str) -> Option<NlIntent> {
         return None;
     }
 
-    let targets_last_response = lower.contains("last")
-        || lower.contains("previous")
+    // C20.5-B: must contain explicit "last/previous/刚才/上一条" semantic.
+    // "save review report" alone is NOT sufficient.
+    let targets_last_response = contains_english_previous_response_marker(&lower)
         || input.contains("刚才")
         || input.contains("上一条")
-        || input.contains("上一次");
+        || input.contains("上一次")
+        || input.contains("上回");
     if !targets_last_response {
         return None;
     }
@@ -158,6 +160,24 @@ fn parse_export_last_response_intent(input: &str) -> Option<NlIntent> {
     }
 
     Some(NlIntent::ExportLastResponse { path })
+}
+
+fn contains_english_previous_response_marker(lower: &str) -> bool {
+    [
+        "last response",
+        "previous response",
+        "latest response",
+        "last reply",
+        "previous reply",
+        "last review",
+        "previous review",
+        "last result",
+        "previous result",
+        "last assistant",
+        "previous assistant",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn parse_export_session_intent(input: &str) -> Option<NlIntent> {
@@ -383,19 +403,45 @@ fn mentions_workspace_switch_without_path(input: &str, lower: &str) -> bool {
 }
 
 fn mentions_export_without_target(input: &str, lower: &str) -> bool {
-    matches!(lower, "export" | "save report" | "save review" | "export report")
-        || matches!(
-            input,
-            "导出"
-                | "保存报告"
-                | "导出报告"
-                | "保存审查结果"
-                | "导出审查结果"
-                | "保存审查报告"
-                | "导出审查报告"
-                | "保存为md"
-                | "写成md"
-        )
+    // C20.5-B: catch fuzzy save/export intents that lack explicit target.
+    // Provide /dir guidance instead of silently routing to model.
+    matches!(
+        lower,
+        "export"
+            | "save report"
+            | "save review"
+            | "export report"
+            | "save as markdown"
+            | "save as md"
+            | "export as markdown"
+            | "export as md"
+            | "write review"
+            | "save result"
+            | "export result"
+    ) || matches!(
+        input,
+        "导出"
+            | "保存报告"
+            | "导出报告"
+            | "保存审查结果"
+            | "导出审查结果"
+            | "保存审查报告"
+            | "导出审查报告"
+            | "保存为md"
+            | "保存为markdown"
+            | "导出为md"
+            | "导出为markdown"
+            | "写成md"
+            | "写成markdown"
+            | "输出审查报告"
+            | "输出报告"
+            | "输出为md"
+            | "生成报告"
+            | "保存全部"
+            | "导出全部"
+            | "保存所有"
+            | "导出所有"
+    )
 }
 
 fn mentions_update_without_target(input: &str, lower: &str) -> bool {
@@ -510,7 +556,10 @@ fn strip_intent_prefix<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_nl_intent_miss, parse_nl_intent, NlIntent, NlIntentMiss};
+    use super::{
+        classify_nl_intent_miss, contains_english_previous_response_marker, parse_nl_intent,
+        NlIntent, NlIntentMiss,
+    };
 
     #[test]
     fn parses_workspace_show_intents() {
@@ -586,6 +635,51 @@ mod tests {
             parse_nl_intent("save the last review report to PR43-review.md"),
             Some(NlIntent::ExportLastResponse { path: Some("PR43-review.md".to_string()) })
         );
+        assert_eq!(
+            parse_nl_intent("export the latest response to PR43-review.md"),
+            Some(NlIntent::ExportLastResponse { path: Some("PR43-review.md".to_string()) })
+        );
+        // These filenames contain "last" as a substring, but they are not previous-response
+        // references. If a catch-all `contains("last")` returns, these tests should fail.
+        assert_eq!(parse_nl_intent("save blast.md"), None,);
+        assert_eq!(parse_nl_intent("save last_report.md"), None,);
+        assert_eq!(parse_nl_intent("what was the last review for this module?"), None);
+        assert_eq!(parse_nl_intent("what was the last review for this module"), None);
+    }
+
+    #[test]
+    fn english_previous_response_marker_is_conservative() {
+        for input in [
+            "last response",
+            "previous response",
+            "latest response",
+            "last reply",
+            "previous reply",
+            "last review",
+            "previous review",
+            "last result",
+            "previous result",
+            "last assistant",
+            "previous assistant",
+        ] {
+            assert!(contains_english_previous_response_marker(input), "{input}");
+        }
+
+        for input in [
+            "",
+            " ",
+            "last",
+            "previous",
+            "latest",
+            "the last one",
+            "review last",
+            "what was last",
+            "blast.md",
+            "last_report.md",
+            "last-response.md",
+        ] {
+            assert!(!contains_english_previous_response_marker(input), "{input}");
+        }
     }
 
     #[test]
@@ -668,6 +762,31 @@ mod tests {
                 example: "把刚才的审查结果写成 E:\\code\\review.md"
             })
         );
+        for input in ["save as md", "export as markdown", "保存为md", "输出审查报告"] {
+            assert_eq!(
+                classify_nl_intent_miss(input),
+                Some(NlIntentMiss::NeedsMoreDetail {
+                    action: "导出/保存",
+                    example: "把刚才的审查结果写成 E:\\code\\review.md"
+                }),
+                "{input}"
+            );
+        }
+        for input in ["导出全部", "保存所有"] {
+            assert_eq!(
+                classify_nl_intent_miss(input),
+                Some(NlIntentMiss::NeedsMoreDetail {
+                    action: "导出/保存",
+                    example: "把刚才的审查结果写成 E:\\code\\review.md"
+                }),
+                "{input}"
+            );
+        }
+        assert_eq!(classify_nl_intent_miss("把刚才的审查结果写成 E:\\code\\review.md"), None);
+        assert_eq!(classify_nl_intent_miss("save the last review report to PR43-review.md"), None);
+        assert_eq!(classify_nl_intent_miss("查看日志"), None);
+        assert_eq!(classify_nl_intent_miss("清理日志"), None);
+        assert_eq!(classify_nl_intent_miss("显示日志"), None);
         assert_eq!(
             classify_nl_intent_miss("切换目录"),
             Some(NlIntentMiss::NeedsMoreDetail {

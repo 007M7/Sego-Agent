@@ -64,6 +64,31 @@ use serde::Deserialize;
 use serde_json::json;
 use tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
 
+const NO_ASSISTANT_RESPONSE_EXPORT_REASON: &str =
+    "no assistant response is available to export yet";
+
+#[derive(Debug)]
+struct NoAssistantResponseExportError;
+
+impl std::fmt::Display for NoAssistantResponseExportError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(NO_ASSISTANT_RESPONSE_EXPORT_REASON)
+    }
+}
+
+impl std::error::Error for NoAssistantResponseExportError {}
+
+fn is_no_assistant_response_export_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is::<NoAssistantResponseExportError>() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
 fn default_model() -> String {
     std::env::var("DEEPSEEK_MODEL")
         .or_else(|_| std::env::var("ANTHROPIC_MODEL"))
@@ -2958,7 +2983,13 @@ impl LiveCli {
                 Ok(false)
             }
             NlIntent::ExportLastResponse { path } => {
-                self.export_last_assistant_response(path.as_deref())?;
+                match self.export_last_assistant_response(path.as_deref()) {
+                    Ok(()) => {}
+                    Err(error) if is_no_assistant_response_export_error(error.as_ref()) => {
+                        // The failed export already printed a recovery hint. Keep REPL usable.
+                    }
+                    Err(error) => return Err(error),
+                }
                 Ok(false)
             }
             NlIntent::ExportSession { path } => {
@@ -3462,8 +3493,19 @@ impl LiveCli {
         &self,
         requested_path: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let text = latest_assistant_text(self.runtime.session())
-            .ok_or("no assistant response is available to export yet")?;
+        let text = match latest_assistant_text(self.runtime.session()) {
+            Some(text) => text,
+            None => {
+                // C20.5-B: structured recovery hint for missing assistant response.
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let target = requested_path.unwrap_or("(default)");
+                eprintln!(
+                    "Export\n  Result           failed\n  Reason           {NO_ASSISTANT_RESPONSE_EXPORT_REASON}\n  Target           {target}\n  Detail           target path was not written because there is no assistant response yet\n  Workspace        {}\n  Next step        Run a prompt first, or use /dir to see export commands.",
+                    cwd.display()
+                );
+                return Err(Box::new(NoAssistantResponseExportError));
+            }
+        };
         let export_path = resolve_direct_export_path(requested_path, || {
             format!("sego-response-{}.md", default_date().replace('-', ""))
         })?;
@@ -4163,24 +4205,46 @@ fn render_repl_help() -> String {
 
 fn render_natural_language_directory() -> String {
     [
-        "Sego 常用动作目录".to_string(),
-        "  工作区".to_string(),
-        "    /workspace                 当前工作区 / 当前目录".to_string(),
-        "    /cd D:\\YourProject         切换到 D:\\YourProject / 打开项目 D:\\YourProject"
+        "Sego 常用动作目录 (Action Directory)".to_string(),
+        "  Usage: /dir  | say one of the examples below to trigger the local action".to_string(),
+        String::new(),
+        "  工作区 (Workspace)".to_string(),
+        "    /workspace                      当前工作区 / show workspace".to_string(),
+        "    /cd D:\\YourProject             切换到 D:\\YourProject / switch to D:\\YourProject"
             .to_string(),
-        "  审查".to_string(),
-        "    /review                    帮我 review 当前改动".to_string(),
-        "    /review staged             review staged changes / 审查已暂存改动".to_string(),
-        "    /review workspace          审查整个项目代码".to_string(),
-        "    /review safety staged      检查已暂存代码的安全风险".to_string(),
-        "  导出".to_string(),
-        "    /export                    导出当前会话".to_string(),
-        "    /export E:\\code\\session.md 导出当前会话到 E:\\code\\session.md".to_string(),
-        "    本地动作                    把刚才的审查结果写成 E:\\code\\review.md".to_string(),
-        "  更新与退出".to_string(),
-        "    sego update --check         检查更新".to_string(),
-        "    sego update                 更新到最新版".to_string(),
-        "    /exit                       退出 / 关闭 Sego".to_string(),
+        "      例: 切换到 D:\\Project  打开项目 E:\\code".to_string(),
+        String::new(),
+        "  审查 (Review)".to_string(),
+        "    /review                         帮我 review 当前改动 / review current changes"
+            .to_string(),
+        "    /review staged                  review staged changes / 审查已暂存改动".to_string(),
+        "    /review workspace               审查整个项目代码 / audit full workspace".to_string(),
+        "    /review safety staged           检查已暂存代码的安全风险".to_string(),
+        "    /review --full E:\\repo           审查整个仓库(无需git diff) / full repo audit"
+            .to_string(),
+        "      例: 审查当前改动  review staged  帮我检查代码的潜在风险".to_string(),
+        String::new(),
+        "  导出 (Save/Export)".to_string(),
+        "    /export                         导出当前会话 / export conversation".to_string(),
+        "    /export E:\\code\\session.md      导出当前会话到 E:\\code\\session.md".to_string(),
+        "    把刚才的审查结果写成 E:\\code\\review.md   (must say 刚才/上一条/last/previous)"
+            .to_string(),
+        "    export the last review to report.md  (must say last/previous)".to_string(),
+        "      例: save the last review to PR43.md  把刚才的回复保存到 E:\\out.md".to_string(),
+        String::new(),
+        "  更新 (Update)".to_string(),
+        "    sego update --check             检查更新 / check for update".to_string(),
+        "    sego update                     更新到最新版 / update sego".to_string(),
+        "      例: 检查更新  帮我更新".to_string(),
+        String::new(),
+        "  退出 (Exit)".to_string(),
+        "    /exit                           退出 Sego / exit".to_string(),
+        String::new(),
+        "  安全注意 (Safety)".to_string(),
+        "    ExportLastResponse 必须包含 刚才/上一条/last/previous，避免导出错误内容。".to_string(),
+        "    如果只说 保存报告/导出md 而不指定对象，Sego 会提示 /dir。".to_string(),
+        "    Review 需要 Git 仓库 (或使用 --full 审计任意目录)。".to_string(),
+        String::new(),
         "  说明".to_string(),
         "    未列出的普通编码、解释、讨论请求会继续交给模型处理。".to_string(),
     ]
@@ -6415,10 +6479,9 @@ fn is_git_worktree(cwd: &Path) -> bool {
 }
 
 fn non_git_review_error(cwd: &Path) -> String {
+    // C20.5-B: structured recovery hint.
     format!(
-        "Sego review needs a Git project.\n\
-         Current directory: {}\n\
-         Try:\n  sego --cwd \"D:\\YourProject\" review\n  /cd \"D:\\YourProject\"\n  cd D:\\YourProject; sego review",
+        "Review\n  Result           failed\n  Reason           no Git repository found\n  Workspace        {}\n  Next step        Run `sego review --full <path>` for non-Git directories, or use /dir.",
         cwd.display()
     )
 }
@@ -8485,8 +8548,9 @@ mod tests {
         format_permissions_switch_report, format_pr_report, format_resume_report,
         format_review_completion_summary, format_status_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, is_git_worktree, is_turn_cancelled_message,
-        non_git_review_error, normalize_permission_mode, parse_args, parse_git_status_branch,
+        format_unknown_slash_command_message, is_git_worktree,
+        is_no_assistant_response_export_error, is_turn_cancelled_message, non_git_review_error,
+        normalize_permission_mode, parse_args, parse_git_status_branch,
         parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
         print_help_to, push_output_block, render_code_review_readiness_for,
         render_code_review_summary_for, render_config_report, render_diff_report,
@@ -8495,8 +8559,9 @@ mod tests {
         response_to_events, resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SafetyReviewScope,
-        SlashCommand, StatusUsage, TURN_CANCELLED_MESSAGE,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
+        NoAssistantResponseExportError, SafetyReviewScope, SlashCommand, StatusUsage,
+        TURN_CANCELLED_MESSAGE,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -8514,6 +8579,33 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tools::GlobalToolRegistry;
+
+    #[test]
+    fn detects_no_assistant_response_export_error_through_source_chain() {
+        #[derive(Debug)]
+        struct WrappedExportError(NoAssistantResponseExportError);
+
+        impl std::fmt::Display for WrappedExportError {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("wrapped export error")
+            }
+        }
+
+        impl std::error::Error for WrappedExportError {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let direct = NoAssistantResponseExportError;
+        assert!(is_no_assistant_response_export_error(&direct));
+
+        let wrapped = WrappedExportError(NoAssistantResponseExportError);
+        assert!(is_no_assistant_response_export_error(&wrapped));
+
+        let unrelated = std::io::Error::other("other");
+        assert!(!is_no_assistant_response_export_error(&unrelated));
+    }
 
     fn registry_with_plugin_tool() -> GlobalToolRegistry {
         GlobalToolRegistry::with_plugin_tools(vec![PluginTool::new(
@@ -9835,8 +9927,17 @@ UU conflicted.rs",
         fs::create_dir_all(&root).expect("root dir");
         assert!(!is_git_worktree(&root));
         let error = non_git_review_error(&root);
-        assert!(error.contains("needs a Git project"));
-        assert!(error.contains("sego --cwd"));
+        // C20.5-B: recovery hint format.
+        let lines = error.lines().collect::<Vec<_>>();
+        assert_eq!(lines.first(), Some(&"Review"));
+        assert!(lines
+            .get(1)
+            .is_some_and(|line| line.contains("Result") && line.contains("failed")));
+        assert!(error.contains("no Git repository found"));
+        assert!(error.contains("Workspace"));
+        assert!(error.contains("review --full"));
+        assert!(error.contains("/dir"));
+        assert!(error.contains(&root.display().to_string()));
         assert!(!error.contains("fatal:"));
         git(&["init", "--quiet"], &root);
         assert!(is_git_worktree(&root));
