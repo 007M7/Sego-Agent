@@ -1,6 +1,6 @@
 # Rust Usage Guide
 
-This is the task-oriented usage guide for Sego Agent (Rust implementation). For the full Chinese user guide, see [‎`../docs/Sego使用指南.md`‎](../docs/Sego使用指南.md).
+This is the task-oriented usage guide for Sego Agent (Rust implementation). For the full Chinese user guide, see [`../docs/Sego使用指南.md`](../docs/Sego使用指南.md).
 
 ## Install / Build
 
