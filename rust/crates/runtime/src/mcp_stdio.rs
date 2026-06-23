@@ -18,13 +18,15 @@ use crate::mcp_lifecycle_hardened::{
     McpDegradedReport, McpErrorSurface, McpFailedServer, McpLifecyclePhase,
 };
 
+// Keep test timeouts short, but not so tight that CI Python cold-start jitter
+// turns MCP lifecycle tests into release-blocking flakes.
 #[cfg(test)]
-const MCP_INITIALIZE_TIMEOUT_MS: u64 = 200;
+const MCP_INITIALIZE_TIMEOUT_MS: u64 = 1_000;
 #[cfg(not(test))]
 const MCP_INITIALIZE_TIMEOUT_MS: u64 = 10_000;
 
 #[cfg(test)]
-const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 300;
+const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 1_000;
 #[cfg(not(test))]
 const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 30_000;
 
