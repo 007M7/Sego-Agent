@@ -11,6 +11,7 @@ mod input;
 mod nl_intent;
 mod render;
 mod sidecar;
+mod task_parser;
 
 use std::collections::{BTreeSet, HashSet};
 use std::env;
@@ -282,6 +283,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
+            // C20.6-C R2: check for required review commands in task-like input first.
+            match task_parser::parse_required_review_command(&prompt) {
+                task_parser::RequiredReviewResult::Execute { scope } => {
+                    run_code_review_cli(model, allowed_tools, permission_mode, Some(&scope))?;
+                    return Ok(());
+                }
+                task_parser::RequiredReviewResult::Blocked { detected, reason, guidance } => {
+                    println!(
+                        "Task command blocked
+  Detected         {detected}
+  Reason           {reason}
+  Guidance         {guidance}"
+                    );
+                    return Ok(());
+                }
+                task_parser::RequiredReviewResult::None => {}
+            }
+
             // Route high-confidence NL review intents to deterministic code review
             // before falling through to the model conversation path. (Cycle 15 P0-B)
             if let Some(intent) = parse_nl_intent(&prompt) {
@@ -352,6 +371,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Doctor { output_format } => print_doctor(output_format)?,
         CliAction::Telemetry { action, output_format } => {
             print_telemetry(action.as_deref(), output_format)?;
+        }
+        CliAction::PrintAndExit { message } => {
+            println!("{message}");
         }
     }
     Ok(())
@@ -453,6 +475,12 @@ enum CliAction {
     Telemetry {
         action: Option<String>,
         output_format: CliOutputFormat,
+    },
+    /// C20.6-C R6: print a pre-rendered message (e.g. task-parser blocked
+    /// guidance) and exit cleanly, without the `error:` prefix or the
+    /// `sego --help` footer that an `Err(String)` return would attach.
+    PrintAndExit {
+        message: String,
     },
 }
 
@@ -718,6 +746,47 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             Ok(CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode })
         }
         other if other.starts_with('/') => {
+            // C20.6-C R4: route combined /cd ... && /review through task_parser
+            // so the user gets task-parser blocked guidance instead of the
+            // legacy `/cd is REPL-only` error.
+            let raw = rest.join(" ");
+            let is_review_history = rest.first().map(String::as_str) == Some("/review")
+                && rest.get(1).map_or(false, |sub| {
+                    matches!(
+                        sub.as_str(),
+                        "list"
+                            | "show"
+                            | "status"
+                            | "mark"
+                            | "ready"
+                            | "summary"
+                            | "tools"
+                            | "safety"
+                    )
+                });
+            if !is_review_history {
+                match task_parser::parse_required_review_command(&raw) {
+                    task_parser::RequiredReviewResult::Execute { scope } => {
+                        return Ok(CliAction::CodeReview {
+                            scope: Some(scope),
+                            model,
+                            allowed_tools,
+                            permission_mode: PermissionMode::ReadOnly,
+                        });
+                    }
+                    task_parser::RequiredReviewResult::Blocked { detected, reason, guidance } => {
+                        // C20.6-C R6: return a clean PrintAndExit (no `error:` prefix,
+                        // no `Run `sego --help`` footer) so users see the task-parser
+                        // guidance directly.
+                        return Ok(CliAction::PrintAndExit {
+                            message: format!(
+                                "Task command blocked\n  Detected         {detected}\n  Reason           {reason}\n  Guidance         {guidance}"
+                            ),
+                        });
+                    }
+                    task_parser::RequiredReviewResult::None => {}
+                }
+            }
             parse_direct_slash_cli_action(&rest, model, allowed_tools, permission_mode)
         }
         _other => Ok(CliAction::Prompt {
@@ -2027,6 +2096,47 @@ fn run_repl(
                     );
                     break;
                 }
+                // C20.6-C R5: narrow REPL pre-check for combined commands containing
+                // /review or sego review. This catches `/cd ... && /review staged`
+                // and routes it through task_parser blocked guidance instead of
+                // letting SlashCommand::parse error with the workspace-path message.
+                //
+                // R8-4: this pre-check is intentionally duplicated with the later
+                // task-parser pass below. The pre-check exists ONLY so the combined
+                // `/cd <path> && /review <scope>` case is intercepted before
+                // SlashCommand::parse rejects `/cd` (which would otherwise produce
+                // the historical "workspace path does not exist" error). The later
+                // task-parser pass is the general entry point for ordinary
+                // task-like input after slash parsing has had its chance. The gate
+                // (`has_separator && has_review`) keeps the cost negligible for
+                // normal REPL inputs.
+                {
+                    let has_separator = trimmed.contains("&&")
+                        || trimmed.contains('|')
+                        || trimmed.contains('>')
+                        || trimmed.contains('<')
+                        || trimmed.contains(';');
+                    let has_review = trimmed.contains("/review") || trimmed.contains("sego review");
+                    if has_separator && has_review {
+                        match task_parser::parse_required_review_command(&trimmed) {
+                            task_parser::RequiredReviewResult::Execute { scope } => {
+                                cli.handle_review_command(Some(&scope))?;
+                                continue;
+                            }
+                            task_parser::RequiredReviewResult::Blocked {
+                                detected,
+                                reason,
+                                guidance,
+                            } => {
+                                println!(
+                                    "Task command blocked\n  Detected         {detected}\n  Reason           {reason}\n  Guidance         {guidance}"
+                                );
+                                continue;
+                            }
+                            task_parser::RequiredReviewResult::None => {}
+                        }
+                    }
+                }
                 match SlashCommand::parse(&trimmed) {
                     Ok(Some(command)) => {
                         if cli.handle_repl_command(command)? {
@@ -2041,6 +2151,24 @@ fn run_repl(
                     }
                 }
                 editor.push_history(input);
+                // C20.6-C R2: check for required review commands in task-like input first.
+                match task_parser::parse_required_review_command(&trimmed) {
+                    task_parser::RequiredReviewResult::Execute { scope } => {
+                        cli.handle_review_command(Some(&scope))?;
+                        continue;
+                    }
+                    task_parser::RequiredReviewResult::Blocked { detected, reason, guidance } => {
+                        println!(
+                            "Task command blocked
+  Detected         {detected}
+  Reason           {reason}
+  Guidance         {guidance}"
+                        );
+                        continue;
+                    }
+                    task_parser::RequiredReviewResult::None => {}
+                }
+
                 if let Some(intent) = parse_nl_intent(&trimmed) {
                     if cli.handle_nl_intent(intent)? {
                         cli.persist_session()?;
@@ -9370,6 +9498,29 @@ mod tests {
         assert!(report.contains("unknown slash command: /statsu"));
         assert!(report.contains("Did you mean"));
         assert!(report.contains("Use /help"));
+    }
+
+    #[test]
+    fn r6_direct_slash_combined_returns_print_and_exit_not_error() {
+        let action = parse_args(&[
+            "/cd".to_string(),
+            "E:\\Sego\\source".to_string(),
+            "&&".to_string(),
+            "/review".to_string(),
+            "staged".to_string(),
+        ])
+        .expect("combined /cd && /review must return Ok, not error");
+        match action {
+            CliAction::PrintAndExit { message } => {
+                assert!(message.starts_with("Task command blocked"));
+                assert!(!message.contains("error:"));
+                assert!(!message.contains("Run `sego --help`"));
+                assert!(!message.contains("Run sego --help"));
+                assert!(message.contains("E:\\Sego\\source"));
+                assert!(message.contains("/review staged"));
+            }
+            other => panic!("expected PrintAndExit, got {other:?}"),
+        }
     }
 
     #[test]
