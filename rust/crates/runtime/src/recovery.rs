@@ -92,6 +92,10 @@ pub struct ExitStateRecord {
     pub session_path: PathBuf,
     pub session_path_kind: RecoverySessionPathKind,
     pub cwd: PathBuf,
+    /// C20.6-B R2 UX-E: artifact path (e.g. `.sego/reviews/<id>.md`) if one
+    /// was produced before the failure. Empty/None for non-artifact sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +108,8 @@ pub struct RecoveryStateUpdate {
     pub last_user_goal: Option<String>,
     pub last_error: Option<String>,
     pub observed_at_epoch_seconds: u64,
+    /// C20.6-B R2 UX-E: optional artifact path produced before failure.
+    pub artifact_path: Option<PathBuf>,
 }
 
 impl RecoveryStateUpdate {
@@ -123,6 +129,7 @@ impl RecoveryStateUpdate {
             last_user_goal: None,
             last_error: None,
             observed_at_epoch_seconds: current_epoch_seconds(),
+            artifact_path: None,
         }
     }
 
@@ -141,6 +148,12 @@ impl RecoveryStateUpdate {
     #[must_use]
     pub fn with_last_error(mut self, error: impl Into<Option<String>>) -> Self {
         self.last_error = normalize_optional_string(error.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_artifact_path(mut self, artifact_path: impl Into<Option<PathBuf>>) -> Self {
+        self.artifact_path = artifact_path.into();
         self
     }
 
@@ -215,6 +228,7 @@ pub fn persist_recovery_state(
         session_path,
         session_path_kind: RecoverySessionPathKind::Absolute,
         cwd,
+        artifact_path: update.artifact_path,
     };
     validate_exit_state(&exit_state, &exit_state_record_path(workspace_root))?;
 
@@ -315,6 +329,9 @@ pub fn render_recovery_summary(assessment: &RecoveryAssessment) -> String {
         if let Some(error) = &exit_state.last_error {
             let _ = writeln!(summary, "- last_error: {error}");
         }
+        if let Some(artifact) = &exit_state.artifact_path {
+            let _ = writeln!(summary, "- artifact_path: {}", artifact.display());
+        }
     }
 
     if let Some(latest_session) = &assessment.latest_session {
@@ -330,7 +347,13 @@ pub fn render_recovery_summary(assessment: &RecoveryAssessment) -> String {
     let _ = writeln!(summary, "## Suggested Commands");
     let _ = writeln!(summary);
     let _ = writeln!(summary, "```powershell");
+    let _ = writeln!(summary, "# Resume the previous session");
+    let _ = writeln!(summary, "sego --resume latest");
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "# Inspect session status");
     let _ = writeln!(summary, "sego --resume latest /status");
+    let _ = writeln!(summary);
+    let _ = writeln!(summary, "# Export session to a file");
     let _ = writeln!(summary, "sego --resume latest /recovery-export");
     let _ = writeln!(summary, "```");
 
@@ -605,6 +628,54 @@ mod tests {
         let summary_path = write_recovery_summary(&root, &assessment).expect("write summary");
         assert_eq!(summary_path, recovery_summary_path(&root));
         cleanup_temp_dir(root);
+    }
+
+    #[test]
+    fn recovery_summary_renders_artifact_path_when_present() {
+        // R2 UX-E: artifact_path field flows through recovery summary.
+        let root = temp_dir("artifact-path");
+        let session_path = root.join(".claw").join("sessions").join("session.jsonl");
+        fs::create_dir_all(session_path.parent().expect("parent")).expect("create session dir");
+        fs::write(&session_path, "{}\n").expect("write session");
+        let artifact = root.join(".sego").join("reviews").join("review-test.md");
+
+        persist_recovery_state(
+            &root,
+            RecoveryStateUpdate::new(
+                "session-artifact",
+                session_path,
+                root.clone(),
+                RecoveryExitState::Crashed,
+            )
+            .with_artifact_path(Some(artifact.clone())),
+        )
+        .expect("persist");
+
+        let assessment = assess_recovery_state(&root);
+        let summary = render_recovery_summary(&assessment);
+        assert!(summary.contains("artifact_path:"));
+        assert!(summary.contains(&artifact.display().to_string()));
+        cleanup_temp_dir(root);
+    }
+
+    #[test]
+    fn old_exit_state_without_artifact_path_still_loads() {
+        // R2 UX-E: backward compatibility — old JSON missing artifact_path must deserialize.
+        let json = r#"{
+            "schema_version": 1,
+            "session_id": "old-session",
+            "state": "crashed",
+            "last_seen_at_epoch_seconds": 1700000000,
+            "last_user_goal": null,
+            "last_error": "boom",
+            "session_path": "C:/tmp/old-session.jsonl",
+            "session_path_kind": "absolute",
+            "cwd": "C:/tmp"
+        }"#;
+        let parsed: ExitStateRecord =
+            serde_json::from_str(json).expect("deserialize old exit state");
+        assert_eq!(parsed.session_id, "old-session");
+        assert!(parsed.artifact_path.is_none());
     }
 
     fn temp_dir(name: &str) -> PathBuf {

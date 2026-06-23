@@ -10,6 +10,36 @@ use sha2::{Digest, Sha256};
 
 use super::{ReviewScope, ReviewSeverity, ReviewTarget};
 
+/// C20.6-B UX-D: lightweight evidence gate status attached to each finding
+/// after deterministic validation against the captured review target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceStatus {
+    /// Finding file path was observed in the captured review target.
+    Verified,
+    /// File path could not be located in the captured target.
+    UnverifiedFile,
+    /// File located but cited line number is outside captured range.
+    UnverifiedLine,
+    /// Dependency-related finding without manifest evidence in scope.
+    UnverifiedDependency,
+    /// Finding refers to content outside captured review scope.
+    ScopeNotCaptured,
+}
+
+impl EvidenceStatus {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::UnverifiedFile => "unverified_file",
+            Self::UnverifiedLine => "unverified_line",
+            Self::UnverifiedDependency => "unverified_dependency",
+            Self::ScopeNotCaptured => "scope_not_captured",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewFinding {
     #[serde(default)]
@@ -23,6 +53,209 @@ pub struct ReviewFinding {
     pub suggestion: String,
     pub confidence: f32,
     pub verification_hint: Option<String>,
+    /// C20.6-B UX-D: optional evidence gate status; `None` for legacy artifacts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_status: Option<EvidenceStatus>,
+}
+
+/// C20.6-B UX-D: Deterministic evidence gate that annotates findings with
+/// `evidence_status` based on the captured review target. Never deletes
+/// findings; only annotates. Returns a new Vec with the annotation applied.
+#[must_use]
+pub fn evaluate_evidence_gate(
+    findings: Vec<ReviewFinding>,
+    target: &ReviewTarget,
+) -> Vec<ReviewFinding> {
+    let scope_files = collect_scope_files(target);
+    let has_manifest = scope_has_manifest(&scope_files);
+    findings
+        .into_iter()
+        .map(|mut finding| {
+            if finding.evidence_status.is_some() {
+                return finding;
+            }
+            finding.evidence_status =
+                Some(classify_finding_evidence(&finding, target, &scope_files, has_manifest));
+            finding
+        })
+        .collect()
+}
+
+fn classify_finding_evidence(
+    finding: &ReviewFinding,
+    target: &ReviewTarget,
+    scope_files: &[String],
+    has_manifest: bool,
+) -> EvidenceStatus {
+    let trimmed_file = finding.file.trim();
+    if trimmed_file.is_empty() || trimmed_file == "-" || trimmed_file == "<unknown>" {
+        return EvidenceStatus::ScopeNotCaptured;
+    }
+    if looks_like_dependency_finding(finding) && !has_manifest {
+        return EvidenceStatus::UnverifiedDependency;
+    }
+    let normalized = trimmed_file.replace('\\', "/");
+    let has_dir = normalized.contains('/');
+    // Exact match always accepted.
+    // Suffix/component match only when the model-reported path contains a
+    // directory separator (bare filenames must match exactly).
+    let file_found = scope_files.iter().any(|sf| {
+        let sf_norm = sf.replace('\\', "/");
+        sf_norm == normalized || (has_dir && sf_norm.ends_with(&format!("/{normalized}")))
+    });
+    if !file_found {
+        if scope_files.is_empty() {
+            return EvidenceStatus::ScopeNotCaptured;
+        }
+        return EvidenceStatus::UnverifiedFile;
+    }
+    // Only check line plausibility if the file was found in a diff (not just full_tree).
+    if let Some(line) = finding.line {
+        if line == 0 {
+            return EvidenceStatus::UnverifiedLine;
+        }
+        if let Some(max_line) = max_line_for_file_in_target(target, &normalized) {
+            if (line as usize) > max_line {
+                return EvidenceStatus::UnverifiedLine;
+            }
+        } else {
+            // File exists in scope (tree) but we have no diff line count.
+            // Line cannot be verified — file was found through full_tree only.
+            return EvidenceStatus::UnverifiedLine;
+        }
+    }
+    EvidenceStatus::Verified
+}
+
+fn collect_scope_files(target: &ReviewTarget) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for diff in [&target.staged_diff, &target.unstaged_diff] {
+        for line in diff.lines() {
+            if let Some(rest) = line.strip_prefix("diff --git a/") {
+                if let Some(idx) = rest.find(" b/") {
+                    files.push(rest[..idx].to_string());
+                }
+            }
+        }
+    }
+    if !target.full_tree.is_empty() {
+        let mut in_tree = false;
+        for line in target.full_tree.lines() {
+            if line.starts_with("## File tree") {
+                in_tree = true;
+                continue;
+            }
+            if in_tree {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with("##") {
+                    break;
+                }
+                files.push(trimmed.to_string());
+            }
+        }
+    }
+    files
+}
+
+fn scope_has_manifest(scope_files: &[String]) -> bool {
+    const MANIFESTS: &[&str] = &[
+        "Cargo.toml",
+        "Cargo.lock",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "go.mod",
+        "go.sum",
+        "Gemfile",
+        "Gemfile.lock",
+    ];
+    scope_files.iter().any(|f| {
+        let name = f.rsplit('/').next().unwrap_or(f);
+        MANIFESTS.iter().any(|m| name.eq_ignore_ascii_case(m))
+    })
+}
+
+fn looks_like_dependency_finding(finding: &ReviewFinding) -> bool {
+    let haystack =
+        format!("{} {} {} {}", finding.title, finding.evidence, finding.risk, finding.suggestion)
+            .to_ascii_lowercase();
+    let keywords = [
+        "dependency",
+        "dependencies",
+        "transitive",
+        "cve",
+        "vulnerable",
+        "manifest",
+        "lockfile",
+        "lock file",
+        "supply chain",
+        "依赖",
+    ];
+    keywords.iter().any(|k| haystack.contains(k))
+}
+
+/// Helper: find the maximum new-file line number observed for a given file
+/// across staged + unstaged diff hunks. Returns `None` if the file is not
+/// present in any diff (so callers should not treat that as a failure).
+fn max_line_for_file_in_target(target: &ReviewTarget, normalized_path: &str) -> Option<usize> {
+    for diff in [&target.staged_diff, &target.unstaged_diff] {
+        if let Some(max) = max_line_in_diff(diff, normalized_path) {
+            return Some(max);
+        }
+    }
+    None
+}
+
+fn max_line_in_diff(diff: &str, normalized_path: &str) -> Option<usize> {
+    let mut in_target_file = false;
+    let mut max_line: Option<usize> = None;
+    let mut current_new_line: Option<usize> = None;
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            in_target_file = rest.starts_with(normalized_path)
+                || rest.contains(&format!(" b/{normalized_path}"));
+            current_new_line = None;
+            continue;
+        }
+        if !in_target_file {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            // R4: reset before parsing each hunk header to avoid stale carry-over.
+            current_new_line = None;
+            if let Some(plus_idx) = rest.find('+') {
+                let after = &rest[plus_idx + 1..];
+                let end = after.find(' ').unwrap_or(after.len());
+                let spec = &after[..end];
+                let mut parts = spec.split(',');
+                if let Some(s) = parts.next() {
+                    if let Ok(start) = s.parse::<usize>() {
+                        let count: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+                        let last = start.saturating_add(count.saturating_sub(1));
+                        max_line = Some(max_line.map_or(last, |m| m.max(last)));
+                        current_new_line = Some(start);
+                    }
+                }
+            }
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            if let Some(n) = current_new_line.as_mut() {
+                max_line = Some(max_line.map_or(*n, |m| m.max(*n)));
+                *n += 1;
+            }
+        } else if line.starts_with(' ') {
+            if let Some(n) = current_new_line.as_mut() {
+                *n += 1;
+            }
+        }
+    }
+    max_line
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,6 +666,9 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
             if let Some(line) = finding.line {
                 let _ = writeln!(output, "- Line: `{line}`");
             }
+            if let Some(status) = finding.evidence_status {
+                let _ = writeln!(output, "- Evidence status: `{}`", status.label());
+            }
             let _ = writeln!(output, "- Evidence: {}", finding.evidence.trim());
             let _ = writeln!(output, "- Risk: {}", finding.risk.trim());
             let _ = writeln!(output, "- Suggestion: {}", finding.suggestion.trim());
@@ -649,10 +885,10 @@ fn short_hash(hash: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_review_finding_statuses, load_review_finding_statuses, load_review_index,
-        persist_review_artifact, record_review_finding_status, review_diff_hash, ReviewArtifact,
-        ReviewFinding, ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry,
-        ReviewParseStatus, ReviewReport,
+        evaluate_evidence_gate, latest_review_finding_statuses, load_review_finding_statuses,
+        load_review_index, persist_review_artifact, record_review_finding_status, review_diff_hash,
+        EvidenceStatus, ReviewArtifact, ReviewFinding, ReviewFindingStatus,
+        ReviewFindingStatusEntry, ReviewIndexEntry, ReviewParseStatus, ReviewReport,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
 
@@ -717,6 +953,7 @@ mod tests {
                 suggestion: "propagate the error".to_string(),
                 confidence: 0.91,
                 verification_hint: Some("cargo test".to_string()),
+                evidence_status: None,
             }],
             raw_text: "raw model output".to_string(),
         };
@@ -959,6 +1196,49 @@ mod tests {
     }
 
     #[test]
+    fn nonexistent_finding_file_marked_unverified_file() {
+        // UX-D: if a finding references a file not in scope, mark unverified_file.
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"nonexistent.rs","line":1,"title":"Missing","evidence":"none","risk":"none","suggestion":"none","confidence":0.1}]}"#,
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        let findings = evaluate_evidence_gate(
+            report.findings,
+            &target_with_diff(
+                "diff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,4 @@\n old\n+new\n",
+            ),
+        );
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::UnverifiedFile));
+    }
+
+    #[test]
+    fn verified_finding_remains_verified() {
+        // UX-D: a finding referencing an in-scope file with plausible line stays verified.
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/main.rs","line":4,"title":"OK","evidence":"seen","risk":"none","suggestion":"none","confidence":0.5}]}"#,
+        );
+        let findings = evaluate_evidence_gate(
+            report.findings,
+            &target_with_diff(
+                "diff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,4 @@\n old\n+new\n",
+            ),
+        );
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::Verified));
+    }
+
+    #[test]
+    fn line_beyond_file_length_marked_unverified_line() {
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/main.rs","line":999,"title":"Bad line","evidence":"none","risk":"none","suggestion":"none","confidence":0.1}]}"#,
+        );
+        let target = target_with_diff(
+            "diff --git a/src/main.rs b/src/main.rs\n@@ -1,5 +1,6 @@\n old\n+new\n",
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::UnverifiedLine));
+    }
+
+    #[test]
     fn parse_failed_artifact_persists_diagnostics() {
         // R3: parse-failed review must persist parse_error in JSON + Markdown artifacts.
         let report = ReviewReport::from_model_output(
@@ -1017,6 +1297,162 @@ mod tests {
         );
         assert_eq!(report.parse_status, ReviewParseStatus::Structured);
         assert!(report.parse_repair.is_some(), "Prose JSON must have repair marker");
+    }
+
+    #[test]
+    fn evidence_status_persisted_in_artifact_json_and_markdown() {
+        // R2: artifact JSON persists evidence_status; Markdown renders it.
+        let root = temp_path("evidence-artifact");
+        let _ = std::fs::create_dir_all(&root);
+        let target = target_with_diff(
+            "diff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,4 @@\n old\n+new\n",
+        );
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/main.rs","line":2,"title":"OK","evidence":"e","risk":"r","suggestion":"s","confidence":0.5}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        let report = ReviewReport { findings, ..report };
+        let artifact = persist_review_artifact(&root, &target, &report).expect("persist");
+
+        let json = std::fs::read_to_string(&artifact.json_path).expect("read json");
+        assert!(json.contains("\"evidence_status\""));
+        assert!(json.contains("\"verified\""));
+
+        let md = std::fs::read_to_string(&artifact.markdown_path).expect("read md");
+        assert!(md.contains("Evidence status:"));
+        assert!(md.contains("`verified`"));
+
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn old_artifact_without_evidence_status_still_loads() {
+        // R2: backward compatibility — JSON missing evidence_status must parse via serde(default).
+        let json = r#"{
+            "schema_version": 1,
+            "id": "review-old",
+            "created_at_epoch_seconds": 1700000000,
+            "scope": "staged",
+            "diff_hash": "abc",
+            "finding_count": 1,
+            "highest_severity": "low",
+            "parse_status": "structured",
+            "git_status": "",
+            "findings": [{
+                "id": "f-1",
+                "severity": "low",
+                "file": "src/lib.rs",
+                "line": 1,
+                "title": "Old",
+                "evidence": "e",
+                "risk": "r",
+                "suggestion": "s",
+                "confidence": 0.5,
+                "verification_hint": null
+            }],
+            "raw_text": ""
+        }"#;
+        let parsed: ReviewArtifact = serde_json::from_str(json).expect("deserialize old artifact");
+        assert_eq!(parsed.findings.len(), 1);
+        assert!(parsed.findings[0].evidence_status.is_none());
+    }
+
+    #[test]
+    fn bare_filename_does_not_verify_nested_scope_file() {
+        // R4: scope has src/foo/bar.rs, finding cites bar.rs — must NOT be Verified.
+        let target =
+            target_with_diff("diff --git a/foo/bar.rs b/foo/bar.rs\n@@ -1,3 +1,4 @@\n old\n+new\n");
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"bar.rs","line":2,"title":"Bare match","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(
+            findings[0].evidence_status,
+            Some(EvidenceStatus::UnverifiedFile),
+            "bare bar.rs must not verify against src/foo/bar.rs"
+        );
+    }
+
+    #[test]
+    fn relative_path_suffix_still_verifies_when_path_has_directory() {
+        // R4: scope has src/foo/bar.rs, finding cites foo/bar.rs — must be Verified.
+        let target =
+            target_with_diff("diff --git a/foo/bar.rs b/foo/bar.rs\n@@ -1,3 +1,4 @@\n old\n+new\n");
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"foo/bar.rs","line":1,"title":"Good match","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::Verified));
+    }
+
+    #[test]
+    fn malformed_middle_hunk_does_not_carry_previous_line_state() {
+        // R7: the malformed middle hunk contains enough +leak lines to push
+        // stale current_new_line above 13 if it were NOT reset. With proper
+        // reset before each hunk header parse, the leak lines are ignored
+        // and only the valid third hunk (max=12) counts -> line 13 stays
+        // UnverifiedLine.
+        let target = target_with_diff(
+            "diff --git a/src/main.rs b/src/main.rs\n@@ -1,2 +1,2 @@\n old\n+new\n@@ -5,2 +abc,2 @@\n+leak03\n+leak04\n+leak05\n+leak06\n+leak07\n+leak08\n+leak09\n+leak10\n+leak11\n+leak12\n+leak13\n@@ -10,3 +10,3 @@\n old\n+line11\n+line12\n",
+        );
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/main.rs","line":13,"title":"Line 13","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        // Without reset, stale current_new_line counting the leak lines
+        // could improperly verify line 13. With reset, only the third hunk
+        // contributes: max=12 -> line 13 is UnverifiedLine.
+        assert_eq!(
+            findings[0].evidence_status,
+            Some(EvidenceStatus::UnverifiedLine),
+            "stale current_new_line carry-over must be prevented by hunk-header reset"
+        );
+    }
+
+    #[test]
+    fn reverse_path_suffix_does_not_verify_unrelated_files() {
+        // R3: scope has bar.rs, finding cites foo/bar.rs — must NOT be Verified.
+        let target =
+            target_with_diff("diff --git a/src/bar.rs b/src/bar.rs\n@@ -1,3 +1,4 @@\n old\n+new\n");
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"foo/bar.rs","line":2,"title":"Bad match","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(
+            findings[0].evidence_status,
+            Some(EvidenceStatus::UnverifiedFile),
+            "reverse suffix must not verify unrelated paths"
+        );
+    }
+
+    #[test]
+    fn full_tree_file_with_line_but_no_diff_marks_unverified_line() {
+        // R3: file in full_tree only, no diff => line cannot be verified.
+        let mut target = target_with_diff("");
+        target.full_tree = "## File tree\nsrc/lib.rs\nsrc/main.rs\n\n## Key files\n### Cargo.toml\n```\n...\n```\n"
+            .to_string();
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/lib.rs","line":999999,"title":"Unknown line","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(
+            findings[0].evidence_status,
+            Some(EvidenceStatus::UnverifiedLine),
+            "full_tree only + unknown line must be UnverifiedLine, not Verified"
+        );
+    }
+
+    #[test]
+    fn dependency_finding_without_manifest_marked_unverified_dependency() {
+        // R2: dependency-themed finding gets UnverifiedDependency when no manifest in scope.
+        let target = target_with_diff(
+            "diff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,4 @@\n old\n+new\n",
+        );
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"high","file":"src/main.rs","line":1,"title":"Outdated dependency","evidence":"transitive CVE","risk":"vulnerable lockfile","suggestion":"bump dependency","confidence":0.7}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::UnverifiedDependency));
     }
 
     #[test]

@@ -116,6 +116,10 @@ fn execute_review(
     let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
     let review_text = cli.run_turn_capture_text(&prompt, false)?;
     let report = ReviewReport::from_model_output(review_text);
+    // C20.6-B R2 UX-D: apply evidence gate before persistence so sidecar
+    // artifacts get the same evidence_status annotations as the CLI path.
+    let findings = runtime::code_review::evaluate_evidence_gate(report.findings, &context.target);
+    let report = ReviewReport { findings, ..report };
     let artifact = persist_review_artifact(&cwd, &context.target, &report)?;
 
     Ok(SidecarReviewResponse {
@@ -233,6 +237,38 @@ mod tests {
         assert!(json.contains(r#""status":"ok""#));
         assert!(json.contains(r#""review_id":"rev-001""#));
         assert!(json.contains(r#""schema_version":1"#));
+    }
+
+    #[test]
+    fn response_serializes_evidence_status_in_findings() {
+        // R5: SidecarReviewResponse with findings carrying evidence_status
+        // must serialize to JSON containing "evidence_status":"verified".
+        let finding = runtime::code_review::ReviewFinding {
+            id: String::new(),
+            severity: runtime::code_review::ReviewSeverity::Low,
+            file: "src/lib.rs".to_string(),
+            line: Some(1),
+            title: "Test".to_string(),
+            evidence: "e".to_string(),
+            risk: "r".to_string(),
+            suggestion: "s".to_string(),
+            confidence: 0.5,
+            verification_hint: None,
+            evidence_status: Some(runtime::code_review::EvidenceStatus::Verified),
+        };
+        let response = SidecarReviewResponse {
+            schema_version: 1,
+            status: "ok".to_string(),
+            review_id: Some("rev-evidence".to_string()),
+            diff_hash: Some("sha256:abc".to_string()),
+            artifact_path: Some(".sego/reviews/rev-evidence.json".to_string()),
+            findings: Some(vec![finding]),
+            parse_status: Some("structured".to_string()),
+            error: None,
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        assert!(json.contains(r#""status":"ok""#));
+        assert!(json.contains(r#""evidence_status":"verified""#));
     }
 
     #[test]

@@ -3783,6 +3783,10 @@ impl LiveCli {
         let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
         let review_text = self.run_turn_capture_text(&prompt, false)?;
         let report = ReviewReport::from_model_output(review_text);
+        // C20.6-B UX-D: run deterministic evidence gate before persisting.
+        let findings =
+            runtime::code_review::evaluate_evidence_gate(report.findings, &context.target);
+        let report = ReviewReport { findings, ..report };
         let artifact = persist_review_artifact(&workspace_root, &context.target, &report)?;
         println!("{}", format_review_completion_summary(&report, &artifact));
         Ok(())
@@ -3825,12 +3829,15 @@ fn format_review_completion_summary(
     } else {
         for (index, finding) in report.findings.iter().take(TERMINAL_FINDING_LIMIT).enumerate() {
             let line = finding.line.map_or_else(|| "-".to_string(), |line| line.to_string());
+            let evidence_tag =
+                finding.evidence_status.map(|s| format!(" [{}]", s.label())).unwrap_or_default();
             lines.push(format!(
-                "  {}. [{}] {}:{}",
+                "  {}. [{}] {}:{}{}",
                 index + 1,
                 finding.severity.label(),
                 finding.file,
-                line
+                line,
+                evidence_tag
             ));
             lines.push(format!("     Title          {}", finding.title.trim()));
             push_review_summary_field(&mut lines, "Evidence", &finding.evidence);
@@ -9976,6 +9983,7 @@ UU conflicted.rs",
                 suggestion: "show the active workspace clearly".into(),
                 confidence: 0.8,
                 verification_hint: Some("run sego from a non-Git folder".into()),
+                evidence_status: None,
             }],
             raw_text: String::new(),
             parse_status: runtime::ReviewParseStatus::Structured,
@@ -10023,6 +10031,7 @@ UU conflicted.rs",
                 suggestion: "...".into(),
                 confidence: 0.5,
                 verification_hint: None,
+                evidence_status: None,
             })
             .collect();
         let report = runtime::ReviewReport {
