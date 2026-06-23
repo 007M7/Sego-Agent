@@ -39,8 +39,10 @@ archive/
 **/.sego/sessions/
 **/.sego/settings.local.json
 **/.sego/recovery/
+**/.sego/reviews/
 **/.omc/
 **/.sandbox-home/
 **/.sandbox-tmp/
-# Claw Code config  
-**/.claw/ 
+
+# Claw Code config
+**/.claw/

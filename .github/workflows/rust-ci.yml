@@ -32,7 +32,6 @@ jobs:
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -73,4 +72,3 @@ jobs:
           python-version: '3.13'
       - name: Run all tests
         run: cargo test --workspace
-    continue-on-error: true
