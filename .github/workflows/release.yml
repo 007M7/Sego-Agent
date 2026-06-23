@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   build-windows:
-    continue-on-error: true
     name: Build Windows binary
     runs-on: windows-latest
     steps:
@@ -104,6 +103,16 @@ jobs:
           cp artifacts/windows-zip/sego-windows.zip artifacts/sego-windows.zip
           cp artifacts/linux/sego artifacts/sego
           cp artifacts/macos/sego artifacts/sego-macos
+      - name: Validate release assets
+        run: |
+          set -euo pipefail
+          for asset in artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos; do
+            if [ ! -s "$asset" ]; then
+              echo "::error file=$asset::Release asset is missing or empty"
+              exit 1
+            fi
+          done
+          ls -lh artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -115,6 +124,30 @@ jobs:
           name: Sego Agent ${{ github.ref_name }}
           body: |
             ## Sego Agent ${{ github.ref_name }}
+
+            ### 中文
+
+            Sego v0.1.8 重点强化了代码审查工作流的可靠性和可解释性。
+
+            这次更新让 review 结果更容易判断：当模型输出中看起来包含 findings 但结构化解析失败时，Sego 会明确显示解析失败状态，并引导用户打开 Markdown 报告查看原始输出，而不是把结果误读成"没有问题"。导出审查报告时，CLI 也会给出更清晰的导出类型和字节信息，降低用户保存、转发、复盘报告时的歧义。
+
+            v0.1.8 也加入了更明确的证据状态和恢复提示。审查结果会尽量标注证据是否可定位、路径是否可信；当非 Git 目录、恢复会话、工作区路径等场景出现问题时，Sego 会给出更直接的下一步建议，帮助用户从失败状态回到可继续操作的状态。
+
+            另一个重要变化是任务文件中的 review 命令执行逻辑。如果任务文件明确要求运行 `/review staged`、`/review workspace` 或允许的 full review 命令，Sego 会执行这些受支持的审查命令；对于 `/commit`、`dotnet build` 等非 review 命令，Sego 会明确阻断，并说明原因和下一步建议。这让"按任务文件执行审查"更接近真实开发协作流程，同时保持边界清晰。
+
+            需要说明的是，`sego review --full <path>` 会读取关键 manifest、入口文件和目录上下文快照，帮助发现项目级风险，但它不是穷尽式静态分析，也不承诺发现所有问题。高风险发布仍需要开发者结合测试、CI、人工判断和业务上下文一起决策。
+
+            ### English
+
+            Sego v0.1.8 focuses on making the code-review workflow more reliable, diagnosable, and usable in real development loops.
+
+            Review output is now easier to interpret. When model output appears to contain findings but structured parsing fails, Sego reports a clear parse-failure state and points the user to the Markdown report instead of letting the result look like a clean review. Export output is also clearer, including the export kind and byte count so reports are easier to save, share, and audit.
+
+            This release also improves evidence status and recovery guidance. Findings now carry clearer evidence signals where possible, and recovery messages give more actionable next steps when users are working in non-Git directories, restored sessions, or path-sensitive workspaces.
+
+            Task-file review execution is also improved. When a task file explicitly requires supported review commands such as `/review staged`, `/review workspace`, or allowlisted full-review commands, Sego can execute those review commands directly. Non-review commands such as `/commit` or `dotnet build` are blocked with structured guidance, keeping the workflow useful without silently crossing execution boundaries.
+
+            One important boundary remains: `sego review --full <path>` reviews key manifests, entry points, and a directory context snapshot. It is not exhaustive static analysis and does not guarantee that every issue will be found. High-risk releases should still be gated with tests, CI, human review, and product/business context.
 
             ### Download
             - **Windows:** `sego-windows.zip` for double-click use, or `sego.exe` for terminal use

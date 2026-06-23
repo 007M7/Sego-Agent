@@ -44,3 +44,4 @@ archive/
 **/.sandbox-tmp/
 # Claw Code config  
 **/.claw/ 
+**/.sego/reviews/  
