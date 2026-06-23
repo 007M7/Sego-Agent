@@ -137,6 +137,10 @@ jobs:
 
             需要说明的是，`sego review --full <path>` 会读取关键 manifest、入口文件和目录上下文快照，帮助发现项目级风险，但它不是穷尽式静态分析，也不承诺发现所有问题。高风险发布仍需要开发者结合测试、CI、人工判断和业务上下文一起决策。
 
+            自然语言导出也更强调安全边界：当用户说“保存刚才的报告”“导出上一条响应”时，Sego 会围绕最近一次或上一条可确认响应处理，而不是把任意自然语言误当成不受限制的文件写入命令。
+
+            Windows 路径和命令组合也有更清晰的提示：类似 `/cd E:\\Sego\\source && /review staged` 的 shell 风格组合命令不会被当成一条 review 命令直接执行，建议先切换目录，再单独运行 `/review staged`，减少路径转义和误执行问题。
+
             ### English
 
             Sego v0.1.8 focuses on making the code-review workflow more reliable, diagnosable, and usable in real development loops.
@@ -148,6 +152,10 @@ jobs:
             Task-file review execution is also improved. When a task file explicitly requires supported review commands such as `/review staged`, `/review workspace`, or allowlisted full-review commands, Sego can execute those review commands directly. Non-review commands such as `/commit` or `dotnet build` are blocked with structured guidance, keeping the workflow useful without silently crossing execution boundaries.
 
             One important boundary remains: `sego review --full <path>` reviews key manifests, entry points, and a directory context snapshot. It is not exhaustive static analysis and does not guarantee that every issue will be found. High-risk releases should still be gated with tests, CI, human review, and product/business context.
+
+            Natural-language export is also bounded more carefully. Requests such as “save the last report” or “export the previous response” are tied to the latest or previous confirmable response instead of being treated as arbitrary unrestricted file-write commands.
+
+            Windows path and combined-command handling are clearer as well. Shell-style combinations such as `/cd E:\\Sego\\source && /review staged` are not treated as a single review command; users should switch directories first, then run `/review staged` separately to reduce path escaping and accidental execution issues.
 
             ### Download
             - **Windows:** `sego-windows.zip` for double-click use, or `sego.exe` for terminal use
