@@ -40,6 +40,15 @@ pub fn classify_nl_intent_miss(input: &str) -> Option<NlIntentMiss> {
     }
     let normalized = strip_polite_prefix(trimmed);
     let lower = normalized.to_ascii_lowercase();
+    // R4: check export-like phrases before generation requests so that
+    // "generate PR draft" / "生成 issue" route to NeedsMoreDetail, not model.
+    if mentions_export_without_target(normalized, &lower) {
+        return Some(NlIntentMiss::NeedsMoreDetail {
+            action: "导出/保存",
+            example: "把刚才的审查结果写成 E:\\code\\review.md",
+        });
+    }
+
     if is_generation_request(normalized, &lower)
         || has_explanation_verb(normalized, &lower)
         || has_how_to_question(normalized, &lower)
@@ -51,12 +60,6 @@ pub fn classify_nl_intent_miss(input: &str) -> Option<NlIntentMiss> {
         return Some(NlIntentMiss::NeedsMoreDetail {
             action: "切换工作区",
             example: "切换到 D:\\YourProject",
-        });
-    }
-    if mentions_export_without_target(normalized, &lower) {
-        return Some(NlIntentMiss::NeedsMoreDetail {
-            action: "导出/保存",
-            example: "把刚才的审查结果写成 E:\\code\\review.md",
         });
     }
     if mentions_update_without_target(normalized, &lower) {
@@ -403,8 +406,9 @@ fn mentions_workspace_switch_without_path(input: &str, lower: &str) -> bool {
 }
 
 fn mentions_export_without_target(input: &str, lower: &str) -> bool {
-    // C20.5-B: catch fuzzy save/export intents that lack explicit target.
-    // Provide /dir guidance instead of silently routing to model.
+    // C20.6-A R3: catch fuzzy save/export intents that lack explicit target.
+    // Space variants handled by stripping spaces before matching.
+    let compact = input.replace(' ', "");
     matches!(
         lower,
         "export"
@@ -418,8 +422,10 @@ fn mentions_export_without_target(input: &str, lower: &str) -> bool {
             | "write review"
             | "save result"
             | "export result"
+            | "write issue draft"
+            | "generate pr draft"
     ) || matches!(
-        input,
+        compact.as_str(),
         "导出"
             | "保存报告"
             | "导出报告"
@@ -434,9 +440,12 @@ fn mentions_export_without_target(input: &str, lower: &str) -> bool {
             | "写成md"
             | "写成markdown"
             | "输出审查报告"
+            | "输出审查结果"
             | "输出报告"
             | "输出为md"
             | "生成报告"
+            | "生成issue"
+            | "生成PR草稿"
             | "保存全部"
             | "导出全部"
             | "保存所有"
@@ -645,6 +654,45 @@ mod tests {
         assert_eq!(parse_nl_intent("save last_report.md"), None,);
         assert_eq!(parse_nl_intent("what was the last review for this module?"), None);
         assert_eq!(parse_nl_intent("what was the last review for this module"), None);
+    }
+
+    #[test]
+    fn generic_artifact_writing_requests_produce_safe_guidance() {
+        // C20.6-A R2: file-writing requests route to NeedsMoreDetail, not model.
+        for input in [
+            "保存报告",
+            "写成 md",
+            "输出审查结果",
+            "保存为 markdown",
+            "导出为 md",
+            "输出报告",
+            "save report",
+            "export report",
+            "生成 issue",
+            "生成 PR 草稿",
+            "write issue draft",
+            "generate PR draft",
+        ] {
+            let intent = parse_nl_intent(input);
+            assert!(!matches!(intent, Some(NlIntent::ExportLastResponse { .. })));
+            let miss = classify_nl_intent_miss(input);
+            assert!(miss.is_some(), "input {input:?}: Expected NeedsMoreDetail");
+        }
+        // Explicit previous-response markers must still work:
+        assert!(matches!(
+            parse_nl_intent("save the last review to PR43.md"),
+            Some(NlIntent::ExportLastResponse { .. })
+        ));
+    }
+
+    #[test]
+    fn explicit_previous_response_export_with_windows_paths() {
+        assert_eq!(
+            parse_nl_intent(r"把刚才的审查结果写成 E:\code\review-draft-中文报告.md"),
+            Some(NlIntent::ExportLastResponse {
+                path: Some(r"E:\code\review-draft-中文报告.md".to_string())
+            })
+        );
     }
 
     #[test]

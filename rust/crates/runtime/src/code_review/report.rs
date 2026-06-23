@@ -51,6 +51,12 @@ pub struct ReviewReport {
     pub findings: Vec<ReviewFinding>,
     pub raw_text: String,
     pub parse_status: ReviewParseStatus,
+    /// C20.6-A UX-B: parse error detail for auditability.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parse_error: String,
+    /// C20.6-A UX-B: whether a JSON repair was attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_repair: Option<String>,
 }
 
 impl ReviewReport {
@@ -60,6 +66,8 @@ impl ReviewReport {
             findings: Vec::new(),
             raw_text: raw_text.into(),
             parse_status: ReviewParseStatus::FallbackRawText,
+            parse_error: String::new(),
+            parse_repair: None,
         }
     }
 
@@ -74,6 +82,8 @@ impl ReviewReport {
                 findings: Vec::new(),
                 raw_text,
                 parse_status: ReviewParseStatus::Structured,
+                parse_error: String::new(),
+                parse_repair: None,
             };
         }
 
@@ -84,11 +94,16 @@ impl ReviewReport {
                     findings: Vec::new(),
                     raw_text,
                     parse_status: ReviewParseStatus::ParseAttemptedButFailed,
+                    parse_error: String::from("no valid JSON candidate found in model output"),
+                    parse_repair: None,
                 };
             }
             return Self::no_findings(raw_text);
         };
 
+        // C20.6-A R3: source-based repair tracking.
+        let extraction_source = json_candidate.source;
+        let json_candidate = json_candidate.text;
         let parsed = serde_json::from_str::<ReviewReportWire>(json_candidate)
             .map(|wire| wire.findings)
             .or_else(|_| serde_json::from_str::<Vec<ReviewFinding>>(json_candidate));
@@ -98,17 +113,32 @@ impl ReviewReport {
                 findings: assign_finding_ids(findings),
                 raw_text,
                 parse_status: ReviewParseStatus::Structured,
+                parse_error: String::new(),
+                parse_repair: if extraction_source != ExtractionSource::Direct {
+                    Some(format!("{extraction_source:?}"))
+                } else {
+                    None
+                },
             },
-            Err(_) => {
+            Err(e) => {
                 // C20.5-A: parsing failed but candidate text was found.
+                let parse_err = format!("serde parse error: {e}");
                 if trimmed.contains("\"findings\"") || trimmed.contains("\"findings\":") {
                     return Self {
                         findings: Vec::new(),
                         raw_text,
                         parse_status: ReviewParseStatus::ParseAttemptedButFailed,
+                        parse_error: parse_err,
+                        parse_repair: if extraction_source != ExtractionSource::Direct {
+                            Some(format!("{extraction_source:?}"))
+                        } else {
+                            None
+                        },
                     };
                 }
-                Self::no_findings(raw_text)
+                let mut r = Self::no_findings(raw_text);
+                r.parse_error = parse_err;
+                r
             }
         }
     }
@@ -138,6 +168,12 @@ struct ReviewArtifact {
     finding_count: usize,
     highest_severity: Option<ReviewSeverity>,
     parse_status: ReviewParseStatus,
+    /// C20.6-A R2: parse diagnostics persisted for auditability.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    parse_error: String,
+    /// C20.6-A R2: whether JSON repair/extraction was used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parse_repair: Option<String>,
     git_status: String,
     findings: Vec<ReviewFinding>,
     raw_text: String,
@@ -224,6 +260,9 @@ pub fn persist_review_artifact(
         finding_count: report.findings.len(),
         highest_severity: report.highest_severity(),
         parse_status: report.parse_status,
+        // C20.6-A R2: persist parse diagnostics in artifacts.
+        parse_error: report.parse_error.clone(),
+        parse_repair: report.parse_repair.clone(),
         git_status: target.git_status.clone(),
         findings: report.findings.clone(),
         raw_text: report.raw_text.clone(),
@@ -246,7 +285,7 @@ pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEnt
         return Ok(Vec::new());
     }
 
-    let contents = fs::read_to_string(index_path)?;
+    let contents = std::fs::read_to_string(index_path)?;
     contents
         .lines()
         .enumerate()
@@ -301,7 +340,7 @@ pub fn load_review_finding_statuses(
         return Ok(Vec::new());
     }
 
-    let contents = fs::read_to_string(status_path)?;
+    let contents = std::fs::read_to_string(status_path)?;
     contents
         .lines()
         .enumerate()
@@ -355,6 +394,13 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
     let _ = writeln!(output, "- Diff hash: `{}`", artifact.diff_hash);
     let _ = writeln!(output, "- Findings: `{}`", artifact.finding_count);
     let _ = writeln!(output, "- Parse status: `{}`", artifact.parse_status.label());
+    // C20.6-A R2: render parse diagnostics in Markdown.
+    if !artifact.parse_error.is_empty() {
+        let _ = writeln!(output, "- Parse error: `{}`", artifact.parse_error);
+        if let Some(ref repair) = artifact.parse_repair {
+            let _ = writeln!(output, "- Parse repair: `{}`", repair);
+        }
+    }
     if let Some(severity) = artifact.highest_severity {
         let _ = writeln!(output, "- Highest severity: `{}`", severity.label());
     }
@@ -479,10 +525,23 @@ fn stable_finding_id(finding: &ReviewFinding) -> String {
     format!("finding-{}", short_hash(&format!("{:x}", hasher.finalize())))
 }
 
-fn extract_json_candidate(text: &str) -> Option<&str> {
+/// C20.6-A R3: tracks where a JSON candidate was extracted from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtractionSource {
+    Direct,
+    Fenced,
+    Prose,
+}
+
+struct ExtractedJson<'a> {
+    text: &'a str,
+    source: ExtractionSource,
+}
+
+fn extract_json_candidate(text: &str) -> Option<ExtractedJson<'_>> {
     let trimmed = text.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Some(trimmed);
+        return Some(ExtractedJson { text: trimmed, source: ExtractionSource::Direct });
     }
 
     // Check for fenced JSON block: ```json ... ```
@@ -496,7 +555,10 @@ fn extract_json_candidate(text: &str) -> Option<&str> {
             for content_line in content.split_inclusive('\n') {
                 let candidate = content_line.trim_end_matches(&['\r', '\n'][..]).trim();
                 if candidate == "```" {
-                    return Some(content[..content_offset].trim());
+                    return Some(ExtractedJson {
+                        text: content[..content_offset].trim(),
+                        source: ExtractionSource::Fenced,
+                    });
                 }
                 content_offset += content_line.len();
             }
@@ -507,6 +569,7 @@ fn extract_json_candidate(text: &str) -> Option<&str> {
 
     // C20.5-A: fallback — search for a JSON object containing "findings" in prose text.
     extract_json_from_prose(trimmed)
+        .map(|text| ExtractedJson { text, source: ExtractionSource::Prose })
 }
 
 /// C20.5-A: Search for a `{...}` JSON object in arbitrary prose text.
@@ -640,6 +703,8 @@ mod tests {
             finding_count: 1,
             highest_severity: Some(ReviewSeverity::High),
             parse_status: ReviewParseStatus::Structured,
+            parse_error: String::new(),
+            parse_repair: None,
             git_status: "## main...origin/main".to_string(),
             findings: vec![ReviewFinding {
                 id: "f-001".to_string(),
@@ -698,6 +763,8 @@ mod tests {
             finding_count: 0,
             highest_severity: None,
             parse_status: ReviewParseStatus::FallbackRawText,
+            parse_error: String::new(),
+            parse_repair: None,
             git_status: String::new(),
             findings: vec![],
             raw_text: "No findings.".to_string(),
@@ -889,6 +956,67 @@ mod tests {
         assert_eq!(report.parse_status, ReviewParseStatus::Structured);
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].title, "After noise");
+    }
+
+    #[test]
+    fn parse_failed_artifact_persists_diagnostics() {
+        // R3: parse-failed review must persist parse_error in JSON + Markdown artifacts.
+        let report = ReviewReport::from_model_output(
+            "{\"findings\": [{\"severity\": \"bad\", \"title\": \"unclosed string}",
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::ParseAttemptedButFailed);
+        assert!(!report.parse_error.is_empty());
+
+        let root = temp_path("review-parse-failed");
+        let _ = std::fs::create_dir_all(&root);
+        let target = target_with_diff(
+            "diff --git a/src/lib.rs b/src/lib.rs
+",
+        );
+        let artifact = persist_review_artifact(&root, &target, &report).expect("persist");
+
+        // JSON artifact must contain diagnostics.
+        let json = std::fs::read_to_string(&artifact.json_path).expect("json");
+        assert!(json.contains("parse_attempted_but_failed"));
+        assert!(json.contains("parse_error"));
+
+        // Markdown artifact must contain diagnostics.
+        let md = std::fs::read_to_string(&artifact.markdown_path).expect("md");
+        assert!(md.contains("Parse status"));
+        assert!(md.contains("Parse error"));
+
+        // Index still writes.
+        let index = std::fs::read_to_string(&artifact.index_path).expect("index");
+        assert!(index.contains("parse_attempted_but_failed"));
+
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn parse_success_repair_marker_absent_for_direct_json() {
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"a.rs","line":1,"title":"ok","evidence":"e","risk":"r","suggestion":"s","confidence":0.5}]}"#,
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert!(report.parse_repair.is_none(), "Direct JSON must have no repair marker");
+    }
+
+    #[test]
+    fn parse_success_repair_marker_present_for_fenced_json() {
+        let report = ReviewReport::from_model_output(
+            "```json\n{\"findings\":[{\"severity\":\"low\",\"file\":\"a.rs\",\"line\":1,\"title\":\"fenced\",\"evidence\":\"e\",\"risk\":\"r\",\"suggestion\":\"s\",\"confidence\":0.5}]}\n```",
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert!(report.parse_repair.is_some(), "Fenced JSON must have repair marker");
+    }
+
+    #[test]
+    fn parse_success_repair_marker_present_for_prose_json() {
+        let report = ReviewReport::from_model_output(
+            "Here is output:\n{\"findings\":[{\"severity\":\"low\",\"file\":\"a.rs\",\"line\":1,\"title\":\"prose\",\"evidence\":\"e\",\"risk\":\"r\",\"suggestion\":\"s\",\"confidence\":0.5}]}\nEnd.",
+        );
+        assert_eq!(report.parse_status, ReviewParseStatus::Structured);
+        assert!(report.parse_repair.is_some(), "Prose JSON must have repair marker");
     }
 
     #[test]

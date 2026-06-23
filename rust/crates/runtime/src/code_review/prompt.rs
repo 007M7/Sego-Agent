@@ -66,7 +66,14 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
     prompt.push(String::new());
 
     prompt.push("Output contract:".to_string());
-    prompt.push("- Prefer JSON only. Do not wrap the JSON in prose.".to_string());
+    prompt.push(
+        "- ONLY output a JSON object. No prose before or after JSON. No Markdown fences."
+            .to_string(),
+    );
+    prompt.push(
+        "- All field strings must be valid JSON strings with escaped quotes and newlines."
+            .to_string(),
+    );
     prompt.push("- Shape: {\"findings\":[{\"severity\":\"critical|high|medium|low|info\",\"file\":\"path\",\"line\":123,\"title\":\"short title\",\"evidence\":\"specific diff evidence\",\"risk\":\"why it matters\",\"suggestion\":\"specific fix\",\"confidence\":0.0,\"verification_hint\":\"test or command to run\"}]}.".to_string());
     prompt.push("- Order findings by severity.".to_string());
     prompt.push("- If no issues are found, say exactly: No findings.".to_string());
@@ -164,7 +171,8 @@ mod tests {
 
         assert!(prompt.contains("You are Sego Review Agent."));
         assert!(prompt.contains("Mode: read-only code review."));
-        assert!(prompt.contains("Prefer JSON only."));
+        assert!(prompt.contains("ONLY output a JSON object"));
+        assert!(prompt.contains("All field strings must be valid JSON strings"));
         assert!(prompt.contains("\"severity\":\"critical|high|medium|low|info\""));
         assert!(prompt.contains("diff --git a/src/lib.rs b/src/lib.rs"));
     }

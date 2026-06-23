@@ -3848,6 +3848,15 @@ fn format_review_completion_summary(
             ));
         }
     }
+    // C20.6-A UX-B: surface parse error details.
+    if !report.parse_error.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("  Parse error: {}", report.parse_error));
+        if let Some(ref repair) = report.parse_repair {
+            lines.push(format!("  Parse repair: {repair}"));
+        }
+        lines.push("  Open the Markdown report to inspect the raw output.".to_string());
+    }
     if report.parse_status == runtime::ReviewParseStatus::FallbackRawText {
         lines.push(
             "  Structured parsing failed; open the Markdown report to inspect raw output."
@@ -6305,7 +6314,16 @@ fn load_review_report_from_index_entry(
         .transpose()?
         .unwrap_or(runtime::ReviewParseStatus::FallbackRawText);
 
-    Ok(ReviewReport { findings, raw_text, parse_status })
+    // C20.6-A R2: restore parse diagnostics from persisted artifact JSON.
+    let parse_error = artifact
+        .get("parse_error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let parse_repair =
+        artifact.get("parse_repair").and_then(serde_json::Value::as_str).map(String::from);
+
+    Ok(ReviewReport { findings, raw_text, parse_status, parse_error, parse_repair })
 }
 
 fn resolve_review_json_path(workspace_root: &Path, entry: &ReviewIndexEntry) -> PathBuf {
@@ -9961,6 +9979,8 @@ UU conflicted.rs",
             }],
             raw_text: String::new(),
             parse_status: runtime::ReviewParseStatus::Structured,
+            parse_error: String::new(),
+            parse_repair: None,
         };
         let artifact = runtime::PersistedReviewArtifact {
             id: "review-abc123".into(),
@@ -10009,6 +10029,8 @@ UU conflicted.rs",
             findings,
             raw_text: String::new(),
             parse_status: runtime::ReviewParseStatus::Structured,
+            parse_error: String::new(),
+            parse_repair: None,
         };
         let artifact = runtime::PersistedReviewArtifact {
             id: "review-limit".into(),
@@ -10030,6 +10052,8 @@ UU conflicted.rs",
             findings: vec![],
             raw_text: String::new(),
             parse_status: runtime::ReviewParseStatus::FallbackRawText,
+            parse_error: String::new(),
+            parse_repair: None,
         };
         let artifact = runtime::PersistedReviewArtifact {
             id: "review-empty".into(),
@@ -10051,6 +10075,8 @@ UU conflicted.rs",
             findings: vec![],
             raw_text: String::new(),
             parse_status: runtime::ReviewParseStatus::ParseAttemptedButFailed,
+            parse_error: String::new(),
+            parse_repair: None,
         };
         let artifact = runtime::PersistedReviewArtifact {
             id: "review-parse-failed".into(),
