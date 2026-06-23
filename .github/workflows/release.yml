@@ -103,16 +103,24 @@ jobs:
           cp artifacts/windows-zip/sego-windows.zip artifacts/sego-windows.zip
           cp artifacts/linux/sego artifacts/sego
           cp artifacts/macos/sego artifacts/sego-macos
-      - name: Validate release assets
+      - name: Generate release checksums
+        shell: bash
         run: |
           set -euo pipefail
-          for asset in artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos; do
+          cd artifacts
+          sha256sum sego.exe sego-windows.zip sego sego-macos > checksums.txt
+          cat checksums.txt
+      - name: Validate release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for asset in artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos artifacts/checksums.txt; do
             if [ ! -s "$asset" ]; then
               echo "::error file=$asset::Release asset is missing or empty"
               exit 1
             fi
           done
-          ls -lh artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos
+          ls -lh artifacts/sego.exe artifacts/sego-windows.zip artifacts/sego artifacts/sego-macos artifacts/checksums.txt
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -121,6 +129,7 @@ jobs:
             artifacts/sego-windows.zip
             artifacts/sego
             artifacts/sego-macos
+            artifacts/checksums.txt
           name: Sego Agent ${{ github.ref_name }}
           body: |
             ## Sego Agent ${{ github.ref_name }}
@@ -161,6 +170,7 @@ jobs:
             - **Windows:** `sego-windows.zip` for double-click use, or `sego.exe` for terminal use
             - **Linux:** `sego`
             - **macOS:** `sego-macos`
+            - **Checksums:** `checksums.txt` contains SHA-256 hashes for all release binaries
 
             ### Quick Start
             ```powershell
