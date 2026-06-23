@@ -1,6 +1,6 @@
 # Rust Usage Guide
 
-This is the task-oriented usage guide for Sego Agent (Rust implementation). For the full Chinese user guide, see [`../docs/Sego????.md`](../docs/Sego????.md).
+This is the task-oriented usage guide for Sego Agent (Rust implementation). For the full Chinese user guide, see [‎`../docs/Sego使用指南.md`‎](../docs/Sego使用指南.md).
 
 ## Install / Build
 
@@ -86,20 +86,20 @@ sego review mark <id> <finding-id> fixed
 /export E:\code\session.md
 
 # Natural language
-??????
+导出当前会话
 export conversation
 ```
 
 **Export latest assistant response (review result, code output, etc.):**
 ```bash
-# In REPL ? must explicitly say "last/previous/??/???":
-?????????? E:\review.md
+# In REPL — must explicitly say "last/previous/刚才/上一条/上回":
+把刚才的审查结果写成 E:\review.md
 save the last review report to PR43-review.md
 export the previous response to report.md
-????????? E:\out.md
+把上一条回复保存到 E:\out.md
 ```
 
-**Safety boundary**: bare phrases like "????" or "?? md" without a clear target (last/previous/??) will show `/dir` guidance instead of exporting unknown content. This prevents accidentally saving the wrong conversation turn.
+**Safety boundary**: bare phrases like "保存报告" or "导出 md" without a clear target (last/previous/刚才) will show `/dir` guidance instead of exporting unknown content. This prevents accidentally saving the wrong conversation turn.
 
 ## Non-Git Directories
 
@@ -107,7 +107,7 @@ If you run `sego review` outside a Git repository:
 
 ```bash
 # Old behavior: shows "needs a Git project" error
-# New behavior (v0.1.8 candidate): recovery hint
+# New behavior (v0.1.8): recovery hint
 Review
   Result           failed
   Reason           no Git repository found
@@ -137,13 +137,13 @@ Say `/dir` to see all available local actions with natural-language examples. Ke
 
 | Say this | Result |
 |---|---|
-| `?? review ????` | Code review |
-| `?????? D:\Project` | Switch workspace |
-| `????????? E:\out.md` | Export latest response |
-| `????` | Check for updates |
-| `??` | Exit |
+| `帮我 review 当前改动` | Code review |
+| `切换工作区到 D:\Project` | Switch workspace |
+| `把刚才的回复保存到 E:\out.md` | Export latest response |
+| `检查更新` | Check for updates |
+| `退出` | Exit |
 
-If Sego can't determine the action target (e.g., "????" without a path or "??" without specifying which response), it will show `/dir` guidance.
+If Sego can't determine the action target (e.g., "保存报告" without a path or "导出" without specifying which response), it will show `/dir` guidance.
 
 ## Known Limitation
 
