@@ -68,6 +68,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Run all tests
         run: cargo test --workspace
     continue-on-error: true
