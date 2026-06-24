@@ -140,7 +140,7 @@ sego /review safety staged # staged 安全锁
 切换到 D:\YourProject
 帮我 review 当前改动
 检查安全问题
-把刚才的审查结果写成 E:\code\review.md
+把刚才的审查结果写成 ./review.md
 导出当前会话
 检查更新
 退出
@@ -175,7 +175,7 @@ sego --permission-profile review-trust
 
 `--permission-mode` 和 `--permission-profile` 互斥（不能同时使用）。
 
-### 5. Sidecar JSON 接口（PoC）
+### 5. Sidecar JSON 接口（PoC / experimental）
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' \
@@ -185,10 +185,10 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 让外部工具通过 stdin/stdout JSON 调用 Sego 的审查能力：
 
 - stdin 接收 JSON request → stdout 返回 JSON response
-- skill 包（`skills/sego-review/`）可被 Claude Code / Codex / Cursor / 任何 SKILL.md 兼容工具调用
+- skill 包（`skills/sego-review/`）可被支持 SKILL.md 协议的 AI 编码工具调用
 - 错误时返回结构化 error envelope（不崩溃）
 
-> **PoC 状态**：sidecar 当前仅支持 `review` action；stdout 保持 JSON 输出，诊断信息走 stderr。
+> **PoC 状态**：sidecar 当前仅支持 `review` action；stdout 保持 JSON 输出，诊断信息走 stderr。协议与 schema 仍可能调整，不承诺向后兼容。
 
 ### 6. 验证计划
 
@@ -201,7 +201,7 @@ sego /verify         # 完整验证
 
 ### 7. 接入 AI 编码工具（Sidecar skill PoC）
 
-Sego 提供一个 sidecar skill 包，让你的 AI 编码工具（Claude Code、Codex、Cursor 等）能自动调用 Sego review。
+Sego 提供一个 sidecar skill 包，让支持 SKILL.md 协议的 AI 编码工具能调用 Sego review。
 
 **一键安装**：
 
@@ -213,16 +213,16 @@ bash skills/sego-review/install.sh
 powershell -File skills\sego-review\install.ps1
 ```
 
-脚本会自动检测已安装的 AI 工具（Claude Code / Codex / Zcode / Cursor），复制 skill 包到对应目录。安装后重启你的 AI 编码工具即可。
+脚本会检测已安装的兼容 AI 工具并复制 skill 包到对应目录，安装后重启目标工具即可。
 
-**手动调用**（不依赖 IDE）：
+**手动调用**（不依赖任何 IDE）：
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/your/project","scope":"staged"}' \
   | sego sidecar review
 ```
 
-> **PoC 状态**：sidecar skill 当前仅支持 `review` action。这是早期集成（early integration），不承诺完整 IDE 插件生态。
+> **PoC 状态**：sidecar skill 当前仅支持 `review` action。这是早期集成（experimental），不承诺完整 IDE 插件生态，也不承诺与任何具体外部工具的稳定契约。
 
 ---
 
@@ -268,31 +268,30 @@ def check_access(user, action):
 
 ## 架构
 
+Sego 是一套本地优先的代码审查与工程信任层，公开层面可以分为以下几层：
+
 ```
-Sego Agent (Rust workspace, 9 crates)
-├── rusty-claude-cli    CLI 主入口 + sidecar JSON 接口
-├── runtime             核心运行时（session / permissions / code_review / recovery）
-├── api                 多模型 provider（DeepSeek / Anthropic）
-├── commands            slash 命令注册
-├── tools               工具注册
-├── plugins             插件系统
-└── telemetry / compat-harness / mock-anthropic-service
+Sego Agent (local-first, Rust-native)
+├── Local CLI 层         交互入口、slash 命令、自然语言本地动作、会话恢复
+├── Review 运行时        代码审查执行、permissions、verification、recovery
+├── 模型 Provider 层     DeepSeek / Anthropic 等多模型 provider 抽象
+├── Artifact 层          `.sego/reviews/` 结构化产物（JSON + Markdown + index）
+└── Integration 层       Sidecar / JSON Schema / Skill 包（experimental, PoC）
 
-.sego/ artifact（运行时产物，git 忽略）
-├── reviews/            审查 artifact（JSON + MD + index）
-└── recovery/           崩溃恢复状态
+.sego/                   运行时产物，默认 git 忽略
+├── reviews/             审查 artifact（JSON + MD + index）
+└── recovery/            崩溃恢复状态
 
-schema/                 JSON Schema 公开契约（仓库根，进 GitHub）
+schema/                  JSON Schema 公开契约（仓库根，进 GitHub）
 ├── review-artifact.schema.json
 ├── review-index-entry.schema.json
 └── sidecar-request-response.schema.json
-
-skills/sego-review/     Sidecar skill 包（SKILL.md + 脚本）
 ```
 
-- **纯 Rust**，`unsafe_code = "forbid"`，clippy pedantic
-- **本地优先**：所有 artifact 存在项目 `.sego/` 目录，数据不出域
-- **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"
+- **纯 Rust，本地优先**：`unsafe_code = "forbid"`，clippy pedantic。
+- **数据不出域**：所有 artifact 存在项目 `.sego/` 目录。
+- **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
+- **Integration 层目前是 experimental / PoC**：sidecar 协议、JSON Schema、skill 包属于早期集成，不承诺稳定生态契约，后续可能演进。
 
 ---
 
