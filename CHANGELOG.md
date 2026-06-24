@@ -42,11 +42,11 @@ All notable changes to the Sego Agent project will be documented in this file.
 - LSP client integration
 - Interactive REPL and one-shot prompt modes
 - Windows, Linux, and macOS support
-- 9-crate Rust workspace (~50K LOC)
+- Rust workspace implementation
 
 ### Changed
-- Renamed from claw-code to Sego Agent
-- Migrated from Python to pure Rust implementation
+- Project renamed and re-launched as Sego Agent
+- Migrated to a pure Rust implementation
 
 ### Documentation
 - README.md with quick start guide and architecture overview

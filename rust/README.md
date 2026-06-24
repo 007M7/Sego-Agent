@@ -38,7 +38,7 @@ cargo run -p rusty-claude-cli -- review
 cargo run -p rusty-claude-cli -- review staged
 
 # Full repository audit (clean clones, non-Git directories)
-cargo run -p rusty-claude-cli -- review --full E:\repo
+cargo run -p rusty-claude-cli -- review --full /path/to/your/repo
 
 # Inspect saved review artifacts
 cargo run -p rusty-claude-cli -- review list
@@ -51,10 +51,10 @@ Review artifacts are saved to `.sego/reviews/` in the workspace root. Each revie
 
 ```bash
 # In the REPL, export the latest assistant response:
-/export E:\code\review.md
+/export ./review.md
 
-# Or via natural language (requires explicit "last/previous/??/???"):
-# "?????????? E:\review.md"
+# Or via natural language (requires explicit "last/previous/刚才/上一条"):
+# "把刚才的审查结果写成 ./review.md"
 # "save the last review report to PR43-review.md"
 ```
 
@@ -64,13 +64,13 @@ Sego supports deterministic natural-language triggers for local actions. Say `/d
 
 | Natural language | What Sego does |
 |---|---|
-| `?? review ????` | Code review |
-| `?????? D:\Project` | Switch workspace |
-| `????????? E:\out.md` | Export latest response |
-| `????` | Check for updates |
-| `??` | Exit Sego |
+| `帮我 review 当前改动` | Code review |
+| `切换到工作区 D:\Project` | Switch workspace |
+| `把刚才的回复保存到 ./out.md` | Export latest response |
+| `检查更新` | Check for updates |
+| `退出` | Exit Sego |
 
-The export/save action has a **safety boundary**: it requires explicit `last/previous/??/???/??`. Bare phrases like "????" or "??? md" without a clear target will show `/dir` guidance instead of guessing.
+The export/save action has a **safety boundary**: it requires explicit `last/previous/刚才/上一条/上回`. Bare phrases like "保存报告" or "导出 md" without a clear target will show `/dir` guidance instead of guessing.
 
 ## Configuration
 

@@ -16,7 +16,7 @@ After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, 
   ```
 - A git repository (review uses `git diff`)
 
-### Use in Zcode / Claude Code / any SKILL.md-compatible tool
+### Use in any SKILL.md-compatible AI coding tool
 
 Copy the `sego-review/` directory into your tool's skills directory.
 

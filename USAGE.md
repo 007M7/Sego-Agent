@@ -59,10 +59,10 @@ Inside the REPL, Sego supports deterministic natural-language shortcuts for comm
 ```text
 当前工作区
 切换到 D:\YourProject
-打开项目 E:\YourProject
+打开项目 /path/to/your/project
 帮我 review 当前改动
 检查安全问题
-把刚才的审查结果写成 E:\code\review.md
+把刚才的审查结果写成 ./review.md
 导出当前会话
 检查更新
 退出
@@ -338,7 +338,7 @@ After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, 
   ```
 - A git repository (review uses `git diff`)
 
-### Use in Zcode / Claude Code / any SKILL.md-compatible tool
+### Use in any SKILL.md-compatible AI coding tool
 
 Copy the `sego-review/` directory into your tool's skills directory.
 
@@ -398,7 +398,7 @@ bash skills/sego-review/install.sh
 powershell -File skills\sego-review\install.ps1
 ```
 
-???? Claude Code / Codex / Zcode / Cursor ??? skill ??
+调用任何兼容 SKILL.md 协议的 AI 编码工具，让它发现并调用该 skill。
 
 ### ?? sidecar ??
 

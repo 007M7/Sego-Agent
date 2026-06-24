@@ -40,6 +40,7 @@ archive/
 **/.sego/settings.local.json
 **/.sego/recovery/
 **/.sego/reviews/
+**/.sego/dev.toml
 **/.omc/
 **/.sandbox-home/
 **/.sandbox-tmp/
