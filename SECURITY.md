@@ -18,9 +18,9 @@ For now, open a GitHub issue with a minimal description and mark that it is secu
 
 ## Payment safety
 
-Overseas private audits currently use BNB Chain only after scope confirmation.
+Private audits run only after the audit scope, delivery window, and handling process are confirmed in writing.
 
-Do not send payment before the audit scope, price, delivery window, and payment details are confirmed. Do not trust wallet addresses posted by third parties. Treat any unsolicited payment request as suspicious.
+Do not send payment, credentials, or private code before that confirmation. Do not trust wallet addresses or payment instructions posted by third parties. Treat any unsolicited payment request as suspicious.
 
 ## Release safety
 

@@ -1,0 +1,18 @@
+# Sego developer-mode config example.
+#
+# Copy this file to `.sego/dev.toml` to opt into developer-mode behavior
+# during local development. `.sego/dev.toml` is git-ignored — do not commit
+# a populated dev config.
+#
+# All keys are optional. Default behavior matches a fresh install without
+# this file present.
+
+[dev]
+# Enable developer mode (more verbose diagnostics, slower paths allowed).
+# enabled = true
+
+# Diagnostic verbosity. Allowed: "quiet", "normal", "verbose".
+# verbosity = "normal"
+
+# Build profile used by local helper scripts. Allowed: "debug", "release".
+# build_profile = "debug"
