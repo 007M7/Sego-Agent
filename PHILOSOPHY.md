@@ -1,114 +1,107 @@
 # Sego Agent Philosophy
 
-This document describes the design philosophy and ecosystem behind the Sego Agent project — an AI coding agent that learns from every session.
+This document describes the design philosophy of Sego — a local-first AI code review and engineering trust layer that sits after AI coding tools.
 
-## Stop Staring at the Files
+It is not a technical manual. It explains *why* Sego exists and what it is — and is not — trying to be.
 
-If you only look at the generated files in this repository, you are looking at the wrong layer.
+---
 
-The Python rewrite was a byproduct. The Rust rewrite was also a byproduct. The real thing worth studying is the **system that produced them**: a coordination loop where humans give direction and autonomous agents execute the work.
+## AI code generation needs independent review
 
-Sego is not just a codebase. It is a public demonstration of what happens when:
+AI coding tools (Cursor, Claude Code, Codex, Copilot, and others) generate code faster than ever. That speed has a side effect:
 
-- a human provides clear direction,
-- multiple coding agents coordinate in parallel,
-- notification routing is pushed out of the agent context window,
-- planning, execution, review, and retry loops are automated,
-- and the human does **not** sit in a terminal micromanaging every step.
+> The bottleneck has moved from "writing code" to "deciding whether the code is safe to ship."
 
-## The Human Interface
+Generated code can be syntactically correct, look reasonable, and still contain real risks — SQL injection, hardcoded credentials, broken access control, unsafe shell, brittle architectural assumptions. The tools that write the code are not the best judges of whether the code should be committed:
 
-The important interface here is not tmux, Vim, SSH, or a terminal multiplexer.
+- They have an inherent conflict of interest (they wrote it).
+- They run inside a single session context, not across the whole project.
+- Their "self-review" mode is often a comment, not a structured audit.
 
-The real human interface can be a chat channel. A person can type a sentence from a phone, walk away, sleep, or do something else. The agents read the directive, break it into tasks, assign roles, write code, run tests, argue over failures, recover, and push when the work passes.
+Sego is an **independent** review layer. It does not write the code. Its job is to look at the code AI tools just produced and give a structured opinion on whether the change is ready to commit.
 
-That is the philosophy: **humans set direction; agents perform the labor.**
+---
 
-## The Three-Part System
+## Local-first trust matters for private codebases
 
-### 1. OmX (`oh-my-codex`)
-[oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) provides the workflow layer.
+Most code that actually matters is private — internal services, customer projects, in-house libraries, regulated codebases. For that code, "send it to a third-party cloud service to review" is not always acceptable.
 
-It turns short directives into structured execution:
-- planning keywords
-- execution modes
-- persistent verification loops
-- parallel multi-agent workflows
+Sego is local-first:
 
-This is the layer that converts a sentence into a repeatable work protocol.
+- The CLI runs on your machine.
+- Reviews execute against your local working tree.
+- Artifacts are written to your project's `.sego/` directory.
+- No source code, diff, or finding is implicitly shipped off-device by the tool itself.
 
-### 2. clawhip
-[clawhip](https://github.com/Yeachan-Heo/clawhip) is the event and notification router.
+You still pick the model provider (DeepSeek, Anthropic, etc.) for the actual review reasoning, and that provider sees the diff you submit to it — Sego is honest about that boundary. But everything around the model — the orchestration, the artifact, the recovery state — stays on your machine by default.
 
-It watches:
-- git commits
-- tmux sessions
-- GitHub issues and PRs
-- agent lifecycle events
-- channel delivery
+---
 
-Its job is to keep monitoring and delivery **outside** the coding agent's context window so the agents can stay focused on implementation instead of status formatting and notification routing.
+## Artifacts beat chat-only output
 
-### 3. OmO (`oh-my-openagent`)
-[oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) handles multi-agent coordination.
+A "looks fine" reply from a chatbot is not an audit. You cannot file it, link to it from a PR, compare it with a later review, or feed it into a CI gate.
 
-This is where planning, handoffs, disagreement resolution, and verification loops happen across agents.
+Sego treats every review as a real artifact:
 
-When Architect, Executor, and Reviewer disagree, OmO provides the structure for that loop to converge instead of collapse.
+- Structured **findings** (severity, file, line, evidence, risk, suggestion, confidence).
+- A **Markdown report** that a human can read.
+- A **JSON document** that another tool can consume.
+- An **index** so reviews accumulate over time and can be inspected later.
 
-## The Real Bottleneck Changed
+When a review fails to parse cleanly, Sego says so explicitly (`parse_attempted_but_failed`) and points to the raw output. It does not silently present a broken review as "0 findings".
 
-The bottleneck is no longer typing speed.
+The artifact is the unit of trust. Anything that does not produce an artifact does not really exist.
 
-When agent systems can rebuild a codebase in hours, the scarce resource becomes:
-- architectural clarity
-- task decomposition
-- judgment
-- taste
-- conviction about what is worth building
-- knowing which parts can be parallelized and which parts must stay constrained
+---
 
-A fast agent team does not remove the need for thinking. It makes clear thinking even more valuable.
+## Human developers keep final judgment
 
-## What Sego Demonstrates
+Sego does not approve releases. It does not merge PRs. It does not decide that a change is "production ready."
 
-Sego demonstrates that a repository can be:
+A Sego review is **an input** to a human decision. It surfaces what looks risky and explains why; the developer (and, on team projects, the reviewer / release owner) decides what to do with it.
 
-- **autonomously built in public**
-- coordinated by agents rather than human pair-programming alone
-- operated through a chat interface
-- continuously improved by structured planning/execution/review loops
-- maintained as a showcase of the coordination layer, not just the output files
+This is intentional. AI review can:
 
-The code is evidence.
-The coordination system is the product lesson.
+- Miss issues that need real product or business context.
+- Flag things that look risky in isolation but are fine in the larger system.
+- Disagree with itself across runs.
 
-## What Still Matters
+Treating Sego output as advisory keeps responsibility where it belongs — with the people shipping the software.
 
-As coding intelligence gets cheaper and more available, the durable differentiators are not raw coding output.
+---
 
-What still matters:
-- product taste
-- direction
-- system design
-- human trust
-- operational stability
-- judgment about what to build next
+## Sego is an engineering trust layer, not a replacement for developers
 
-In that world, the job of the human is not to out-type the machine.
-The job of the human is to decide what deserves to exist.
+There is a common narrative that AI will "replace developers." Sego is built on the opposite view:
+
+> As AI generates more code, the scarce resource becomes judgment, taste, system design, and accountability — not raw typing speed.
+
+In that world, the durable value of a developer is no longer "can write the code." It is:
+
+- knowing what is worth building,
+- recognizing what is risky to commit,
+- understanding the system the code lives in,
+- and standing behind the result.
+
+Sego is a tool to make that judgment cheaper to exercise — by giving developers an independent, structured, local review they can actually trust as a starting point.
+
+---
+
+## What Sego is not
+
+To make the boundary clear, Sego is intentionally not:
+
+- **Not an IDE or code generator.** It does not autocomplete, refactor, or write features. Use your favorite AI coding tool for that.
+- **Not a static analyzer.** It is a model-driven review. It is complementary to lint, SAST, fuzzing, and formal verification — not a replacement.
+- **Not a guarantee of bug-free code.** A clean Sego review is one input among several (tests, CI, human review, security tooling). It is never the only gate.
+- **Not a cloud platform.** It runs locally. Any future team or cloud features will be opt-in, on top of the local-first baseline.
+
+---
 
 ## Short Version
 
-**Sego is a demo of autonomous software development.**
+AI writes code. Sego helps you decide whether it is safe to commit.
 
-Humans provide direction.
-Agents coordinate, build, test, recover, and push.
-The repository is the artifact.
-The philosophy is the system behind it.
-
-## Related explanation
-
-For the longer public explanation behind this philosophy, see:
-
-- https://x.com/realsigridjin/status/2039472968624185713
+The code is the AI tool's output.
+The judgment is still yours.
+Sego is the structured layer in between.

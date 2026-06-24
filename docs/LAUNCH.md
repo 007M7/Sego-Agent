@@ -31,14 +31,13 @@ Do not include secrets, credentials, private customer data, or private source co
 
 ## Private AI Code Audit
 
-For private projects, paid audits start at:
+For private projects, audits are available **by scope confirmation only**.
 
-- $19 / RMB 99 for a basic private audit
-- $99 / RMB 699 for a launch check
+Before sending any private code:
 
-Overseas payments are currently accepted through BNB Chain only. Please request
-scope confirmation first; do not send payment before the audit scope, price,
-delivery window, and payment details are confirmed.
+1. Request scope confirmation through the link below.
+2. Wait for the audit scope, delivery window, and handling process to be confirmed in writing.
+3. Do not send private code, credentials, or payment before that confirmation.
 
 Request scope confirmation here:
 
