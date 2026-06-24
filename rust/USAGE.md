@@ -42,7 +42,7 @@ For clean cloned repos or non-Git directories:
 
 ```bash
 # Audit the full repository directory
-sego review --full E:\repo
+sego review --full /path/to/your/repo
 
 # Audit a specific subdirectory
 sego review --full ./packages/mylib
@@ -83,7 +83,7 @@ sego review mark <id> <finding-id> fixed
 ```bash
 # In REPL
 /export
-/export E:\code\session.md
+/export ./session.md
 
 # Natural language
 导出当前会话
@@ -93,10 +93,10 @@ export conversation
 **Export latest assistant response (review result, code output, etc.):**
 ```bash
 # In REPL — must explicitly say "last/previous/刚才/上一条/上回":
-把刚才的审查结果写成 E:\review.md
+把刚才的审查结果写成 ./review.md
 save the last review report to PR43-review.md
 export the previous response to report.md
-把上一条回复保存到 E:\out.md
+把上一条回复保存到 ./out.md
 ```
 
 **Safety boundary**: bare phrases like "保存报告" or "导出 md" without a clear target (last/previous/刚才) will show `/dir` guidance instead of exporting unknown content. This prevents accidentally saving the wrong conversation turn.
@@ -111,7 +111,7 @@ If you run `sego review` outside a Git repository:
 Review
   Result           failed
   Reason           no Git repository found
-  Workspace        E:\code
+  Workspace        ./your-workspace
   Next step        Run `sego review --full <path>` for non-Git directories, or use /dir.
 
 # Use the full repo audit mode instead:
@@ -139,7 +139,7 @@ Say `/dir` to see all available local actions with natural-language examples. Ke
 |---|---|
 | `帮我 review 当前改动` | Code review |
 | `切换工作区到 D:\Project` | Switch workspace |
-| `把刚才的回复保存到 E:\out.md` | Export latest response |
+| `把刚才的回复保存到 ./out.md` | Export latest response |
 | `检查更新` | Check for updates |
 | `退出` | Exit |
 
