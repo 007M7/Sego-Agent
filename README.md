@@ -181,7 +181,13 @@ Every Sego review writes machine-readable and human-readable proof artifacts und
 
 - `review-<id>.json` — machine-readable review artifact
 - `review-<id>.md` — human-readable report
-- `index.jsonl` — append-only index so agents can find the latest review
+- `index.jsonl` — append-only index so agents can find review history
+
+Preferred machine-readable latest-review entry:
+
+```bash
+sego review show latest --json
+```
 
 See [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md) for the public field contract and [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md) for the recommended agent handoff workflow.
 
