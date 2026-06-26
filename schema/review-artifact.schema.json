@@ -48,8 +48,12 @@
     "highest_severity": {
       "description": "Highest severity among findings, or null if no findings. Optional in older artifacts.",
       "oneOf": [
-        { "$ref": "#/$defs/severity" },
-        { "type": "null" }
+        {
+          "$ref": "#/$defs/severity"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "parse_status": {
@@ -62,23 +66,58 @@
     "findings": {
       "type": "array",
       "description": "Structured review findings.",
-      "items": { "$ref": "#/$defs/finding" }
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
     },
     "raw_text": {
       "type": "string",
       "description": "Raw model output text before parsing into findings."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Local trust metadata identifying the review engine that produced this artifact (for example, sego). Optional for older artifacts. This is not a cryptographic signature."
+    },
+    "engine_version": {
+      "type": "string",
+      "description": "Sego engine version that wrote the artifact. Optional for older artifacts."
+    },
+    "review_mode": {
+      "type": "string",
+      "description": "Review mode used to produce the artifact, for example model_code_review. Optional for older artifacts."
+    },
+    "parse_error": {
+      "type": "string",
+      "description": "Optional parse error diagnostic when parsing was attempted but failed or repaired."
+    },
+    "parse_repair": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional parse repair/extraction mode used while parsing model output."
     }
   },
   "$defs": {
     "severity": {
       "type": "string",
       "description": "Review finding severity (snake_case, aligned with Rust ReviewSeverity).",
-      "enum": ["critical", "high", "medium", "low", "info"]
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
     },
     "parse_status": {
       "type": "string",
       "description": "How the model output was parsed (aligned with Rust ReviewParseStatus).",
-      "enum": ["structured", "fallback_raw_text"]
+      "enum": [
+        "structured",
+        "fallback_raw_text",
+        "parse_attempted_but_failed"
+      ]
     },
     "finding": {
       "type": "object",
@@ -98,13 +137,18 @@
           "description": "Finding identifier (e.g. 'f-001'). Has serde default; may be absent in legacy artifacts.",
           "default": ""
         },
-        "severity": { "$ref": "#/$defs/severity" },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
         "file": {
           "type": "string",
           "description": "File path relative to workspace root."
         },
         "line": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "Line number, or null if not applicable.",
           "minimum": 0
         },
@@ -131,10 +175,35 @@
           "maximum": 1
         },
         "verification_hint": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Optional hint for how to verify the finding."
+        },
+        "evidence_status": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/evidence_status"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional evidence gate status. Absent or null for legacy artifacts."
         }
       }
+    },
+    "evidence_status": {
+      "type": "string",
+      "description": "Evidence gate status attached by Sego when deterministic validation was possible.",
+      "enum": [
+        "verified",
+        "unverified_file",
+        "unverified_line",
+        "unverified_dependency",
+        "scope_not_captured"
+      ]
     }
   }
 }
