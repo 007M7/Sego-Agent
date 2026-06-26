@@ -6371,9 +6371,9 @@ fn build_code_review_summary_json(
     id: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let entries = load_review_index(cwd)?;
-    let index_path = cwd.join(".sego").join("reviews").join("index.jsonl");
 
     if id == "latest" && entries.is_empty() {
+        let index_path = cwd.join(".sego").join("reviews").join("index.jsonl");
         return Ok(json!({
             "schema_version": 1,
             "kind": "sego_latest_review_summary",
@@ -6548,7 +6548,11 @@ fn resolve_review_entry<'a>(
 }
 
 fn latest_review_index_entry(entries: &[ReviewIndexEntry]) -> Option<&ReviewIndexEntry> {
-    entries.iter().max_by_key(|entry| entry.created_at_epoch_seconds)
+    entries.iter().max_by(|left, right| {
+        left.created_at_epoch_seconds
+            .cmp(&right.created_at_epoch_seconds)
+            .then_with(|| left.id.cmp(&right.id))
+    })
 }
 
 fn resolve_review_markdown_path(workspace_root: &Path, entry: &ReviewIndexEntry) -> PathBuf {
@@ -9590,6 +9594,35 @@ mod tests {
         let entries = vec![newer.clone(), older];
         assert_eq!(latest_review_index_entry(&entries).unwrap().id, "review-new");
         assert_eq!(resolve_review_entry(&entries, "latest").unwrap().id, "review-new");
+    }
+
+    #[test]
+    fn review_show_latest_tie_breaks_same_timestamp_by_id() {
+        let review_a = ReviewIndexEntry {
+            id: "review-a".to_string(),
+            created_at_epoch_seconds: 20,
+            scope: "staged".to_string(),
+            diff_hash: "hash-a".to_string(),
+            finding_count: 1,
+            highest_severity: Some(runtime::ReviewSeverity::Low),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-a.json".to_string(),
+            markdown_path: ".sego/reviews/review-a.md".to_string(),
+        };
+        let review_b = ReviewIndexEntry {
+            id: "review-b".to_string(),
+            created_at_epoch_seconds: 20,
+            scope: "workspace".to_string(),
+            diff_hash: "hash-b".to_string(),
+            finding_count: 2,
+            highest_severity: Some(runtime::ReviewSeverity::Medium),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-b.json".to_string(),
+            markdown_path: ".sego/reviews/review-b.md".to_string(),
+        };
+        let entries = vec![review_b, review_a];
+        assert_eq!(latest_review_index_entry(&entries).unwrap().id, "review-b");
+        assert_eq!(resolve_review_entry(&entries, "latest").unwrap().id, "review-b");
     }
 
     #[test]
