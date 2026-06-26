@@ -52,7 +52,15 @@ Use for clean cloned repositories or non-Git directories. This is a manifest / e
 
 ## 3. How to read the latest proof
 
-Recommended machine-readable path:
+Preferred machine-readable path:
+
+```bash
+sego review show latest --json
+```
+
+This prints a stable JSON summary and does not include Markdown, color codes, or explanatory prose.
+
+Fallback path (for older Sego versions):
 
 1. Open `.sego/reviews/index.jsonl`.
 2. Read the last non-empty line.
@@ -60,7 +68,7 @@ Recommended machine-readable path:
 4. Use the artifact fields documented in `docs/REVIEW_ARTIFACT_CONTRACT.md`.
 5. Link the user to `markdown_path` for human-readable details.
 
-If `index.jsonl` is missing, no review artifact has been written in this workspace yet.
+If `index.jsonl` is missing, or `sego review show latest --json` returns `found: false`, no review artifact has been written in this workspace yet.
 
 ---
 
@@ -126,7 +134,7 @@ I changed the code. Before I ask you to accept it, I will run Sego review on the
 ### Before PR
 
 ```text
-Before opening a PR, run Sego on the staged changes. Then read the latest `.sego/reviews/index.jsonl` entry, open the JSON artifact, and summarize finding count, highest severity, parse status, and the top findings with file/line evidence.
+Before opening a PR, run Sego on the staged changes. Then call `sego review show latest --json` and summarize finding count, highest severity, parse status, and the top findings with file/line evidence. If the command is unavailable, fall back to reading the latest `.sego/reviews/index.jsonl` entry and opening the referenced JSON artifact.
 ```
 
 ### After risky changes

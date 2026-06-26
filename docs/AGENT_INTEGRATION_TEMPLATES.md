@@ -23,7 +23,13 @@ If changes are not staged, use:
 sego /review workspace
 ```
 
-After the review, read `.sego/reviews/index.jsonl`, open the latest JSON artifact, and summarize:
+After the review, prefer:
+
+```bash
+sego review show latest --json
+```
+
+Then summarize:
 
 - review id,
 - scope,
@@ -49,7 +55,7 @@ Preferred command:
 If there are unstaged workspace changes:
   sego /review workspace
 
-Then read the latest entry from .sego/reviews/index.jsonl and parse the referenced JSON artifact.
+Then run `sego review show latest --json` and parse the returned summary. If unavailable, read the latest entry from `.sego/reviews/index.jsonl` and parse the referenced JSON artifact.
 Explain the result to the user with:
   - review id
   - finding count

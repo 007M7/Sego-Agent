@@ -347,6 +347,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::CodeReviewList => print_code_review_history()?,
         CliAction::CodeReviewShow { id } => print_code_review_report(&id)?,
+        CliAction::CodeReviewShowJson { id } => print_code_review_summary_json(&id)?,
         CliAction::CodeReviewStatus { id } => print_code_review_finding_status(&id)?,
         CliAction::CodeReviewMark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)?;
@@ -432,6 +433,9 @@ enum CliAction {
     },
     CodeReviewList,
     CodeReviewShow {
+        id: String,
+    },
+    CodeReviewShowJson {
         id: String,
     },
     CodeReviewStatus {
@@ -5718,7 +5722,7 @@ fn run_code_review_cli(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReviewHistoryCommand {
     List,
-    Show { id: String },
+    Show { id: String, json: bool },
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Ready,
@@ -5751,8 +5755,14 @@ fn parse_review_history_command(
         }
         ["safety", ..] => Err("unexpected arguments for /review safety".into()),
         ["show"] => Err("missing review id for /review show <id>".into()),
-        ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string() })),
-        ["show", ..] => Err("unexpected arguments for /review show <id>".into()),
+        ["show", "--json"] => {
+            Err("missing review id or latest for /review show <id|latest> --json".into())
+        }
+        ["show", id] => Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string(), json: false })),
+        ["show", id, "--json"] => {
+            Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string(), json: true }))
+        }
+        ["show", ..] => Err("unexpected arguments for /review show <id|latest> [--json]".into()),
         ["status"] => Err("missing review id for /review status <id>".into()),
         ["status", id] => Ok(Some(ReviewHistoryCommand::Status { id: (*id).to_string() })),
         ["status", ..] => Err("unexpected arguments for /review status <id>".into()),
@@ -5780,7 +5790,13 @@ fn parse_review_history_command(
 fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAction {
     match command {
         ReviewHistoryCommand::List => CliAction::CodeReviewList,
-        ReviewHistoryCommand::Show { id } => CliAction::CodeReviewShow { id },
+        ReviewHistoryCommand::Show { id, json } => {
+            if json {
+                CliAction::CodeReviewShowJson { id }
+            } else {
+                CliAction::CodeReviewShow { id }
+            }
+        }
         ReviewHistoryCommand::Status { id } => CliAction::CodeReviewStatus { id },
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             CliAction::CodeReviewMark { id, finding_id, status, note }
@@ -5797,7 +5813,13 @@ fn run_review_history_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         ReviewHistoryCommand::List => print_code_review_history(),
-        ReviewHistoryCommand::Show { id } => print_code_review_report(&id),
+        ReviewHistoryCommand::Show { id, json } => {
+            if json {
+                print_code_review_summary_json(&id)
+            } else {
+                print_code_review_report(&id)
+            }
+        }
         ReviewHistoryCommand::Status { id } => print_code_review_finding_status(&id),
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)
@@ -6326,11 +6348,115 @@ fn print_review_index_entry(entry: &ReviewIndexEntry) {
 fn print_code_review_report(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let entries = load_review_index(&cwd)?;
+    if id == "latest" && entries.is_empty() {
+        print_no_review_reports_found(&cwd);
+        return Ok(());
+    }
     let entry = resolve_review_entry(&entries, id)?;
     let markdown_path = resolve_review_markdown_path(&cwd, entry);
     let markdown = fs::read_to_string(&markdown_path)?;
     println!("{markdown}");
     Ok(())
+}
+
+fn print_code_review_summary_json(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let summary = build_code_review_summary_json(&cwd, id)?;
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+    Ok(())
+}
+
+fn build_code_review_summary_json(
+    cwd: &Path,
+    id: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let entries = load_review_index(cwd)?;
+    let index_path = cwd.join(".sego").join("reviews").join("index.jsonl");
+
+    if id == "latest" && entries.is_empty() {
+        return Ok(json!({
+            "schema_version": 1,
+            "kind": "sego_latest_review_summary",
+            "found": false,
+            "index_path": index_path.display().to_string(),
+            "next_step": "run /review staged, /review workspace, or sego review --full <path>",
+        }));
+    }
+
+    let entry = resolve_review_entry(&entries, id)?;
+    Ok(build_review_summary_json_value(
+        id,
+        entry,
+        review_finding_status_counts_for_summary(cwd, entry)?,
+    ))
+}
+
+fn build_review_summary_json_value(
+    requested_id: &str,
+    entry: &ReviewIndexEntry,
+    status_counts: ReviewFindingStatusCounts,
+) -> serde_json::Value {
+    let highest_severity = entry.highest_severity.map(runtime::ReviewSeverity::label);
+    let summary_kind =
+        if requested_id == "latest" { "sego_latest_review_summary" } else { "sego_review_summary" };
+    json!({
+        "schema_version": 1,
+        "kind": summary_kind,
+        "found": true,
+        "review": {
+            "id": entry.id,
+            "created_at_epoch_seconds": entry.created_at_epoch_seconds,
+            "scope": entry.scope,
+            "diff_hash": entry.diff_hash,
+            "finding_count": entry.finding_count,
+            "highest_severity": highest_severity,
+            "parse_status": entry.parse_status.label(),
+            "json_path": entry.json_path,
+            "markdown_path": entry.markdown_path,
+        },
+        "status_counts": {
+            "open": status_counts.open,
+            "acknowledged": status_counts.acknowledged,
+            "fixed": status_counts.fixed,
+            "ignored": status_counts.ignored,
+        }
+    })
+}
+
+fn print_no_review_reports_found(cwd: &Path) {
+    let index_path = cwd.join(".sego").join("reviews").join("index.jsonl");
+    println!("Review");
+    println!("  Result           no review reports found");
+    println!("  Index            {}", index_path.display());
+    println!(
+        "  Next step        run /review staged, /review workspace, or sego review --full <path>"
+    );
+}
+
+fn review_finding_status_counts_for_summary(
+    cwd: &Path,
+    entry: &ReviewIndexEntry,
+) -> Result<ReviewFindingStatusCounts, Box<dyn std::error::Error>> {
+    let statuses = latest_review_finding_statuses(cwd, &entry.id)?;
+    let mut counts = ReviewFindingStatusCounts { open: entry.finding_count, ..Default::default() };
+    for status in statuses.values().map(|entry| entry.status) {
+        match status {
+            ReviewFindingStatus::Open => {}
+            ReviewFindingStatus::Acknowledged => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.acknowledged += 1;
+            }
+            ReviewFindingStatus::Fixed => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.fixed += 1;
+            }
+            ReviewFindingStatus::Ignored => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.ignored += 1;
+            }
+        }
+    }
+    Ok(counts)
 }
 
 fn print_code_review_finding_status(id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -6402,6 +6528,11 @@ fn resolve_review_entry<'a>(
     entries: &'a [ReviewIndexEntry],
     id: &str,
 ) -> Result<&'a ReviewIndexEntry, Box<dyn std::error::Error>> {
+    if id == "latest" {
+        return latest_review_index_entry(entries)
+            .ok_or_else(|| "review report not found: latest".into());
+    }
+
     let matches = entries.iter().filter(|entry| entry.id == id).collect::<Vec<_>>();
     if let [entry] = matches.as_slice() {
         return Ok(*entry);
@@ -6414,6 +6545,10 @@ fn resolve_review_entry<'a>(
         [] => Err(format!("review report not found: {id}").into()),
         _ => Err(format!("review id prefix is ambiguous: {id}").into()),
     }
+}
+
+fn latest_review_index_entry(entries: &[ReviewIndexEntry]) -> Option<&ReviewIndexEntry> {
+    entries.iter().max_by_key(|entry| entry.created_at_epoch_seconds)
 }
 
 fn resolve_review_markdown_path(workspace_root: &Path, entry: &ReviewIndexEntry) -> PathBuf {
@@ -8692,9 +8827,9 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        create_managed_session_handle, default_model, describe_tool_progress,
-        display_path_for_user, filter_tool_specs, format_bughunter_report,
+        build_review_summary_json_value, build_runtime_plugin_state_with_loader,
+        build_runtime_with_plugin_state, create_managed_session_handle, default_model,
+        describe_tool_progress, display_path_for_user, filter_tool_specs, format_bughunter_report,
         format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
         format_cost_report, format_internal_prompt_progress_line, format_issue_report,
         format_model_report, format_model_switch_report, format_permissions_report,
@@ -8702,25 +8837,26 @@ mod tests {
         format_review_completion_summary, format_status_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, is_git_worktree,
-        is_no_assistant_response_export_error, is_turn_cancelled_message, non_git_review_error,
-        normalize_permission_mode, parse_args, parse_git_status_branch,
-        parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
-        print_help_to, push_output_block, render_code_review_readiness_for,
+        is_no_assistant_response_export_error, is_turn_cancelled_message,
+        latest_review_index_entry, non_git_review_error, normalize_permission_mode, parse_args,
+        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
+        permission_policy, print_help_to, push_output_block, render_code_review_readiness_for,
         render_code_review_summary_for, render_config_report, render_diff_report,
         render_diff_report_for, render_memory_report, render_natural_language_directory,
-        render_repl_help, render_resume_usage, resolve_model_alias, resolve_session_reference,
-        response_to_events, resume_supported_slash_commands, run_resume_command,
-        slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
-        NoAssistantResponseExportError, SafetyReviewScope, SlashCommand, StatusUsage,
-        TURN_CANCELLED_MESSAGE,
+        render_repl_help, render_resume_usage, resolve_model_alias, resolve_review_entry,
+        resolve_session_reference, response_to_events, resume_supported_slash_commands,
+        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
+        validate_no_args, write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
+        GitWorkspaceSummary, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
+        NoAssistantResponseExportError, ReviewFindingStatusCounts, SafetyReviewScope, SlashCommand,
+        StatusUsage, TURN_CANCELLED_MESSAGE,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
     };
     use runtime::ReviewFindingStatus;
+    use runtime::ReviewIndexEntry;
     use runtime::{
         AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, MessageRole,
         PermissionMode, Session, ToolExecutor,
@@ -9364,6 +9500,31 @@ mod tests {
             CliAction::CodeReviewShow { id: "review-123".to_string() }
         );
         assert_eq!(
+            parse_args(&["/review".to_string(), "show".to_string(), "latest".to_string()])
+                .expect("/review show latest should parse"),
+            CliAction::CodeReviewShow { id: "latest".to_string() }
+        );
+        assert_eq!(
+            parse_args(&[
+                "/review".to_string(),
+                "show".to_string(),
+                "latest".to_string(),
+                "--json".to_string(),
+            ])
+            .expect("/review show latest --json should parse"),
+            CliAction::CodeReviewShowJson { id: "latest".to_string() }
+        );
+        assert_eq!(
+            parse_args(&[
+                "review".to_string(),
+                "show".to_string(),
+                "latest".to_string(),
+                "--json".to_string(),
+            ])
+            .expect("sego review show latest --json should parse"),
+            CliAction::CodeReviewShowJson { id: "latest".to_string() }
+        );
+        assert_eq!(
             parse_args(&["/review".to_string(), "status".to_string(), "review-123".to_string()])
                 .expect("/review status should parse"),
             CliAction::CodeReviewStatus { id: "review-123".to_string() }
@@ -9403,6 +9564,67 @@ mod tests {
     }
 
     #[test]
+    fn review_show_latest_resolves_newest_index_entry() {
+        let older = ReviewIndexEntry {
+            id: "review-old".to_string(),
+            created_at_epoch_seconds: 10,
+            scope: "staged".to_string(),
+            diff_hash: "oldhash".to_string(),
+            finding_count: 1,
+            highest_severity: Some(runtime::ReviewSeverity::Low),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-old.json".to_string(),
+            markdown_path: ".sego/reviews/review-old.md".to_string(),
+        };
+        let newer = ReviewIndexEntry {
+            id: "review-new".to_string(),
+            created_at_epoch_seconds: 20,
+            scope: "workspace".to_string(),
+            diff_hash: "newhash".to_string(),
+            finding_count: 2,
+            highest_severity: Some(runtime::ReviewSeverity::High),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-new.json".to_string(),
+            markdown_path: ".sego/reviews/review-new.md".to_string(),
+        };
+        let entries = vec![newer.clone(), older];
+        assert_eq!(latest_review_index_entry(&entries).unwrap().id, "review-new");
+        assert_eq!(resolve_review_entry(&entries, "latest").unwrap().id, "review-new");
+    }
+
+    #[test]
+    fn review_summary_json_contains_stable_summary_without_full_findings() {
+        let entry = ReviewIndexEntry {
+            id: "review-123".to_string(),
+            created_at_epoch_seconds: 1_782_600_000,
+            scope: "staged".to_string(),
+            diff_hash: "abc123".to_string(),
+            finding_count: 3,
+            highest_severity: Some(runtime::ReviewSeverity::Medium),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-123.json".to_string(),
+            markdown_path: ".sego/reviews/review-123.md".to_string(),
+        };
+        let summary = build_review_summary_json_value(
+            "latest",
+            &entry,
+            ReviewFindingStatusCounts { open: 2, acknowledged: 1, fixed: 0, ignored: 0 },
+        );
+        assert_eq!(summary["schema_version"], 1);
+        assert_eq!(summary["kind"], "sego_latest_review_summary");
+        assert_eq!(summary["found"], true);
+        assert_eq!(summary["review"]["id"], "review-123");
+        assert_eq!(summary["review"]["finding_count"], 3);
+        assert_eq!(summary["review"]["highest_severity"], "medium");
+        assert_eq!(summary["review"]["parse_status"], "structured");
+        assert_eq!(summary["review"]["json_path"], ".sego/reviews/review-123.json");
+        assert_eq!(summary["review"]["markdown_path"], ".sego/reviews/review-123.md");
+        assert_eq!(summary["status_counts"]["open"], 2);
+        assert!(summary.get("raw_text").is_none());
+        assert!(summary.get("findings").is_none());
+    }
+
+    #[test]
     fn review_history_commands_reject_invalid_shapes() {
         let missing_id = parse_args(&["/review".to_string(), "show".to_string()])
             .expect_err("/review show should require an id");
@@ -9412,6 +9634,21 @@ mod tests {
             parse_args(&["/review".to_string(), "list".to_string(), "extra".to_string()])
                 .expect_err("/review list should not accept extra args");
         assert!(extra_list_arg.contains("unexpected arguments"));
+
+        let show_json_missing_id =
+            parse_args(&["/review".to_string(), "show".to_string(), "--json".to_string()])
+                .expect_err("/review show --json should require id/latest");
+        assert!(show_json_missing_id.contains("missing review id"));
+
+        let show_json_extra = parse_args(&[
+            "/review".to_string(),
+            "show".to_string(),
+            "latest".to_string(),
+            "--json".to_string(),
+            "extra".to_string(),
+        ])
+        .expect_err("/review show latest --json extra should reject extra args");
+        assert!(show_json_extra.contains("unexpected arguments"));
 
         let extra_ready_arg =
             parse_args(&["/review".to_string(), "ready".to_string(), "extra".to_string()])

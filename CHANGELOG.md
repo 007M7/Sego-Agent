@@ -5,6 +5,7 @@ All notable changes to the Sego Agent project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **C21 latest review summary interface**: `sego review show latest --json` and `/review show latest --json` now print a stable machine-readable summary of the latest review proof. Human-readable `show latest` prints the latest Markdown report, and the no-review case returns a stable JSON shape or clear guidance.
 - **C21 agent-callable review proof**: documented the public review artifact contract, agent handoff workflow, and integration templates so AI coding agents can call Sego after code generation and explain the resulting proof to users.
 - **Reviewer identity metadata**: new review artifacts now include local trust metadata (`reviewer`, `engine_version`, `review_mode`). These fields are attribution/debug metadata, not cryptographic signatures or provenance attestations.
 

@@ -22,9 +22,26 @@ The `.sego/` directory is runtime output and is normally git-ignored. Do not com
 
 ---
 
-## 2. Which file should an agent read?
+## 2. Which interface should an agent use?
 
-For an agent integration, the recommended read path is:
+Preferred machine-readable path:
+
+```bash
+sego review show latest --json
+```
+
+This prints a stable latest-review summary with:
+
+- `schema_version`
+- `kind`
+- `found`
+- latest review identity and paths
+- finding count / highest severity / parse status
+- optional status counts
+
+It intentionally does not include full findings or raw model output. Agents can open `review.json_path` when they need the complete artifact.
+
+Fallback path for older Sego versions:
 
 1. Read `.sego/reviews/index.jsonl`.
 2. Select the last non-empty line.
@@ -32,7 +49,7 @@ For an agent integration, the recommended read path is:
 4. Parse that JSON artifact.
 5. Explain the summary and findings to the user.
 
-Agents should use the JSON artifact for machine-readable data and link to the Markdown report for human details.
+Agents should use JSON for machine-readable data and link to the Markdown report for human details.
 
 ---
 
