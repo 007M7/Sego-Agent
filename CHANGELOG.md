@@ -4,6 +4,13 @@ All notable changes to the Sego Agent project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **C21 agent-callable review proof**: documented the public review artifact contract, agent handoff workflow, and integration templates so AI coding agents can call Sego after code generation and explain the resulting proof to users.
+- **Reviewer identity metadata**: new review artifacts now include local trust metadata (`reviewer`, `engine_version`, `review_mode`). These fields are attribution/debug metadata, not cryptographic signatures or provenance attestations.
+
+### Changed
+- Updated review artifact JSON Schemas to include current parse/evidence status values (`parse_attempted_but_failed`, `evidence_status`) plus optional C21 metadata fields.
+
 ## [0.1.8] - 2026-06-23
 
 ### Added

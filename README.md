@@ -175,7 +175,17 @@ sego --permission-profile review-trust
 
 `--permission-mode` 和 `--permission-profile` 互斥（不能同时使用）。
 
-### 5. Sidecar JSON 接口（PoC / experimental）
+### 5. Review artifact contract
+
+Every Sego review writes machine-readable and human-readable proof artifacts under `.sego/reviews/`:
+
+- `review-<id>.json` — machine-readable review artifact
+- `review-<id>.md` — human-readable report
+- `index.jsonl` — append-only index so agents can find the latest review
+
+See [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md) for the public field contract and [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md) for the recommended agent handoff workflow.
+
+### 6. Sidecar JSON 接口（PoC / experimental）
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' \
@@ -190,7 +200,7 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 
 > **PoC 状态**：sidecar 当前仅支持 `review` action；stdout 保持 JSON 输出，诊断信息走 stderr。协议与 schema 仍可能调整，不承诺向后兼容。
 
-### 6. 验证计划
+### 7. 验证计划
 
 ```bash
 sego /verify fast    # 快速验证计划
@@ -199,7 +209,7 @@ sego /verify         # 完整验证
 
 根据项目类型识别验证命令（Rust: cargo build/test，Node: npm test/build）。
 
-### 7. 接入 AI 编码工具（Sidecar skill PoC）
+### 8. 接入 AI 编码工具（Sidecar skill PoC）
 
 Sego 提供一个 sidecar skill 包，让支持 SKILL.md 协议的 AI 编码工具能调用 Sego review。
 

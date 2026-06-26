@@ -7,16 +7,31 @@
   "$defs": {
     "severity": {
       "type": "string",
-      "enum": ["critical", "high", "medium", "low", "info"]
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
     },
     "parse_status": {
       "type": "string",
-      "enum": ["structured", "fallback_raw_text"]
+      "enum": [
+        "structured",
+        "fallback_raw_text",
+        "parse_attempted_but_failed"
+      ]
     },
     "finding_status": {
       "type": "string",
       "description": "Lifecycle status of a finding (aligned with Rust ReviewFindingStatus).",
-      "enum": ["open", "acknowledged", "fixed", "ignored"]
+      "enum": [
+        "open",
+        "acknowledged",
+        "fixed",
+        "ignored"
+      ]
     },
     "review_index_entry": {
       "type": "object",
@@ -40,19 +55,29 @@
           "type": "integer",
           "minimum": 0
         },
-        "scope": { "type": "string" },
-        "diff_hash": { "type": "string" },
+        "scope": {
+          "type": "string"
+        },
+        "diff_hash": {
+          "type": "string"
+        },
         "finding_count": {
           "type": "integer",
           "minimum": 0
         },
         "highest_severity": {
           "oneOf": [
-            { "$ref": "#/$defs/severity" },
-            { "type": "null" }
+            {
+              "$ref": "#/$defs/severity"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
-        "parse_status": { "$ref": "#/$defs/parse_status" },
+        "parse_status": {
+          "$ref": "#/$defs/parse_status"
+        },
         "json_path": {
           "type": "string",
           "description": "Path to the full review artifact JSON."
@@ -73,11 +98,20 @@
         "updated_at_epoch_seconds"
       ],
       "properties": {
-        "report_id": { "type": "string" },
-        "finding_id": { "type": "string" },
-        "status": { "$ref": "#/$defs/finding_status" },
+        "report_id": {
+          "type": "string"
+        },
+        "finding_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/finding_status"
+        },
         "note": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Optional note explaining the status change."
         },
         "updated_at_epoch_seconds": {

@@ -396,6 +396,16 @@ struct ReviewArtifact {
     schema_version: u32,
     id: String,
     created_at_epoch_seconds: u64,
+    /// C21: local trust metadata identifying the engine that produced this artifact.
+    /// This is not a cryptographic signature or provenance attestation.
+    #[serde(default)]
+    reviewer: String,
+    /// C21: Sego engine version that wrote the artifact. Legacy artifacts default to empty.
+    #[serde(default)]
+    engine_version: String,
+    /// C21: review mode used to produce the artifact (for example, model_code_review).
+    #[serde(default)]
+    review_mode: String,
     scope: String,
     diff_hash: String,
     finding_count: usize,
@@ -488,6 +498,9 @@ pub fn persist_review_artifact(
         schema_version: 1,
         id: id.clone(),
         created_at_epoch_seconds,
+        reviewer: "sego".to_string(),
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
+        review_mode: "model_code_review".to_string(),
         scope: target.scope.label().clone(),
         diff_hash: diff_hash.clone(),
         finding_count: report.findings.len(),
@@ -624,6 +637,15 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
     output.push_str("# Sego Review Report\n\n");
     let _ = writeln!(output, "- ID: `{}`", artifact.id);
     let _ = writeln!(output, "- Scope: `{}`", artifact.scope);
+    if !artifact.reviewer.is_empty() {
+        let _ = writeln!(output, "- Reviewer: `{}`", artifact.reviewer);
+    }
+    if !artifact.engine_version.is_empty() {
+        let _ = writeln!(output, "- Engine version: `{}`", artifact.engine_version);
+    }
+    if !artifact.review_mode.is_empty() {
+        let _ = writeln!(output, "- Review mode: `{}`", artifact.review_mode);
+    }
     let _ = writeln!(output, "- Diff hash: `{}`", artifact.diff_hash);
     let _ = writeln!(output, "- Findings: `{}`", artifact.finding_count);
     let _ = writeln!(output, "- Parse status: `{}`", artifact.parse_status.label());
@@ -934,6 +956,9 @@ mod tests {
             schema_version: 1,
             id: "rev-test-001".to_string(),
             created_at_epoch_seconds: 1_719_849_600,
+            reviewer: "sego".to_string(),
+            engine_version: "0.1.9-test".to_string(),
+            review_mode: "model_code_review".to_string(),
             scope: "staged".to_string(),
             diff_hash: "sha256:abc123".to_string(),
             finding_count: 1,
@@ -964,6 +989,9 @@ mod tests {
         // Field-by-field round-trip verification.
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.id, "rev-test-001");
+        assert_eq!(parsed.reviewer, "sego");
+        assert_eq!(parsed.engine_version, "0.1.9-test");
+        assert_eq!(parsed.review_mode, "model_code_review");
         assert_eq!(parsed.scope, "staged");
         assert_eq!(parsed.diff_hash, "sha256:abc123");
         assert_eq!(parsed.finding_count, 1);
@@ -982,6 +1010,12 @@ mod tests {
             "parse_status must be snake_case: {json}"
         );
 
+        assert!(json.contains(r#""reviewer":"sego""#), "reviewer must be serialized: {json}");
+        assert!(
+            json.contains(r#""review_mode":"model_code_review""#),
+            "review_mode must be serialized: {json}"
+        );
+
         // schema_version must be present in JSON (schema required field).
         assert!(json.contains(r#""schema_version":1"#), "schema_version must be in JSON: {json}");
 
@@ -995,6 +1029,9 @@ mod tests {
             schema_version: 1,
             id: "rev-test-002".to_string(),
             created_at_epoch_seconds: 1_719_849_600,
+            reviewer: "sego".to_string(),
+            engine_version: "0.1.9-test".to_string(),
+            review_mode: "model_code_review".to_string(),
             scope: "workspace".to_string(),
             diff_hash: "sha256:none".to_string(),
             finding_count: 0,
