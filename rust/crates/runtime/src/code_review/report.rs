@@ -25,6 +25,49 @@ pub enum EvidenceStatus {
     UnverifiedDependency,
     /// Finding refers to content outside captured review scope.
     ScopeNotCaptured,
+    /// File was listed in scope but its content was not captured.
+    ContentNotCaptured,
+    /// File content was captured only partially/truncated.
+    ContentTruncated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewContentStatus {
+    NotCaptured,
+    Full,
+    Truncated,
+    SkippedLarge,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewFileEvidence {
+    /// Repository-relative, sanitized path only.
+    pub path: String,
+    pub listed: bool,
+    pub content_status: ReviewContentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_line_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewEvidenceScopeKind {
+    Diff,
+    FullRepo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewEvidenceCoverage {
+    pub scope_kind: ReviewEvidenceScopeKind,
+    pub file_tree_count: usize,
+    pub observed_files: Vec<ReviewFileEvidence>,
+    pub captured_file_count: usize,
+    pub truncated_file_count: usize,
+    pub not_captured_file_count: usize,
+    pub skipped_large_file_count: usize,
+    pub unreadable_file_count: usize,
 }
 
 impl EvidenceStatus {
@@ -36,6 +79,8 @@ impl EvidenceStatus {
             Self::UnverifiedLine => "unverified_line",
             Self::UnverifiedDependency => "unverified_dependency",
             Self::ScopeNotCaptured => "scope_not_captured",
+            Self::ContentNotCaptured => "content_not_captured",
+            Self::ContentTruncated => "content_truncated",
         }
     }
 }
@@ -66,7 +111,9 @@ pub fn evaluate_evidence_gate(
     findings: Vec<ReviewFinding>,
     target: &ReviewTarget,
 ) -> Vec<ReviewFinding> {
-    let scope_files = collect_scope_files(target);
+    let coverage = build_evidence_coverage(target);
+    let scope_files: Vec<String> =
+        coverage.observed_files.iter().map(|entry| entry.path.clone()).collect();
     let has_manifest = scope_has_manifest(&scope_files);
     findings
         .into_iter()
@@ -74,8 +121,13 @@ pub fn evaluate_evidence_gate(
             if finding.evidence_status.is_some() {
                 return finding;
             }
-            finding.evidence_status =
-                Some(classify_finding_evidence(&finding, target, &scope_files, has_manifest));
+            finding.evidence_status = Some(classify_finding_evidence(
+                &finding,
+                target,
+                &coverage,
+                &scope_files,
+                has_manifest,
+            ));
             finding
         })
         .collect()
@@ -84,6 +136,7 @@ pub fn evaluate_evidence_gate(
 fn classify_finding_evidence(
     finding: &ReviewFinding,
     target: &ReviewTarget,
+    coverage: &ReviewEvidenceCoverage,
     scope_files: &[String],
     has_manifest: bool,
 ) -> EvidenceStatus {
@@ -94,70 +147,36 @@ fn classify_finding_evidence(
     if looks_like_dependency_finding(finding) && !has_manifest {
         return EvidenceStatus::UnverifiedDependency;
     }
-    let normalized = trimmed_file.replace('\\', "/");
-    let has_dir = normalized.contains('/');
-    // Exact match always accepted.
-    // Suffix/component match only when the model-reported path contains a
-    // directory separator (bare filenames must match exactly).
-    let file_found = scope_files.iter().any(|sf| {
-        let sf_norm = sf.replace('\\', "/");
-        sf_norm == normalized || (has_dir && sf_norm.ends_with(&format!("/{normalized}")))
-    });
-    if !file_found {
+    let Some(normalized) = normalize_repo_relative_path(trimmed_file) else {
+        return EvidenceStatus::ScopeNotCaptured;
+    };
+    let Some(file_evidence) = find_file_evidence(coverage, &normalized) else {
         if scope_files.is_empty() {
             return EvidenceStatus::ScopeNotCaptured;
         }
         return EvidenceStatus::UnverifiedFile;
+    };
+    match file_evidence.content_status {
+        ReviewContentStatus::NotCaptured
+        | ReviewContentStatus::SkippedLarge
+        | ReviewContentStatus::Unreadable => return EvidenceStatus::ContentNotCaptured,
+        ReviewContentStatus::Truncated => return EvidenceStatus::ContentTruncated,
+        ReviewContentStatus::Full => {}
     }
-    // Only check line plausibility if the file was found in a diff (not just full_tree).
     if let Some(line) = finding.line {
         if line == 0 {
             return EvidenceStatus::UnverifiedLine;
         }
-        if let Some(max_line) = max_line_for_file_in_target(target, &normalized) {
+        if let Some(max_line) = file_evidence
+            .captured_line_count
+            .or_else(|| max_line_for_file_in_target(target, &normalized))
+        {
             if (line as usize) > max_line {
                 return EvidenceStatus::UnverifiedLine;
             }
-        } else {
-            // File exists in scope (tree) but we have no diff line count.
-            // Line cannot be verified — file was found through full_tree only.
-            return EvidenceStatus::UnverifiedLine;
         }
     }
     EvidenceStatus::Verified
-}
-
-fn collect_scope_files(target: &ReviewTarget) -> Vec<String> {
-    let mut files: Vec<String> = Vec::new();
-    for diff in [&target.staged_diff, &target.unstaged_diff] {
-        for line in diff.lines() {
-            if let Some(rest) = line.strip_prefix("diff --git a/") {
-                if let Some(idx) = rest.find(" b/") {
-                    files.push(rest[..idx].to_string());
-                }
-            }
-        }
-    }
-    if !target.full_tree.is_empty() {
-        let mut in_tree = false;
-        for line in target.full_tree.lines() {
-            if line.starts_with("## File tree") {
-                in_tree = true;
-                continue;
-            }
-            if in_tree {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if trimmed.starts_with("##") {
-                    break;
-                }
-                files.push(trimmed.to_string());
-            }
-        }
-    }
-    files
 }
 
 fn scope_has_manifest(scope_files: &[String]) -> bool {
@@ -199,6 +218,218 @@ fn looks_like_dependency_finding(finding: &ReviewFinding) -> bool {
         "依赖",
     ];
     keywords.iter().any(|k| haystack.contains(k))
+}
+
+#[must_use]
+pub fn build_evidence_coverage(target: &ReviewTarget) -> ReviewEvidenceCoverage {
+    if matches!(&target.scope, ReviewScope::FullRepo(_)) || !target.full_tree.trim().is_empty() {
+        full_repo_evidence_coverage(&target.full_tree)
+    } else {
+        diff_evidence_coverage(target)
+    }
+}
+
+fn diff_evidence_coverage(target: &ReviewTarget) -> ReviewEvidenceCoverage {
+    let mut files: BTreeMap<String, ReviewFileEvidence> = BTreeMap::new();
+    for diff in [&target.staged_diff, &target.unstaged_diff] {
+        for path in diff_file_paths(diff) {
+            files.entry(path.clone()).or_insert_with(|| ReviewFileEvidence {
+                captured_line_count: max_line_for_file_in_target(target, &path),
+                path,
+                listed: true,
+                content_status: ReviewContentStatus::Full,
+            });
+        }
+    }
+    finalize_evidence_coverage(ReviewEvidenceScopeKind::Diff, files.len(), files)
+}
+
+fn full_repo_evidence_coverage(full_tree: &str) -> ReviewEvidenceCoverage {
+    let mut files: BTreeMap<String, ReviewFileEvidence> = BTreeMap::new();
+    for path in file_tree_paths(full_tree) {
+        files.insert(
+            path.clone(),
+            ReviewFileEvidence {
+                path,
+                listed: true,
+                content_status: ReviewContentStatus::NotCaptured,
+                captured_line_count: None,
+            },
+        );
+    }
+
+    for (path, status, line_count) in key_file_evidence(full_tree) {
+        if let Some(entry) = files.get_mut(&path) {
+            entry.content_status = status;
+            entry.captured_line_count = line_count;
+        }
+    }
+
+    finalize_evidence_coverage(ReviewEvidenceScopeKind::FullRepo, files.len(), files)
+}
+
+fn finalize_evidence_coverage(
+    scope_kind: ReviewEvidenceScopeKind,
+    file_tree_count: usize,
+    files: BTreeMap<String, ReviewFileEvidence>,
+) -> ReviewEvidenceCoverage {
+    let observed_files: Vec<ReviewFileEvidence> = files.into_values().collect();
+    let captured_file_count = observed_files
+        .iter()
+        .filter(|entry| entry.content_status == ReviewContentStatus::Full)
+        .count();
+    let truncated_file_count = observed_files
+        .iter()
+        .filter(|entry| entry.content_status == ReviewContentStatus::Truncated)
+        .count();
+    let not_captured_file_count = observed_files
+        .iter()
+        .filter(|entry| entry.content_status == ReviewContentStatus::NotCaptured)
+        .count();
+    let skipped_large_file_count = observed_files
+        .iter()
+        .filter(|entry| entry.content_status == ReviewContentStatus::SkippedLarge)
+        .count();
+    let unreadable_file_count = observed_files
+        .iter()
+        .filter(|entry| entry.content_status == ReviewContentStatus::Unreadable)
+        .count();
+    ReviewEvidenceCoverage {
+        scope_kind,
+        file_tree_count,
+        observed_files,
+        captured_file_count,
+        truncated_file_count,
+        not_captured_file_count,
+        skipped_large_file_count,
+        unreadable_file_count,
+    }
+}
+
+fn diff_file_paths(diff: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            if let Some(idx) = rest.find(" b/") {
+                if let Some(path) = normalize_repo_relative_path(&rest[..idx]) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn file_tree_paths(full_tree: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut in_tree = false;
+    for line in full_tree.lines() {
+        if line.starts_with("## File tree") {
+            in_tree = true;
+            continue;
+        }
+        if in_tree {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("##") {
+                break;
+            }
+            if let Some(path) = normalize_repo_relative_path(trimmed) {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+fn key_file_evidence(full_tree: &str) -> Vec<(String, ReviewContentStatus, Option<usize>)> {
+    let mut evidence = Vec::new();
+    let lines: Vec<&str> = full_tree.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if let Some(header) = trimmed.strip_prefix("### ") {
+            if let Some((path, status)) = parse_key_file_header(header) {
+                let line_count = captured_line_count_after_header(&lines, i + 1);
+                evidence.push((path, status, line_count));
+            }
+        }
+        i += 1;
+    }
+    evidence
+}
+
+fn parse_key_file_header(header: &str) -> Option<(String, ReviewContentStatus)> {
+    let header = header.trim();
+    let (path_part, marker) = if let Some(start) = header.rfind(" [") {
+        let marker = header[start + 2..].strip_suffix(']')?;
+        (&header[..start], Some(marker.trim()))
+    } else {
+        (header, None)
+    };
+    let path = normalize_repo_relative_path(path_part.trim())?;
+    let status = match marker.unwrap_or("full") {
+        "full" => ReviewContentStatus::Full,
+        "truncated" => ReviewContentStatus::Truncated,
+        marker if marker.starts_with("skipped") => ReviewContentStatus::SkippedLarge,
+        marker if marker.starts_with("unreadable") => ReviewContentStatus::Unreadable,
+        _ => ReviewContentStatus::NotCaptured,
+    };
+    Some((path, status))
+}
+
+fn captured_line_count_after_header(lines: &[&str], mut idx: usize) -> Option<usize> {
+    while idx < lines.len() && lines[idx].trim().is_empty() {
+        idx += 1;
+    }
+    if idx >= lines.len() || lines[idx].trim() != "```" {
+        return None;
+    }
+    idx += 1;
+    let mut count = 0;
+    while idx < lines.len() {
+        if lines[idx].trim() == "```" {
+            return Some(count);
+        }
+        count += 1;
+        idx += 1;
+    }
+    None
+}
+
+fn find_file_evidence<'a>(
+    coverage: &'a ReviewEvidenceCoverage,
+    normalized: &str,
+) -> Option<&'a ReviewFileEvidence> {
+    let has_dir = normalized.contains('/');
+    coverage.observed_files.iter().find(|entry| {
+        entry.path == normalized || (has_dir && entry.path.ends_with(&format!("/{normalized}")))
+    })
+}
+
+fn normalize_repo_relative_path(path: &str) -> Option<String> {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(rest) = normalized.strip_prefix("./") {
+        normalized = rest.to_string();
+    }
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.contains("://")
+        || normalized.as_bytes().get(1) == Some(&b':')
+    {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return None;
+        }
+        parts.push(part);
+    }
+    Some(parts.join("/"))
 }
 
 /// Helper: find the maximum new-file line number observed for a given file
@@ -420,6 +651,8 @@ struct ReviewArtifact {
     git_status: String,
     findings: Vec<ReviewFinding>,
     raw_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_coverage: Option<ReviewEvidenceCoverage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -512,6 +745,7 @@ pub fn persist_review_artifact(
         git_status: target.git_status.clone(),
         findings: report.findings.clone(),
         raw_text: report.raw_text.clone(),
+        evidence_coverage: Some(build_evidence_coverage(target)),
     };
 
     let json_path = reviews_dir.join(format!("{id}.json"));
@@ -661,6 +895,17 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
     }
     let _ =
         writeln!(output, "- Created at epoch seconds: `{}`\n", artifact.created_at_epoch_seconds);
+
+    if let Some(coverage) = &artifact.evidence_coverage {
+        output.push_str("## Evidence Coverage\n\n");
+        let _ = writeln!(output, "- Scope kind: `{:?}`", coverage.scope_kind);
+        let _ = writeln!(output, "- File tree count: `{}`", coverage.file_tree_count);
+        let _ = writeln!(output, "- Captured files: `{}`", coverage.captured_file_count);
+        let _ = writeln!(output, "- Truncated files: `{}`", coverage.truncated_file_count);
+        let _ = writeln!(output, "- Not captured files: `{}`", coverage.not_captured_file_count);
+        let _ = writeln!(output, "- Skipped large files: `{}`", coverage.skipped_large_file_count);
+        let _ = writeln!(output, "- Unreadable files: `{}`\n", coverage.unreadable_file_count);
+    }
 
     if report.findings.is_empty() {
         output.push_str("## Findings\n\nNo structured findings.\n");
@@ -907,9 +1152,10 @@ fn short_hash(hash: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_evidence_gate, latest_review_finding_statuses, load_review_finding_statuses,
-        load_review_index, persist_review_artifact, record_review_finding_status, review_diff_hash,
-        EvidenceStatus, ReviewArtifact, ReviewFinding, ReviewFindingStatus,
+        build_evidence_coverage, evaluate_evidence_gate, latest_review_finding_statuses,
+        load_review_finding_statuses, load_review_index, persist_review_artifact,
+        record_review_finding_status, review_diff_hash, EvidenceStatus, ReviewArtifact,
+        ReviewContentStatus, ReviewEvidenceScopeKind, ReviewFinding, ReviewFindingStatus,
         ReviewFindingStatusEntry, ReviewIndexEntry, ReviewParseStatus, ReviewReport,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
@@ -981,6 +1227,7 @@ mod tests {
                 evidence_status: None,
             }],
             raw_text: "raw model output".to_string(),
+            evidence_coverage: None,
         };
 
         let json = serde_json::to_string(&artifact).expect("serialize artifact");
@@ -1042,6 +1289,7 @@ mod tests {
             git_status: String::new(),
             findings: vec![],
             raw_text: "No findings.".to_string(),
+            evidence_coverage: None,
         };
 
         let json = serde_json::to_string(&artifact).expect("serialize");
@@ -1392,6 +1640,7 @@ mod tests {
         let parsed: ReviewArtifact = serde_json::from_str(json).expect("deserialize old artifact");
         assert_eq!(parsed.findings.len(), 1);
         assert!(parsed.findings[0].evidence_status.is_none());
+        assert!(parsed.evidence_coverage.is_none());
     }
 
     #[test]
@@ -1463,8 +1712,8 @@ mod tests {
     }
 
     #[test]
-    fn full_tree_file_with_line_but_no_diff_marks_unverified_line() {
-        // R3: file in full_tree only, no diff => line cannot be verified.
+    fn full_tree_file_with_line_but_no_content_marks_content_not_captured() {
+        // EC-03/EC-08: file in full_tree only, no key-file content => content_not_captured.
         let mut target = target_with_diff("");
         target.full_tree = "## File tree\nsrc/lib.rs\nsrc/main.rs\n\n## Key files\n### Cargo.toml\n```\n...\n```\n"
             .to_string();
@@ -1474,8 +1723,8 @@ mod tests {
         let findings = evaluate_evidence_gate(report.findings, &target);
         assert_eq!(
             findings[0].evidence_status,
-            Some(EvidenceStatus::UnverifiedLine),
-            "full_tree only + unknown line must be UnverifiedLine, not Verified"
+            Some(EvidenceStatus::ContentNotCaptured),
+            "full_tree listed-only files must not be treated as verified content"
         );
     }
 
@@ -1601,6 +1850,121 @@ mod tests {
         assert_eq!(latest["finding-2"].status, ReviewFindingStatus::Ignored);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ec_01_diff_scope_produces_full_evidence_for_diff_paths() {
+        let target =
+            target_with_diff("diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 +1,2 @@\n old\n+new\n");
+        let coverage = build_evidence_coverage(&target);
+
+        assert_eq!(coverage.scope_kind, ReviewEvidenceScopeKind::Diff);
+        assert_eq!(coverage.file_tree_count, 1);
+        assert_eq!(coverage.captured_file_count, 1);
+        assert_eq!(coverage.observed_files[0].path, "src/lib.rs");
+        assert_eq!(coverage.observed_files[0].content_status, ReviewContentStatus::Full);
+    }
+
+    #[test]
+    fn ec_02_full_repo_listed_and_captured_file_is_full() {
+        let target = target_full_repo(
+            "## File tree\nsrc/lib.rs\nREADME.md\n\n## Key files\n\n### src/lib.rs [full]\n```\nfn a() {}\nfn b() {}\n```\n",
+        );
+        let coverage = build_evidence_coverage(&target);
+        let lib = coverage
+            .observed_files
+            .iter()
+            .find(|entry| entry.path == "src/lib.rs")
+            .expect("lib evidence");
+
+        assert_eq!(coverage.scope_kind, ReviewEvidenceScopeKind::FullRepo);
+        assert_eq!(coverage.file_tree_count, 2);
+        assert_eq!(coverage.captured_file_count, 1);
+        assert_eq!(lib.content_status, ReviewContentStatus::Full);
+        assert_eq!(lib.captured_line_count, Some(2));
+    }
+
+    #[test]
+    fn ec_03_full_repo_listed_without_key_content_is_not_captured() {
+        let target = target_full_repo(
+            "## File tree\nsrc/lib.rs\nsrc/not_sampled.rs\n\n## Key files\n\n### src/lib.rs [full]\n```\nfn a() {}\n```\n",
+        );
+        let coverage = build_evidence_coverage(&target);
+        let skipped = coverage
+            .observed_files
+            .iter()
+            .find(|entry| entry.path == "src/not_sampled.rs")
+            .expect("not sampled evidence");
+
+        assert_eq!(skipped.content_status, ReviewContentStatus::NotCaptured);
+        assert_eq!(coverage.not_captured_file_count, 1);
+    }
+
+    #[test]
+    fn ec_04_full_repo_marked_truncation_is_counted() {
+        let target = target_full_repo(
+            "## File tree\nsrc/lib.rs\n\n## Key files\n\n### src/lib.rs [truncated]\n```\nfn a() {}\n```\n",
+        );
+        let coverage = build_evidence_coverage(&target);
+
+        assert_eq!(coverage.truncated_file_count, 1);
+        assert_eq!(coverage.observed_files[0].content_status, ReviewContentStatus::Truncated);
+    }
+
+    #[test]
+    fn ec_05_skipped_large_and_unreadable_are_counted() {
+        let target = target_full_repo(
+            "## File tree\nsrc/large.rs\nsrc/unreadable.rs\n\n## Key files\n\n### src/large.rs [skipped: 1000001 bytes]\n\n### src/unreadable.rs [unreadable: PermissionDenied]\n",
+        );
+        let coverage = build_evidence_coverage(&target);
+
+        assert_eq!(coverage.skipped_large_file_count, 1);
+        assert_eq!(coverage.unreadable_file_count, 1);
+        assert_eq!(coverage.not_captured_file_count, 0);
+    }
+
+    #[test]
+    fn ec_06_absolute_looking_paths_are_rejected_from_coverage() {
+        let target = target_full_repo(
+            "## File tree\nE:/secret/token.txt\n/src/abs.rs\nsrc/lib.rs\n../escape.rs\n\n## Key files\n\n### E:/secret/token.txt [full]\n```\nsecret\n```\n\n### src/lib.rs [full]\n```\nfn ok() {}\n```\n",
+        );
+        let coverage = build_evidence_coverage(&target);
+
+        assert_eq!(coverage.file_tree_count, 1);
+        assert_eq!(coverage.observed_files.len(), 1);
+        assert_eq!(coverage.observed_files[0].path, "src/lib.rs");
+        assert!(serde_json::to_string(&coverage).expect("json").contains("src/lib.rs"));
+        assert!(!serde_json::to_string(&coverage).expect("json").contains("E:/secret"));
+    }
+
+    #[test]
+    fn ec_07_persisted_artifact_has_optional_evidence_coverage_and_legacy_missing_loads() {
+        let root = temp_path("review-evidence-coverage-artifact");
+        let target = target_full_repo(
+            "## File tree\nsrc/lib.rs\n\n## Key files\n\n### src/lib.rs [full]\n```\nfn ok() {}\n```\n",
+        );
+        let report = ReviewReport::from_model_output("No findings.");
+        let artifact = persist_review_artifact(&root, &target, &report).expect("persist");
+        let json = std::fs::read_to_string(&artifact.json_path).expect("read json");
+        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
+
+        assert!(parsed.evidence_coverage.is_some());
+        assert!(json.contains("evidence_coverage"));
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn ec_08_not_captured_and_truncated_findings_get_specific_evidence_status() {
+        let target = target_full_repo(
+            "## File tree\nsrc/not_sampled.rs\nsrc/truncated.rs\n\n## Key files\n\n### src/truncated.rs [truncated]\n```\nfn partial() {}\n```\n",
+        );
+        let report = ReviewReport::from_model_output(
+            r#"{"findings":[{"severity":"low","file":"src/not_sampled.rs","line":1,"title":"No content","evidence":"e","risk":"r","suggestion":"s","confidence":0.1},{"severity":"low","file":"src/truncated.rs","line":1,"title":"Partial","evidence":"e","risk":"r","suggestion":"s","confidence":0.1}]}"#,
+        );
+        let findings = evaluate_evidence_gate(report.findings, &target);
+
+        assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::ContentNotCaptured));
+        assert_eq!(findings[1].evidence_status, Some(EvidenceStatus::ContentTruncated));
     }
 
     fn target_with_diff(diff: &str) -> ReviewTarget {
