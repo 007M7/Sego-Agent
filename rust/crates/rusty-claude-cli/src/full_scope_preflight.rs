@@ -37,6 +37,10 @@ pub enum BlockReason {
     OutsideWorktreeDriveTarget,
     /// Untracked top-level directory that is not a known external candidate (FSP-03).
     UntrackedTopLevelDirectory { dir_name: String },
+    /// Untracked top-level file that is not an accepted direct-entry policy match.
+    UntrackedTopLevelEntry { entry_name: String },
+    /// A policy parent contains a child that is not part of its accepted path set.
+    PolicyEntryContainsUnmatchedContent { path: String },
     /// External repository candidate detected via embedded Git probe (FSP-02, FSP-11).
     ExternalRepositoryDetected { dir_name: String },
     /// Top-level path is git-ignored and not matched by an accepted policy rule (FSP-12).
@@ -49,6 +53,8 @@ pub enum BlockReason {
     GitPathOutsideRoot,
     /// Git path does not exist (FSP-06).
     GitPathNotFound { path: String },
+    /// Existing path has no Git-tracked content and cannot form a Git path review.
+    GitPathNotTracked { path: String },
     /// Unsupported flag or incompatible scope form (FSP-10).
     UnsupportedScope { detail: String },
 }
@@ -61,12 +67,17 @@ impl BlockReason {
             Self::NonGitTarget => "non_git_target",
             Self::OutsideWorktreeDriveTarget => "outside_worktree_drive_target",
             Self::UntrackedTopLevelDirectory { .. } => "untracked_top_level_directory",
+            Self::UntrackedTopLevelEntry { .. } => "untracked_top_level_entry",
+            Self::PolicyEntryContainsUnmatchedContent { .. } => {
+                "policy_entry_contains_unmatched_content"
+            }
             Self::ExternalRepositoryDetected { .. } => "external_repository_detected",
             Self::IgnoredTopLevelNotPolicyMatched { .. } => "ignored_top_level_not_policy_matched",
             Self::TargetNotFound => "target_not_found",
             Self::TargetNotDirectory => "target_not_directory",
             Self::GitPathOutsideRoot => "git_path_outside_root",
             Self::GitPathNotFound { .. } => "git_path_not_found",
+            Self::GitPathNotTracked { .. } => "git_path_not_tracked",
             Self::UnsupportedScope { .. } => "unsupported_scope",
         }
     }
@@ -78,12 +89,15 @@ impl BlockReason {
             Self::NonGitTarget => "target is not a Git worktree; filesystem-only review is not permitted under P0 safety default".to_string(),
             Self::OutsideWorktreeDriveTarget => "drive-rooted target is outside the current worktree".to_string(),
             Self::UntrackedTopLevelDirectory { dir_name } => format!("untracked top-level directory `{dir_name}` is not matched by an accepted policy rule; use a narrower managed path"),
+            Self::UntrackedTopLevelEntry { entry_name } => format!("untracked top-level entry `{entry_name}` is not matched by an accepted policy rule"),
+            Self::PolicyEntryContainsUnmatchedContent { path } => format!("policy entry contains unmatched content at `{path}`"),
             Self::ExternalRepositoryDetected { dir_name } => format!("external repository candidate `{dir_name}` detected via embedded-Git probe; block by default"),
             Self::IgnoredTopLevelNotPolicyMatched { dir_name } => format!("git-ignored top-level `{dir_name}` is not matched by an accepted policy rule; .gitignore is not an allow signal"),
             Self::TargetNotFound => "target path does not exist".to_string(),
             Self::TargetNotDirectory => "full review target is not a directory".to_string(),
             Self::GitPathOutsideRoot => "Git path resolves outside the Git root".to_string(),
             Self::GitPathNotFound { path } => format!("Git path `{path}` does not exist"),
+            Self::GitPathNotTracked { path } => format!("Git path `{path}` has no tracked content and cannot form a review scope"),
             Self::UnsupportedScope { detail } => format!("unsupported or incompatible scope: {detail}"),
         }
     }
@@ -176,122 +190,129 @@ impl PreflightResult {
 // PEP policy matching (PEP-001..005)
 // ---------------------------------------------------------------------------
 
-/// PEP-001: managed build output — exact top-level directories.
 const PEP_001_DIRS: &[&str] = &["target", "build", "dist", "coverage"];
-
-/// PEP-002: editor/IDE local state — exact top-level directories.
 const PEP_002_DIRS: &[&str] = &[".idea", ".vscode", ".vs"];
-
-/// PEP-003: runtime/session/recovery output — registered paths.
-const PEP_003_DIRS: &[&str] = &[".sego", ".port_sessions", ".sandbox-home", ".sandbox-tmp"];
-
-/// PEP-004: private credentials/config — exact declared-root top-level entries.
+const PEP_003_EXACT_DIRS: &[&str] = &[".port_sessions", ".sandbox-home", ".sandbox-tmp"];
+const PEP_003_SEGO_CHILD_DIRS: &[&str] = &["reviews", "exports", "recovery"];
 const PEP_004_EXACT_ENTRIES: &[&str] = &[".claude", ".claw", "CLAUDE.md", "ZCODE.md"];
-
-/// PEP-004: prefix patterns for direct top-level entries only (no recursion).
-const PEP_004_PREFIXES: &[&str] = &["SEGO_SYNC_", "SEGO_TASK_"];
-
-/// PEP-005: external repository risk-annotation name prefixes (never exclusion).
 const PEP_005_PREFIXES: &[&str] = &["AionUi", "Coolearn", "hermes"];
 
-/// Check if a top-level entry name matches PEP-001 (managed build output).
-#[must_use]
-fn matches_pep_001(name: &str) -> bool {
-    PEP_001_DIRS.contains(&name)
-}
-
-/// Check if a top-level entry name matches PEP-002 (editor/IDE state).
-#[must_use]
-fn matches_pep_002(name: &str) -> bool {
-    PEP_002_DIRS.contains(&name)
-}
-
-/// Check if a top-level entry name matches PEP-003 (runtime/session/recovery).
-#[must_use]
-fn matches_pep_003(name: &str) -> bool {
-    PEP_003_DIRS.contains(&name)
-}
-
-/// Check if a top-level entry name matches PEP-004 (private credentials/config).
-///
-/// PEP-004 matches only direct top-level entries of the declared review root.
-/// `SEGO_SYNC_*.txt` and `SEGO_TASK_*.md` match only direct top-level entries,
-/// never recursing into child directories and never matching nested basenames.
 #[must_use]
 fn matches_pep_004(name: &str) -> bool {
-    if PEP_004_EXACT_ENTRIES.contains(&name) {
-        return true;
-    }
-    // Prefix patterns: SEGO_SYNC_*.txt, SEGO_TASK_*.md — direct top-level only.
-    for prefix in PEP_004_PREFIXES {
-        if let Some(rest) = name.strip_prefix(prefix) {
-            if (rest.ends_with(".txt") || rest.ends_with(".md")) && !rest.is_empty() {
-                return true;
-            }
-        }
-    }
-    false
+    PEP_004_EXACT_ENTRIES.contains(&name)
+        || name
+            .strip_prefix("SEGO_SYNC_")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.ends_with(".txt"))
+        || name
+            .strip_prefix("SEGO_TASK_")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.ends_with(".md"))
 }
 
-/// Check if a top-level entry name is a PEP-005 risk annotation (never exclusion).
 #[must_use]
 fn is_pep_005_annotation(name: &str) -> bool {
     PEP_005_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
-/// Try to match a top-level entry against the accepted PEP policy.
-/// Returns the exclusion record if matched.
-#[must_use]
-fn try_match_pep_policy(name: &str) -> Option<PreflightExclusion> {
-    let v = PREFLIGHT_POLICY_VERSION.to_string();
-    if matches_pep_001(name) {
-        return Some(PreflightExclusion {
-            policy_version: v,
-            rule_id: "PEP-001".to_string(),
-            category: "managed_build_output".to_string(),
-            relative_path: name.to_string(),
-            owner: "Product Engineering".to_string(),
-            rationale: "exact top-level build output directory".to_string(),
-        });
+fn exclusion(
+    rule_id: &str,
+    category: &str,
+    relative_path: String,
+    owner: &str,
+    rationale: &str,
+) -> PreflightExclusion {
+    PreflightExclusion {
+        policy_version: PREFLIGHT_POLICY_VERSION.to_string(),
+        rule_id: rule_id.to_string(),
+        category: category.to_string(),
+        relative_path,
+        owner: owner.to_string(),
+        rationale: rationale.to_string(),
     }
-    if matches_pep_002(name) {
-        return Some(PreflightExclusion {
-            policy_version: v,
-            rule_id: "PEP-002".to_string(),
-            category: "editor_ide_local_state".to_string(),
-            relative_path: name.to_string(),
-            owner: "Product Engineering".to_string(),
-            rationale: "exact top-level editor/IDE state directory".to_string(),
-        });
+}
+
+fn pep_003_sego_exclusions(entry_path: &Path) -> Result<Vec<PreflightExclusion>, BlockReason> {
+    let entries = std::fs::read_dir(entry_path).map_err(|_| {
+        BlockReason::PolicyEntryContainsUnmatchedContent { path: ".sego".to_string() }
+    })?;
+    let mut exclusions = Vec::new();
+    let mut found_accepted_child = false;
+
+    for child in entries.flatten() {
+        let child_name = child.file_name().to_string_lossy().to_string();
+        let child_path = child.path();
+        if PEP_003_SEGO_CHILD_DIRS.contains(&child_name.as_str()) && child_path.is_dir() {
+            found_accepted_child = true;
+            exclusions.push(exclusion(
+                "PEP-003",
+                "runtime_session_recovery",
+                format!(".sego/{child_name}"),
+                "Sego Master",
+                "registered runtime/session/recovery output path",
+            ));
+        } else {
+            return Err(BlockReason::PolicyEntryContainsUnmatchedContent {
+                path: format!(".sego/{child_name}"),
+            });
+        }
     }
-    if matches_pep_003(name) {
-        return Some(PreflightExclusion {
-            policy_version: v,
-            rule_id: "PEP-003".to_string(),
-            category: "runtime_session_recovery".to_string(),
-            relative_path: name.to_string(),
-            owner: "Sego Master".to_string(),
-            rationale: "registered runtime/session/recovery output path".to_string(),
-        });
+
+    if !found_accepted_child {
+        return Err(BlockReason::PolicyEntryContainsUnmatchedContent { path: ".sego".to_string() });
+    }
+    Ok(exclusions)
+}
+
+fn try_match_pep_policy(
+    name: &str,
+    entry_path: &Path,
+    is_dir: bool,
+) -> Result<Option<Vec<PreflightExclusion>>, BlockReason> {
+    if is_dir && PEP_001_DIRS.contains(&name) {
+        return Ok(Some(vec![exclusion(
+            "PEP-001",
+            "managed_build_output",
+            name.to_string(),
+            "Product Engineering",
+            "exact declared-review-root build output directory",
+        )]));
+    }
+    if is_dir && PEP_002_DIRS.contains(&name) {
+        return Ok(Some(vec![exclusion(
+            "PEP-002",
+            "editor_ide_local_state",
+            name.to_string(),
+            "Product Engineering",
+            "exact declared-review-root editor/IDE state directory",
+        )]));
+    }
+    if is_dir && name == ".sego" {
+        return pep_003_sego_exclusions(entry_path).map(Some);
+    }
+    if is_dir && PEP_003_EXACT_DIRS.contains(&name) {
+        return Ok(Some(vec![exclusion(
+            "PEP-003",
+            "runtime_session_recovery",
+            name.to_string(),
+            "Sego Master",
+            "registered runtime/session/recovery output path",
+        )]));
     }
     if matches_pep_004(name) {
-        return Some(PreflightExclusion {
-            policy_version: v,
-            rule_id: "PEP-004".to_string(),
-            category: "private_credentials_config".to_string(),
-            relative_path: name.to_string(),
-            owner: "Founder/Sego Master".to_string(),
-            rationale: "declared-root direct top-level private/config entry".to_string(),
-        });
+        return Ok(Some(vec![exclusion(
+            "PEP-004",
+            "private_credentials_config",
+            name.to_string(),
+            "Founder/Sego Master",
+            "declared-review-root direct top-level private/config entry",
+        )]));
     }
-    None
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
 // Git helpers (reused from main, but isolated for testability)
 // ---------------------------------------------------------------------------
 
-/// Run a git command in `cwd` and return stdout. Returns Err on non-zero exit.
 fn git_output(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -305,7 +326,6 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|e| format!("git output not UTF-8: {e}"))
 }
 
-/// Check if a path is inside a Git worktree.
 #[must_use]
 pub fn is_git_worktree_at(cwd: &Path) -> bool {
     std::process::Command::new("git")
@@ -318,104 +338,42 @@ pub fn is_git_worktree_at(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Find the Git root (toplevel) for a path inside a worktree.
 fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
     git_output(cwd, &["rev-parse", "--show-toplevel"]).ok().and_then(|s| {
         let trimmed = s.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(trimmed))
-        }
+        (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
     })
 }
 
-/// Get untracked top-level directories via `git status --porcelain --untracked-files=normal`.
-fn untracked_top_level_dirs(repo_root: &Path) -> Vec<String> {
-    let status = git_output(repo_root, &["status", "--porcelain", "--untracked-files=normal"])
-        .unwrap_or_default();
-
-    let mut dirs: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for line in status.lines() {
-        let raw = line.trim_start();
-        if !raw.starts_with("?? ") {
-            continue;
-        }
-        let path_str = raw["?? ".len()..].trim();
-        if path_str.is_empty() {
-            continue;
-        }
-        // Strip surrounding quotes git may add.
-        let path_str =
-            path_str.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(path_str);
-        // Trailing slash indicates a directory.
-        let dir_name = path_str.trim_end_matches('/').trim_end_matches('\\');
-        if dir_name.is_empty() {
-            continue;
-        }
-        // Only top-level: no path separator.
-        if dir_name.contains('/') || dir_name.contains('\\') {
-            continue;
-        }
-        if seen.insert(dir_name.to_string()) {
-            dirs.push(dir_name.to_string());
-        }
-    }
-    dirs.sort();
-    dirs
+fn git_relative_path(git_root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(git_root).ok().map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
-/// Check if a top-level directory contains a `.git` entry (embedded Git repo probe).
-///
-/// This is a bounded probe: it only checks for the existence of `.git` inside
-/// the immediate top-level child. It does NOT recurse or enumerate content.
-fn has_embedded_git(repo_root: &Path, dir_name: &str) -> bool {
-    let git_path = repo_root.join(dir_name).join(".git");
-    git_path.exists()
+fn has_git_tracked_content(git_root: &Path, relative_path: &str) -> bool {
+    git_output(git_root, &["ls-files", "--", relative_path])
+        .map(|output| !output.trim().is_empty())
+        .unwrap_or(false)
 }
 
-/// Get ignored top-level directories via `git status --porcelain --ignored`.
-///
-/// Ignored directories are not visible in normal `git status`. We need to
-/// detect them separately so that FSP-12 can block ignored external content
-/// that is not matched by an accepted policy rule.
-fn ignored_top_level_dirs(repo_root: &Path) -> Vec<String> {
-    let status = git_output(repo_root, &["status", "--porcelain", "--ignored"]).unwrap_or_default();
-
-    let mut dirs: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for line in status.lines() {
-        let raw = line.trim_start();
-        // Ignored entries start with "!! ".
-        if !raw.starts_with("!! ") {
-            continue;
-        }
-        let path_str = raw["!! ".len()..].trim();
-        if path_str.is_empty() {
-            continue;
-        }
-        let path_str =
-            path_str.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(path_str);
-        let dir_name = path_str.trim_end_matches('/').trim_end_matches('\\');
-        if dir_name.is_empty() {
-            continue;
-        }
-        // Only top-level: no path separator.
-        if dir_name.contains('/') || dir_name.contains('\\') {
-            continue;
-        }
-        if seen.insert(dir_name.to_string()) {
-            dirs.push(dir_name.to_string());
-        }
-    }
-    dirs.sort();
-    dirs
+fn is_git_ignored(git_root: &Path, relative_path: &str) -> bool {
+    git_output(git_root, &["check-ignore", "--", relative_path])
+        .map(|output| !output.trim().is_empty())
+        .unwrap_or(false)
 }
 
-/// Check if a top-level path is git-ignored.
-fn is_git_ignored(repo_root: &Path, name: &str) -> bool {
-    git_output(repo_root, &["check-ignore", name]).map(|s| !s.trim().is_empty()).unwrap_or(false)
+fn has_embedded_git(review_root: &Path, name: &str) -> bool {
+    review_root.join(name).join(".git").exists()
+}
+
+fn sorted_direct_entries(review_root: &Path) -> Result<Vec<std::fs::DirEntry>, BlockReason> {
+    let entries = std::fs::read_dir(review_root).map_err(|_| {
+        BlockReason::PolicyEntryContainsUnmatchedContent { path: review_root.display().to_string() }
+    })?;
+    let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
+    entries.sort_by(|left, right| {
+        left.file_name().to_string_lossy().cmp(&right.file_name().to_string_lossy())
+    });
+    Ok(entries)
 }
 
 // ---------------------------------------------------------------------------
@@ -433,11 +391,8 @@ fn is_git_ignored(repo_root: &Path, name: &str) -> bool {
 /// must not be reached.
 pub fn run_full_review_preflight(cwd: &Path, target: &Path) -> PreflightResult {
     let mut events: Vec<ClassificationEvent> = Vec::new();
-
-    // 1. Resolve target to absolute path.
     let resolved_raw = if target.is_absolute() { target.to_path_buf() } else { cwd.join(target) };
 
-    // 2. Check existence before canonicalize (canonicalize fails on missing).
     if !resolved_raw.exists() {
         events.push(ClassificationEvent {
             event_type: "target_check".to_string(),
@@ -446,29 +401,22 @@ pub fn run_full_review_preflight(cwd: &Path, target: &Path) -> PreflightResult {
         return PreflightResult::block(BlockReason::TargetNotFound, None, None, events);
     }
 
-    // 3. Canonicalize.
     let resolved = match std::fs::canonicalize(&resolved_raw) {
-        Ok(p) => p,
-        Err(e) => {
+        Ok(path) => path,
+        Err(error) => {
             events.push(ClassificationEvent {
                 event_type: "canonicalize_failed".to_string(),
-                detail: format!("cannot canonicalize {}: {e}", resolved_raw.display()),
+                detail: format!("cannot canonicalize {}: {error}", resolved_raw.display()),
             });
             return PreflightResult::block(BlockReason::TargetNotFound, None, None, events);
         }
     };
-
     events.push(ClassificationEvent {
         event_type: "resolved_target".to_string(),
         detail: resolved.display().to_string(),
     });
 
-    // 4. Must be a directory.
     if !resolved.is_dir() {
-        events.push(ClassificationEvent {
-            event_type: "target_not_directory".to_string(),
-            detail: resolved.display().to_string(),
-        });
         return PreflightResult::block(
             BlockReason::TargetNotDirectory,
             Some(resolved),
@@ -476,188 +424,135 @@ pub fn run_full_review_preflight(cwd: &Path, target: &Path) -> PreflightResult {
             events,
         );
     }
-
-    // 5. Must be a Git worktree (P0: no filesystem-only mode).
     if !is_git_worktree_at(&resolved) {
-        events.push(ClassificationEvent {
-            event_type: "non_git_target".to_string(),
-            detail: resolved.display().to_string(),
-        });
         return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events);
     }
 
-    // 6. Find Git root.
-    let git_root = git_toplevel(&resolved);
-    let git_root = match git_root {
-        Some(root) => {
-            // Canonicalize so path comparisons use the same format as resolved.
-            let canonical = std::fs::canonicalize(&root).unwrap_or(root);
-            events.push(ClassificationEvent {
-                event_type: "git_root".to_string(),
-                detail: canonical.display().to_string(),
-            });
-            canonical
-        }
+    let git_root = match git_toplevel(&resolved)
+        .map(|root| std::fs::canonicalize(&root).unwrap_or(root))
+    {
+        Some(root) => root,
         None => {
-            return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events);
+            return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events)
         }
     };
-
-    // 7. If target is an absolute drive-rooted path outside the current worktree's
-    //    Git root, check whether it's the same as the current cwd's Git root.
-    //    FSP-08: drive-rooted target outside current worktree blocks.
-    if target.is_absolute() {
-        if let Some(cwd_git_root) = git_toplevel(cwd) {
-            let cwd_git_root = std::fs::canonicalize(&cwd_git_root).unwrap_or(cwd_git_root);
-            if cwd_git_root != git_root {
-                events.push(ClassificationEvent {
-                    event_type: "outside_worktree".to_string(),
-                    detail: format!(
-                        "target git root {} != cwd git root {}",
-                        git_root.display(),
-                        cwd_git_root.display()
-                    ),
-                });
+    let cwd_git_root =
+        match git_toplevel(cwd).map(|root| std::fs::canonicalize(&root).unwrap_or(root)) {
+            Some(root) => root,
+            None => {
                 return PreflightResult::block(
                     BlockReason::OutsideWorktreeDriveTarget,
                     Some(resolved),
                     Some(git_root),
                     events,
-                );
+                )
             }
-        }
+        };
+    if cwd_git_root != git_root {
+        events.push(ClassificationEvent {
+            event_type: "outside_worktree".to_string(),
+            detail: format!(
+                "target git root {} != cwd git root {}",
+                git_root.display(),
+                cwd_git_root.display()
+            ),
+        });
+        return PreflightResult::block(
+            BlockReason::OutsideWorktreeDriveTarget,
+            Some(resolved),
+            Some(git_root),
+            events,
+        );
     }
 
-    // 8. Inspect untracked top-level directories.
-    let untracked = untracked_top_level_dirs(&git_root);
-    let mut exclusions: Vec<PreflightExclusion> = Vec::new();
+    let mut exclusions = Vec::new();
+    let entries = match sorted_direct_entries(&resolved) {
+        Ok(entries) => entries,
+        Err(reason) => {
+            return PreflightResult::block(reason, Some(resolved), Some(git_root), events)
+        }
+    };
 
-    for dir_name in &untracked {
-        // PEP-005: external repository risk annotation — always block, never exclusion.
-        if is_pep_005_annotation(dir_name) {
-            // Use generic embedded-Git detection as decisive evidence.
-            if has_embedded_git(&git_root, dir_name) {
-                events.push(ClassificationEvent {
-                    event_type: "external_repository_detected".to_string(),
-                    detail: format!("{dir_name} contains embedded .git"),
-                });
-                return PreflightResult::block(
-                    BlockReason::ExternalRepositoryDetected { dir_name: dir_name.clone() },
-                    Some(resolved),
-                    Some(git_root),
-                    events,
-                );
-            }
-            // PEP-005 name without embedded .git is still a risk annotation;
-            // block as unknown untracked top-level.
-            events.push(ClassificationEvent {
-                event_type: "pep005_annotation_no_git".to_string(),
-                detail: dir_name.clone(),
-            });
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if resolved == git_root && name == ".git" {
+            continue;
+        }
+        let entry_path = entry.path();
+        let Some(relative_path) = git_relative_path(&git_root, &entry_path) else {
             return PreflightResult::block(
-                BlockReason::UntrackedTopLevelDirectory { dir_name: dir_name.clone() },
+                BlockReason::OutsideWorktreeDriveTarget,
                 Some(resolved),
                 Some(git_root),
                 events,
             );
-        }
-
-        // Try PEP-001..004 policy match.
-        if let Some(excl) = try_match_pep_policy(dir_name) {
-            events.push(ClassificationEvent {
-                event_type: "policy_exclusion".to_string(),
-                detail: format!("{} matched {}", dir_name, excl.rule_id),
-            });
-            exclusions.push(excl);
+        };
+        if has_git_tracked_content(&git_root, &relative_path) {
             continue;
         }
 
-        // Generic embedded-Git probe for any untracked top-level directory (FSP-02).
-        if has_embedded_git(&git_root, dir_name) {
+        let is_dir = entry_path.is_dir();
+        if is_dir && has_embedded_git(&resolved, &name) {
             events.push(ClassificationEvent {
                 event_type: "external_repository_detected".to_string(),
-                detail: format!("{dir_name} contains embedded .git (generic probe)"),
+                detail: format!("{name} contains embedded .git"),
             });
             return PreflightResult::block(
-                BlockReason::ExternalRepositoryDetected { dir_name: dir_name.clone() },
+                BlockReason::ExternalRepositoryDetected { dir_name: name },
+                Some(resolved),
+                Some(git_root),
+                events,
+            );
+        }
+        if is_pep_005_annotation(&name) {
+            return PreflightResult::block(
+                if is_dir {
+                    BlockReason::UntrackedTopLevelDirectory { dir_name: name }
+                } else {
+                    BlockReason::UntrackedTopLevelEntry { entry_name: name }
+                },
                 Some(resolved),
                 Some(git_root),
                 events,
             );
         }
 
-        // Check if git-ignored (FSP-12: ignore is not an allow signal).
-        if is_git_ignored(&git_root, dir_name) {
-            events.push(ClassificationEvent {
-                event_type: "ignored_not_policy_matched".to_string(),
-                detail: dir_name.clone(),
-            });
-            return PreflightResult::block(
-                BlockReason::IgnoredTopLevelNotPolicyMatched { dir_name: dir_name.clone() },
-                Some(resolved),
-                Some(git_root),
-                events,
-            );
-        }
-
-        // Unknown untracked top-level directory (FSP-03).
-        events.push(ClassificationEvent {
-            event_type: "untracked_top_level".to_string(),
-            detail: dir_name.clone(),
-        });
-        return PreflightResult::block(
-            BlockReason::UntrackedTopLevelDirectory { dir_name: dir_name.clone() },
-            Some(resolved),
-            Some(git_root),
-            events,
-        );
-    }
-
-    // 9. Inspect ignored top-level directories (FSP-12).
-    //    Ignored dirs are not visible in normal git status, so we check them
-    //    separately. An ignored dir that is not matched by an accepted PEP
-    //    policy rule blocks - .gitignore is not an allow signal.
-    let ignored = ignored_top_level_dirs(&git_root);
-    for dir_name in &ignored {
-        // PEP-005: external repository risk annotation - always block.
-        if is_pep_005_annotation(dir_name) {
-            if has_embedded_git(&git_root, dir_name) {
+        match try_match_pep_policy(&name, &entry_path, is_dir) {
+            Ok(Some(mut matches)) => {
                 events.push(ClassificationEvent {
-                    event_type: "external_repository_detected_ignored".to_string(),
-                    detail: format!("{dir_name} contains embedded .git (ignored)"),
+                    event_type: "policy_exclusion".to_string(),
+                    detail: format!("{name} matched accepted policy"),
                 });
-                return PreflightResult::block(
-                    BlockReason::ExternalRepositoryDetected { dir_name: dir_name.clone() },
-                    Some(resolved),
-                    Some(git_root),
-                    events,
-                );
+                exclusions.append(&mut matches);
+                continue;
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                return PreflightResult::block(reason, Some(resolved), Some(git_root), events)
             }
         }
 
-        // Try PEP-001..004 policy match. If matched, it's an exclusion.
-        if try_match_pep_policy(dir_name).is_some() {
-            events.push(ClassificationEvent {
-                event_type: "ignored_policy_matched".to_string(),
-                detail: dir_name.clone(),
-            });
-            continue;
+        if is_git_ignored(&git_root, &relative_path) {
+            return PreflightResult::block(
+                BlockReason::IgnoredTopLevelNotPolicyMatched { dir_name: name },
+                Some(resolved),
+                Some(git_root),
+                events,
+            );
         }
 
-        // Ignored but not policy-matched: block (FSP-12).
-        events.push(ClassificationEvent {
-            event_type: "ignored_not_policy_matched".to_string(),
-            detail: dir_name.clone(),
-        });
         return PreflightResult::block(
-            BlockReason::IgnoredTopLevelNotPolicyMatched { dir_name: dir_name.clone() },
+            if is_dir {
+                BlockReason::UntrackedTopLevelDirectory { dir_name: name }
+            } else {
+                BlockReason::UntrackedTopLevelEntry { entry_name: name }
+            },
             Some(resolved),
             Some(git_root),
             events,
         );
     }
 
-    // All checks passed: allow.
     events.push(ClassificationEvent {
         event_type: "preflight_allow".to_string(),
         detail: format!("{} exclusions recorded", exclusions.len()),
@@ -741,6 +636,20 @@ pub fn run_git_path_preflight(cwd: &Path, path: &Path) -> PreflightResult {
         });
         return PreflightResult::block(
             BlockReason::GitPathOutsideRoot,
+            Some(resolved),
+            Some(git_root),
+            events,
+        );
+    }
+
+    let relative_path = git_relative_path(&git_root, &resolved).unwrap_or_default();
+    if !has_git_tracked_content(&git_root, &relative_path) {
+        events.push(ClassificationEvent {
+            event_type: "git_path_not_tracked".to_string(),
+            detail: relative_path.clone(),
+        });
+        return PreflightResult::block(
+            BlockReason::GitPathNotTracked { path: relative_path },
             Some(resolved),
             Some(git_root),
             events,
@@ -834,6 +743,9 @@ mod tests {
         let external = root.join("external-a");
         fs::create_dir_all(&external).expect("external dir");
         git(&["init", "--quiet"], &external);
+        // Fixtures must not depend on a developer-machine global Git identity.
+        git(&["config", "user.email", "tests@example.com"], &external);
+        git(&["config", "user.name", "Sego Preflight Tests"], &external);
         fs::write(external.join("stub.txt"), "external\n").expect("stub");
         git(&["add", "."], &external);
         git(&["commit", "-m", "ext", "--quiet"], &external);
@@ -1022,22 +934,18 @@ mod tests {
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
-    // FSP-10: Unsupported/incompatible scope block before filesystem access.
+    // Missing full target blocks before snapshot. Parser-level FSP-10 coverage
+    // for incompatible scope flags lives in runtime::code_review::scope tests.
     #[test]
-    fn fsp_10_unsupported_scope_block() {
+    fn full_target_not_found_blocks_before_snapshot() {
         let _guard = env_lock();
         let root = make_clean_git_root();
 
-        // The parser already rejects unknown flags, but we test that a
-        // non-existent target is blocked before any snapshot.
         let result = run_full_review_preflight(&root, Path::new("does-not-exist-xyz"));
 
         assert_eq!(result.decision, PreflightDecision::Block);
         assert!(!result.snapshot_started);
-        match &result.block_reason {
-            Some(BlockReason::TargetNotFound) => {}
-            other => panic!("expected TargetNotFound, got {other:?}"),
-        }
+        assert!(matches!(result.block_reason, Some(BlockReason::TargetNotFound)));
 
         fs::remove_dir_all(&root).expect("cleanup");
     }
@@ -1097,11 +1005,79 @@ mod tests {
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
+    #[test]
+    fn pep_003_blocks_unapproved_sego_child() {
+        let _guard = env_lock();
+        let root = make_clean_git_root();
+        fs::create_dir_all(root.join(".sego").join("reviews")).expect("reviews");
+        fs::write(root.join(".sego").join("reviews").join("r.json"), "{}\n").expect("review");
+        fs::write(root.join(".sego").join("dev.toml"), "private = true\n").expect("private");
+
+        let result = run_full_review_preflight(&root, Path::new("."));
+
+        assert_eq!(result.decision, PreflightDecision::Block);
+        assert!(matches!(
+            result.block_reason,
+            Some(BlockReason::PolicyEntryContainsUnmatchedContent { ref path }) if path == ".sego/dev.toml"
+        ));
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn declared_subtree_does_not_classify_root_siblings() {
+        let _guard = env_lock();
+        let root = make_clean_git_root();
+        let external = root.join("external");
+        fs::create_dir_all(&external).expect("external");
+        git(&["init", "--quiet"], &external);
+        fs::write(external.join("stub.txt"), "external\n").expect("stub");
+
+        let result = run_full_review_preflight(&root, Path::new("src"));
+
+        assert_eq!(result.decision, PreflightDecision::Allow);
+        assert!(result.exclusions.is_empty());
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn git_path_untracked_existing_entry_blocks() {
+        let _guard = env_lock();
+        let root = make_clean_git_root();
+        fs::write(root.join("notes.md"), "untracked\n").expect("notes");
+
+        let result = run_git_path_preflight(&root, Path::new("notes.md"));
+
+        assert_eq!(result.decision, PreflightDecision::Block);
+        assert!(matches!(
+            result.block_reason,
+            Some(BlockReason::GitPathNotTracked { ref path }) if path == "notes.md"
+        ));
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn pep_004_wrong_extension_does_not_become_exclusion() {
+        let _guard = env_lock();
+        let root = make_clean_git_root();
+        fs::write(root.join("SEGO_SYNC_private.md"), "private\n").expect("private");
+
+        let result = run_full_review_preflight(&root, Path::new("."));
+
+        assert_eq!(result.decision, PreflightDecision::Block);
+        assert!(matches!(
+            result.block_reason,
+            Some(BlockReason::UntrackedTopLevelEntry { ref entry_name }) if entry_name == "SEGO_SYNC_private.md"
+        ));
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
     // Extra: PEP-004 prefix matching (SEGO_SYNC_*.txt, SEGO_TASK_*.md).
     #[test]
     fn pep_004_prefix_patterns_match_direct_top_level_only() {
         assert!(matches_pep_004("SEGO_SYNC_abc.txt"));
         assert!(matches_pep_004("SEGO_TASK_001.md"));
+        assert!(!matches_pep_004("SEGO_SYNC_abc.md"));
+        assert!(!matches_pep_004("SEGO_TASK_abc.txt"));
         assert!(!matches_pep_004("SEGO_SYNC_abc.txt.bak"));
         assert!(!matches_pep_004("sub/SEGO_SYNC_abc.txt"));
         assert!(matches_pep_004(".claude"));
