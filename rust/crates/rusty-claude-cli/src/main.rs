@@ -1510,6 +1510,15 @@ struct StatusContext {
     sandbox_status: runtime::SandboxStatus,
 }
 
+fn provider_kind_label(kind: api::ProviderKind) -> &'static str {
+    match kind {
+        api::ProviderKind::Anthropic => "anthropic",
+        api::ProviderKind::Xai => "xai",
+        api::ProviderKind::OpenAi => "openai",
+        api::ProviderKind::DeepSeek => "deepseek",
+    }
+}
+
 struct WorkspaceContext {
     cwd: PathBuf,
     project_root: Option<PathBuf>,
@@ -4552,6 +4561,17 @@ fn format_status_report(
             usage.cumulative.input_tokens,
             usage.cumulative.output_tokens,
             usage.cumulative.total_tokens(),
+        ),
+        format!(
+            "Provider/cache
+  Provider         {}
+  Latest cache     create {}, read {}
+  Cumulative cache create {}, read {}",
+            provider_kind_label(detect_provider_kind(model)),
+            usage.latest.cache_creation_input_tokens,
+            usage.latest.cache_read_input_tokens,
+            usage.cumulative.cache_creation_input_tokens,
+            usage.cumulative.cache_read_input_tokens,
         ),
         format!(
             "Workspace
@@ -10274,6 +10294,10 @@ mod tests {
         assert!(status.contains("Messages         7"));
         assert!(status.contains("Latest total     10"));
         assert!(status.contains("Cumulative total 31"));
+        assert!(status.contains("Provider/cache"));
+        assert!(status.contains("Provider         anthropic"));
+        assert!(status.contains("Latest cache     create 1, read 0"));
+        assert!(status.contains("Cumulative cache create 2, read 1"));
         assert!(status.contains("Cwd              /tmp/project"));
         assert!(status.contains("Project root     /tmp"));
         assert!(status.contains("Git branch       main"));

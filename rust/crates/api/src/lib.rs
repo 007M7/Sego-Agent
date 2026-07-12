@@ -12,8 +12,8 @@ pub use client::{
 };
 pub use error::ApiError;
 pub use prompt_cache::{
-    CacheBreakEvent, PromptCache, PromptCacheConfig, PromptCachePaths, PromptCacheRecord,
-    PromptCacheStats,
+    CacheBreakEvent, PromptCache, PromptCacheConfig, PromptCacheObservability, PromptCachePaths,
+    PromptCacheRecord, PromptCacheStats,
 };
 pub use providers::anthropic::{AnthropicClient, AnthropicClient as ApiClient, AuthSource};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};

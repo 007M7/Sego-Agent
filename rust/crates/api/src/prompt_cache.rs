@@ -73,6 +73,7 @@ impl PromptCachePaths {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PromptCacheStats {
     pub tracked_requests: u64,
     pub completion_cache_hits: u64,
@@ -88,6 +89,51 @@ pub struct PromptCacheStats {
     pub last_completion_cache_key: Option<String>,
     pub last_break_reason: Option<String>,
     pub last_cache_source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptCacheObservability {
+    pub completion_cache_hits: u64,
+    pub completion_cache_misses: u64,
+    pub completion_cache_writes: u64,
+    pub completion_cache_requests: u64,
+    pub completion_cache_hit_rate_percent: f64,
+    pub expected_invalidations: u64,
+    pub unexpected_cache_breaks: u64,
+    pub total_cache_creation_input_tokens: u64,
+    pub total_cache_read_input_tokens: u64,
+    pub last_cache_creation_input_tokens: Option<u32>,
+    pub last_cache_read_input_tokens: Option<u32>,
+    pub last_cache_source: Option<String>,
+    pub last_break_reason: Option<String>,
+}
+
+impl PromptCacheStats {
+    #[must_use]
+    pub fn observability(&self) -> PromptCacheObservability {
+        let completion_cache_requests =
+            self.completion_cache_hits.saturating_add(self.completion_cache_misses);
+        let completion_cache_hit_rate_percent = if completion_cache_requests == 0 {
+            0.0
+        } else {
+            (self.completion_cache_hits as f64 / completion_cache_requests as f64) * 100.0
+        };
+        PromptCacheObservability {
+            completion_cache_hits: self.completion_cache_hits,
+            completion_cache_misses: self.completion_cache_misses,
+            completion_cache_writes: self.completion_cache_writes,
+            completion_cache_requests,
+            completion_cache_hit_rate_percent,
+            expected_invalidations: self.expected_invalidations,
+            unexpected_cache_breaks: self.unexpected_cache_breaks,
+            total_cache_creation_input_tokens: self.total_cache_creation_input_tokens,
+            total_cache_read_input_tokens: self.total_cache_read_input_tokens,
+            last_cache_creation_input_tokens: self.last_cache_creation_input_tokens,
+            last_cache_read_input_tokens: self.last_cache_read_input_tokens,
+            last_cache_source: self.last_cache_source.clone(),
+            last_break_reason: self.last_break_reason.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,10 +615,15 @@ mod tests {
         assert_eq!(stats.completion_cache_hits, 1);
         assert_eq!(stats.completion_cache_misses, 1);
         assert_eq!(stats.completion_cache_writes, 1);
+        let observability = stats.observability();
+        assert_eq!(observability.completion_cache_requests, 2);
+        assert_eq!(observability.completion_cache_hit_rate_percent, 50.0);
+        assert_eq!(observability.last_cache_source.as_deref(), Some("completion-cache"));
 
         let persisted = read_json::<super::PromptCacheStats>(&cache.paths().stats_path)
             .expect("stats should persist");
         assert_eq!(persisted.completion_cache_hits, 1);
+        assert_eq!(persisted.observability().completion_cache_requests, 2);
 
         std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
         std::env::remove_var("CLAUDE_CONFIG_HOME");
@@ -626,6 +677,51 @@ mod tests {
 
         std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
         std::env::remove_var("CLAUDE_CONFIG_HOME");
+    }
+
+    #[test]
+    fn prompt_cache_observability_computes_request_totals_and_hit_rate() {
+        let stats = super::PromptCacheStats {
+            completion_cache_hits: 3,
+            completion_cache_misses: 1,
+            completion_cache_writes: 2,
+            expected_invalidations: 1,
+            unexpected_cache_breaks: 1,
+            total_cache_creation_input_tokens: 40,
+            total_cache_read_input_tokens: 80,
+            last_cache_creation_input_tokens: Some(4),
+            last_cache_read_input_tokens: Some(8),
+            last_cache_source: Some("api-response".to_string()),
+            last_break_reason: Some("stable request lost cache reads".to_string()),
+            ..super::PromptCacheStats::default()
+        };
+
+        let observability = stats.observability();
+        assert_eq!(observability.completion_cache_requests, 4);
+        assert_eq!(observability.completion_cache_hit_rate_percent, 75.0);
+        assert_eq!(observability.completion_cache_writes, 2);
+        assert_eq!(observability.unexpected_cache_breaks, 1);
+        assert_eq!(observability.last_cache_source.as_deref(), Some("api-response"));
+    }
+
+    #[test]
+    fn prompt_cache_observability_zero_request_hit_rate_is_zero() {
+        let observability = super::PromptCacheStats::default().observability();
+
+        assert_eq!(observability.completion_cache_requests, 0);
+        assert_eq!(observability.completion_cache_hit_rate_percent, 0.0);
+    }
+
+    #[test]
+    fn old_prompt_cache_stats_json_missing_observability_context_still_loads() {
+        let json = r#"{"tracked_requests":2,"completion_cache_hits":1}"#;
+        let stats: super::PromptCacheStats = serde_json::from_str(json).expect("legacy stats load");
+        let observability = stats.observability();
+
+        assert_eq!(observability.completion_cache_hits, 1);
+        assert_eq!(observability.completion_cache_misses, 0);
+        assert_eq!(observability.completion_cache_requests, 1);
+        assert_eq!(observability.last_cache_source, None);
     }
 
     #[test]
