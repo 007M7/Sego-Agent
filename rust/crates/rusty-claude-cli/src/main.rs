@@ -5925,6 +5925,8 @@ struct ReviewFindingStatusCounts {
     open: usize,
     acknowledged: usize,
     fixed: usize,
+    accepted_risk: usize,
+    false_positive: usize,
     ignored: usize,
 }
 
@@ -5938,6 +5940,8 @@ impl ReviewFindingStatusCounts {
                 ReviewFindingStatus::Open => counts.open += 1,
                 ReviewFindingStatus::Acknowledged => counts.acknowledged += 1,
                 ReviewFindingStatus::Fixed => counts.fixed += 1,
+                ReviewFindingStatus::AcceptedRisk => counts.accepted_risk += 1,
+                ReviewFindingStatus::FalsePositive => counts.false_positive += 1,
                 ReviewFindingStatus::Ignored => counts.ignored += 1,
             }
         }
@@ -5945,13 +5949,23 @@ impl ReviewFindingStatusCounts {
     }
 
     fn is_empty(&self) -> bool {
-        self.open == 0 && self.acknowledged == 0 && self.fixed == 0 && self.ignored == 0
+        self.open == 0
+            && self.acknowledged == 0
+            && self.fixed == 0
+            && self.accepted_risk == 0
+            && self.false_positive == 0
+            && self.ignored == 0
     }
 
     fn render(&self) -> String {
         format!(
-            "open {}, acknowledged {}, fixed {}, ignored {}",
-            self.open, self.acknowledged, self.fixed, self.ignored
+            "open {}, acknowledged {}, fixed {}, accepted_risk {}, false_positive {}, ignored {}",
+            self.open,
+            self.acknowledged,
+            self.fixed,
+            self.accepted_risk,
+            self.false_positive,
+            self.ignored
         )
     }
 }
@@ -6436,6 +6450,8 @@ fn build_review_summary_json_value(
             "open": status_counts.open,
             "acknowledged": status_counts.acknowledged,
             "fixed": status_counts.fixed,
+            "accepted_risk": status_counts.accepted_risk,
+            "false_positive": status_counts.false_positive,
             "ignored": status_counts.ignored,
         }
     })
@@ -6467,6 +6483,14 @@ fn review_finding_status_counts_for_summary(
             ReviewFindingStatus::Fixed => {
                 counts.open = counts.open.saturating_sub(1);
                 counts.fixed += 1;
+            }
+            ReviewFindingStatus::AcceptedRisk => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.accepted_risk += 1;
+            }
+            ReviewFindingStatus::FalsePositive => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.false_positive += 1;
             }
             ReviewFindingStatus::Ignored => {
                 counts.open = counts.open.saturating_sub(1);
@@ -9683,7 +9707,14 @@ mod tests {
         let summary = build_review_summary_json_value(
             "latest",
             &entry,
-            ReviewFindingStatusCounts { open: 2, acknowledged: 1, fixed: 0, ignored: 0 },
+            ReviewFindingStatusCounts {
+                open: 2,
+                acknowledged: 1,
+                fixed: 0,
+                accepted_risk: 0,
+                false_positive: 0,
+                ignored: 0,
+            },
         );
         assert_eq!(summary["schema_version"], 1);
         assert_eq!(summary["kind"], "sego_latest_review_summary");
@@ -9695,8 +9726,58 @@ mod tests {
         assert_eq!(summary["review"]["json_path"], ".sego/reviews/review-123.json");
         assert_eq!(summary["review"]["markdown_path"], ".sego/reviews/review-123.md");
         assert_eq!(summary["status_counts"]["open"], 2);
+        assert_eq!(summary["status_counts"]["accepted_risk"], 0);
+        assert_eq!(summary["status_counts"]["false_positive"], 0);
         assert!(summary.get("raw_text").is_none());
         assert!(summary.get("findings").is_none());
+    }
+
+    #[test]
+    fn review_summary_json_counts_explicit_terminal_dispositions() {
+        let entry = ReviewIndexEntry {
+            id: "review-456".to_string(),
+            created_at_epoch_seconds: 1_782_600_001,
+            scope: "workspace".to_string(),
+            diff_hash: "def456".to_string(),
+            finding_count: 4,
+            highest_severity: Some(runtime::ReviewSeverity::High),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-456.json".to_string(),
+            markdown_path: ".sego/reviews/review-456.md".to_string(),
+        };
+        let summary = build_review_summary_json_value(
+            "review-456",
+            &entry,
+            ReviewFindingStatusCounts {
+                open: 1,
+                acknowledged: 0,
+                fixed: 1,
+                accepted_risk: 1,
+                false_positive: 1,
+                ignored: 0,
+            },
+        );
+
+        assert_eq!(summary["status_counts"]["open"], 1);
+        assert_eq!(summary["status_counts"]["fixed"], 1);
+        assert_eq!(summary["status_counts"]["accepted_risk"], 1);
+        assert_eq!(summary["status_counts"]["false_positive"], 1);
+    }
+
+    #[test]
+    fn review_status_counts_render_explicit_terminal_dispositions() {
+        let counts = ReviewFindingStatusCounts {
+            open: 1,
+            acknowledged: 1,
+            fixed: 1,
+            accepted_risk: 1,
+            false_positive: 1,
+            ignored: 1,
+        };
+
+        let rendered = counts.render();
+        assert!(rendered.contains("accepted_risk 1"));
+        assert!(rendered.contains("false_positive 1"));
     }
 
     #[test]
