@@ -6,6 +6,7 @@
     clippy::unnecessary_wraps,
     clippy::unused_self
 )]
+mod full_scope_preflight;
 mod init;
 mod input;
 mod nl_intent;
@@ -3874,12 +3875,20 @@ impl LiveCli {
         let cwd = env::current_dir()?;
         let review_scope = ReviewScope::parse(scope)?;
         let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
-        // Full repo audit works on non-Git directories too (C20).
+        // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+        // Non-full scopes still require a Git worktree at cwd.
         if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(());
         }
-        let target = collect_review_target(&cwd, review_scope)?;
+        let target = match collect_review_target(&cwd, review_scope) {
+            Ok(t) => t,
+            Err(e) => {
+                // Phase 2-C: preflight block is a structured message, not a crash.
+                eprintln!("{e}");
+                return Ok(());
+            }
+        };
         if target.is_empty() {
             print_clean_review_scope(&target);
             return Ok(());
@@ -3904,7 +3913,8 @@ impl LiveCli {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
         let is_full_repo = matches!(&target.scope, ReviewScope::FullRepo(_));
-        // Full repo audit works on non-Git directories too (C20).
+        // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+        // Non-full scopes still require a Git worktree at cwd.
         if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(()); // REPL: print friendly message and continue, do not exit process
@@ -5306,21 +5316,16 @@ fn collect_review_target(
     cwd: &Path,
     scope: ReviewScope,
 ) -> Result<ReviewTarget, Box<dyn std::error::Error>> {
-    // C20: Full repository audit — walk the tree instead of running git diff.
+    // C20: Full repository audit - walk the tree instead of running git diff.
     if let ReviewScope::FullRepo(ref audit_path) = scope {
-        let repo_root_raw =
-            if audit_path.is_absolute() { audit_path.clone() } else { cwd.join(audit_path) };
-        // R2: canonicalize for stable hash/label.
-        let repo_root = std::fs::canonicalize(&repo_root_raw).map_err(|e| {
-            format!("cannot resolve full repo audit path {}: {e}", repo_root_raw.display())
-        })?;
-        if !repo_root.is_dir() {
-            return Err(format!(
-                "full repo audit target is not a directory: {}",
-                repo_root.display()
-            )
-            .into());
+        // Phase 2-C: run allow/block preflight before any snapshot collection.
+        let preflight = full_scope_preflight::run_full_review_preflight(cwd, audit_path);
+        if preflight.is_block() {
+            return Err(format_preflight_block_error(&preflight).into());
         }
+        // Preflight allowed: use the resolved target from preflight evidence.
+        let repo_root =
+            preflight.resolved_target.clone().ok_or("preflight allow but no resolved target")?;
         let full_tree = collect_full_repo_snapshot(&repo_root)?;
         // R2: git_status from the target repo, not cwd.
         let git_status = if is_git_worktree(&repo_root) {
@@ -5350,6 +5355,11 @@ fn collect_review_target(
         }
         ReviewScope::Unstaged => (String::new(), run_git_diff_command_in(cwd, &["diff"])?),
         ReviewScope::Path(path) => {
+            // Phase 2-C: Git-path preflight - path must exist and be inside Git root.
+            let preflight = full_scope_preflight::run_git_path_preflight(cwd, path);
+            if preflight.is_block() {
+                return Err(format_preflight_block_error(&preflight).into());
+            }
             let path = path.to_string_lossy();
             (
                 run_git_diff_command_in(cwd, &["diff", "--cached", "--", path.as_ref()])?,
@@ -5688,12 +5698,20 @@ fn run_code_review_cli(
     let cwd = env::current_dir()?;
     let review_scope = ReviewScope::parse(scope)?;
     let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
-    // Full repo audit works on non-Git directories too (C20).
+    // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+    // Non-full scopes still require a Git worktree at cwd.
     if !is_full_repo && !is_git_worktree(&cwd) {
         eprintln!("{}", non_git_review_error(&cwd));
         std::process::exit(1);
     }
-    let target = collect_review_target(&cwd, review_scope)?;
+    let target = match collect_review_target(&cwd, review_scope) {
+        Ok(t) => t,
+        Err(e) => {
+            // Phase 2-C: preflight block is a structured message, not a crash.
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     if target.is_empty() {
         print_clean_review_scope(&target);
         return Ok(());
@@ -6613,6 +6631,30 @@ fn print_clean_review_scope(target: &ReviewTarget) {
         "Review\n  Result           clean review scope\n  Scope            {}\n  Detail           no current changes",
         target.scope.label()
     );
+}
+
+/// Phase 2-C: Format a preflight block as a structured error message.
+///
+/// Block guarantees snapshot collection and model runtime are not reached.
+/// This message is shown to the user; it is not a review artifact.
+fn format_preflight_block_error(preflight: &full_scope_preflight::PreflightResult) -> String {
+    let reason = preflight.block_reason.as_ref().expect("block result must have a block reason");
+    let mut lines = vec![
+        "Review".to_string(),
+        "  Result           blocked by preflight".to_string(),
+        format!("  Block code        {}", reason.code()),
+        format!("  Block reason      {}", reason.message()),
+    ];
+    if let Some(target) = &preflight.resolved_target {
+        lines.push(format!("  Resolved target   {}", target.display()));
+    }
+    if let Some(root) = &preflight.git_root {
+        lines.push(format!("  Git root          {}", root.display()));
+    }
+    lines.push(
+        "  Boundary          preflight block; snapshot and model runtime not reached".to_string(),
+    );
+    lines.join("\n")
 }
 
 fn run_code_verify_cli(scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
