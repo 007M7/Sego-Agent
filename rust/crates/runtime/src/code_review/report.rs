@@ -674,6 +674,10 @@ pub enum ReviewFindingStatus {
     Open,
     Acknowledged,
     Fixed,
+    AcceptedRisk,
+    FalsePositive,
+    /// Legacy-compatible terminal status. Prefer `accepted_risk` or
+    /// `false_positive` for new records so disposition remains auditable.
     Ignored,
 }
 
@@ -684,6 +688,8 @@ impl ReviewFindingStatus {
             Self::Open => "open",
             Self::Acknowledged => "acknowledged",
             Self::Fixed => "fixed",
+            Self::AcceptedRisk => "accepted_risk",
+            Self::FalsePositive => "false_positive",
             Self::Ignored => "ignored",
         }
     }
@@ -693,11 +699,20 @@ impl ReviewFindingStatus {
             "open" => Ok(Self::Open),
             "acknowledged" | "ack" => Ok(Self::Acknowledged),
             "fixed" | "resolved" => Ok(Self::Fixed),
+            "accepted_risk" | "accepted-risk" | "risk_accepted" | "accept-risk" => {
+                Ok(Self::AcceptedRisk)
+            }
+            "false_positive" | "false-positive" | "fp" => Ok(Self::FalsePositive),
             "ignored" | "ignore" => Ok(Self::Ignored),
             other => Err(format!(
-                "unsupported review finding status `{other}` (expected open, acknowledged, fixed, or ignored)"
+                "unsupported review finding status `{other}` (expected open, acknowledged, fixed, accepted_risk, false_positive, or ignored)"
             )),
         }
+    }
+
+    #[must_use]
+    pub fn requires_note(self) -> bool {
+        matches!(self, Self::AcceptedRisk | Self::FalsePositive | Self::Ignored)
     }
 }
 
@@ -792,11 +807,22 @@ pub fn record_review_finding_status(
     let reviews_dir = workspace_root.join(".sego").join("reviews");
     fs::create_dir_all(&reviews_dir)?;
 
+    let note = note.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    if status.requires_note() && note.is_none() {
+        return Err(io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "review finding status `{}` requires a non-empty disposition note",
+                status.label()
+            ),
+        ));
+    }
+
     let entry = ReviewFindingStatusEntry {
         report_id: report_id.to_string(),
         finding_id: finding_id.to_string(),
         status,
-        note: note.filter(|value| !value.trim().is_empty()),
+        note,
         updated_at_epoch_seconds: current_epoch_seconds(),
     };
 
@@ -1806,6 +1832,14 @@ mod tests {
         assert_eq!(ReviewFindingStatus::parse("open"), Ok(ReviewFindingStatus::Open));
         assert_eq!(ReviewFindingStatus::parse("ack"), Ok(ReviewFindingStatus::Acknowledged));
         assert_eq!(ReviewFindingStatus::parse("resolved"), Ok(ReviewFindingStatus::Fixed));
+        assert_eq!(
+            ReviewFindingStatus::parse("accepted-risk"),
+            Ok(ReviewFindingStatus::AcceptedRisk)
+        );
+        assert_eq!(
+            ReviewFindingStatus::parse("false_positive"),
+            Ok(ReviewFindingStatus::FalsePositive)
+        );
         assert_eq!(ReviewFindingStatus::parse("ignore"), Ok(ReviewFindingStatus::Ignored));
         assert!(ReviewFindingStatus::parse("done").is_err());
     }
@@ -1835,7 +1869,7 @@ mod tests {
             "review-1",
             "finding-2",
             ReviewFindingStatus::Ignored,
-            None,
+            Some("legacy ignored with explicit reason".to_string()),
         )
         .expect("status should record");
 
@@ -1848,6 +1882,44 @@ mod tests {
         assert_eq!(latest["finding-1"].status, ReviewFindingStatus::Fixed);
         assert_eq!(latest["finding-1"].note.as_deref(), Some("covered by test"));
         assert_eq!(latest["finding-2"].status, ReviewFindingStatus::Ignored);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn terminal_disposition_statuses_require_notes_when_recorded() {
+        let root = temp_path("review-finding-status-note-required");
+
+        let accepted_risk = record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-1",
+            ReviewFindingStatus::AcceptedRisk,
+            None,
+        )
+        .expect_err("accepted risk without note should fail");
+        assert_eq!(accepted_risk.kind(), std::io::ErrorKind::InvalidInput);
+
+        let false_positive = record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-1",
+            ReviewFindingStatus::FalsePositive,
+            Some("   ".to_string()),
+        )
+        .expect_err("blank false-positive note should fail");
+        assert_eq!(false_positive.kind(), std::io::ErrorKind::InvalidInput);
+
+        let entry = record_review_finding_status(
+            &root,
+            "review-1",
+            "finding-1",
+            ReviewFindingStatus::AcceptedRisk,
+            Some("Founder accepts risk for local-only prototype".to_string()),
+        )
+        .expect("accepted risk with note should record");
+        assert_eq!(entry.status, ReviewFindingStatus::AcceptedRisk);
+        assert_eq!(entry.note.as_deref(), Some("Founder accepts risk for local-only prototype"));
 
         let _ = std::fs::remove_dir_all(root);
     }
