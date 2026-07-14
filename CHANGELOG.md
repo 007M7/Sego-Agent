@@ -5,6 +5,7 @@ All notable changes to the Sego Agent project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Sego Review Card MVP**: `sego review card`, `sego review card latest`, and `sego review card <review-id>` render an existing local review JSON artifact into an escaped, offline HTML card, update `latest-card.html`, print a compact Green/Yellow/Red summary, and request opening it in the default browser. The card is a review proof, not release approval or security certification.
 - **Development Cutover evidence docs**: documented local cutover verification, release-QA capability boundaries, public claim boundaries, and legacy source no-copy rules.
 - **C21 latest review summary interface**: `sego review show latest --json` and `/review show latest --json` now print a stable machine-readable summary of the latest review proof. Human-readable `show latest` prints the latest Markdown report, and the no-review case returns a stable JSON shape or clear guidance.
 - **C21 agent-callable review proof**: documented the public review artifact contract, agent handoff workflow, and integration templates so AI coding agents can call Sego after code generation and explain the resulting proof to users.

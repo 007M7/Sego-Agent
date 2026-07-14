@@ -150,6 +150,8 @@ sego review --full .
 ```powershell
 sego review list                    # 查看已保存的审查
 sego review show <review-id>        # 打开某个审查报告
+sego review card                    # 生成并自动打开最新 Sego 验收卡
+sego review card <review-id>        # 为指定审查生成并自动打开验收卡
 sego review mark <id> <finding-id> fixed   # 标记问题已修复
 ```
 
@@ -182,6 +184,7 @@ sego review mark <id> <finding-id> fixed   # 标记问题已修复
 | `sego review --full <路径>` | 完整仓库审计（无需 Git diff） |
 | `sego review list` | 查看已保存的审查报告 |
 | `sego review show <id>` | 打开某个审查报告 |
+| `sego review card [latest\|<id>]` | 生成离线 Sego 验收卡并自动在默认浏览器打开 |
 | `sego review status <id>` | 查看 finding 状态 |
 | `sego review mark <id> <finding-id> fixed` | 标记问题已修复 |
 | `/review safety staged` | 快速安全检查 |

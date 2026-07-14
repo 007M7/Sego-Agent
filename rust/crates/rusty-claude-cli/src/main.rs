@@ -11,6 +11,7 @@ mod init;
 mod input;
 mod nl_intent;
 mod render;
+mod review_card;
 mod sidecar;
 mod task_parser;
 
@@ -43,6 +44,10 @@ use init::initialize_repo;
 use nl_intent::{classify_nl_intent_miss, parse_nl_intent, NlIntent, NlIntentMiss};
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
+use review_card::{
+    local_file_url, render_html as render_review_card_html,
+    render_terminal_summary as render_review_card_terminal_summary, ReviewCardData,
+};
 use runtime::{
     build_review_prompt, build_verification_plan, clear_oauth_credentials,
     community_learning::CommunityLearning,
@@ -349,6 +354,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::CodeReviewList => print_code_review_history()?,
         CliAction::CodeReviewShow { id } => print_code_review_report(&id)?,
         CliAction::CodeReviewShowJson { id } => print_code_review_summary_json(&id)?,
+        CliAction::CodeReviewCard { id } => print_code_review_card(&id)?,
         CliAction::CodeReviewStatus { id } => print_code_review_finding_status(&id)?,
         CliAction::CodeReviewMark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)?;
@@ -437,6 +443,9 @@ enum CliAction {
         id: String,
     },
     CodeReviewShowJson {
+        id: String,
+    },
+    CodeReviewCard {
         id: String,
     },
     CodeReviewStatus {
@@ -761,6 +770,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                         sub.as_str(),
                         "list"
                             | "show"
+                            | "card"
                             | "status"
                             | "mark"
                             | "ready"
@@ -4386,6 +4396,7 @@ fn render_natural_language_directory() -> String {
             .to_string(),
         "    /review staged                  review staged changes / 审查已暂存改动".to_string(),
         "    /review workspace               审查整个项目代码 / audit full workspace".to_string(),
+        "    /review card [latest|<id>]      生成并打开 Sego 验收卡".to_string(),
         "    /review safety staged           检查已暂存代码的安全风险".to_string(),
         "    /review --full E:\\repo           审查整个仓库(无需git diff) / full repo audit"
             .to_string(),
@@ -5761,6 +5772,7 @@ fn run_code_review_cli(
 enum ReviewHistoryCommand {
     List,
     Show { id: String, json: bool },
+    Card { id: String },
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Ready,
@@ -5801,6 +5813,9 @@ fn parse_review_history_command(
             Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string(), json: true }))
         }
         ["show", ..] => Err("unexpected arguments for /review show <id|latest> [--json]".into()),
+        ["card"] => Ok(Some(ReviewHistoryCommand::Card { id: "latest".to_string() })),
+        ["card", id] => Ok(Some(ReviewHistoryCommand::Card { id: (*id).to_string() })),
+        ["card", ..] => Err("unexpected arguments for /review card [latest|<review-id>]".into()),
         ["status"] => Err("missing review id for /review status <id>".into()),
         ["status", id] => Ok(Some(ReviewHistoryCommand::Status { id: (*id).to_string() })),
         ["status", ..] => Err("unexpected arguments for /review status <id>".into()),
@@ -5835,6 +5850,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
                 CliAction::CodeReviewShow { id }
             }
         }
+        ReviewHistoryCommand::Card { id } => CliAction::CodeReviewCard { id },
         ReviewHistoryCommand::Status { id } => CliAction::CodeReviewStatus { id },
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             CliAction::CodeReviewMark { id, finding_id, status, note }
@@ -5858,6 +5874,7 @@ fn run_review_history_command(
                 print_code_review_report(&id)
             }
         }
+        ReviewHistoryCommand::Card { id } => print_code_review_card(&id),
         ReviewHistoryCommand::Status { id } => print_code_review_finding_status(&id),
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)
@@ -6416,6 +6433,66 @@ fn print_code_review_summary_json(id: &str) -> Result<(), Box<dyn std::error::Er
     let summary = build_code_review_summary_json(&cwd, id)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedReviewCard {
+    review_id: String,
+    card_path: PathBuf,
+    latest_card_path: PathBuf,
+    terminal_summary: String,
+}
+
+fn print_code_review_card(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let generated = generate_review_card_for(&cwd, id)?;
+    open_browser(&local_file_url(&generated.card_path))?;
+    println!("{}", generated.terminal_summary);
+    println!("  Auto-open: Windows default browser launch requested");
+    Ok(())
+}
+
+fn generate_review_card_for(
+    workspace_root: &Path,
+    id: &str,
+) -> Result<GeneratedReviewCard, Box<dyn std::error::Error>> {
+    let entries = load_review_index(workspace_root)?;
+    if entries.is_empty() {
+        return Err("no review artifact found; run `sego review` first".into());
+    }
+
+    let entry = resolve_review_entry(&entries, id)?;
+    if !entry.id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+        return Err(format!("refusing unsafe review id for card output: {}", entry.id).into());
+    }
+
+    let report = load_review_report_from_index_entry(workspace_root, entry)?;
+    let json_path = resolve_review_json_path(workspace_root, entry);
+    let markdown_path = resolve_review_markdown_path(workspace_root, entry);
+    let card_data = ReviewCardData {
+        id: &entry.id,
+        scope: &entry.scope,
+        finding_count: entry.finding_count,
+        highest_severity: entry.highest_severity.or_else(|| report.highest_severity()),
+        parse_status: report.parse_status,
+        findings: &report.findings,
+        json_path: &json_path,
+        markdown_path: &markdown_path,
+    };
+    let reviews_dir = workspace_root.join(".sego").join("reviews");
+    fs::create_dir_all(&reviews_dir)?;
+    let card_path = reviews_dir.join(format!("{}-card.html", entry.id));
+    let latest_card_path = reviews_dir.join("latest-card.html");
+    let html = render_review_card_html(&card_data);
+    fs::write(&card_path, &html)?;
+    fs::write(&latest_card_path, html)?;
+
+    Ok(GeneratedReviewCard {
+        review_id: entry.id.clone(),
+        terminal_summary: render_review_card_terminal_summary(&card_data, &card_path),
+        card_path,
+        latest_card_path,
+    })
 }
 
 fn build_code_review_summary_json(
@@ -8926,7 +9003,7 @@ mod tests {
         format_permissions_switch_report, format_pr_report, format_resume_report,
         format_review_completion_summary, format_status_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, is_git_worktree,
+        format_unknown_slash_command_message, generate_review_card_for, is_git_worktree,
         is_no_assistant_response_export_error, is_turn_cancelled_message,
         latest_review_index_entry, non_git_review_error, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
@@ -8953,6 +9030,7 @@ mod tests {
     };
     use serde_json::json;
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -9798,6 +9876,87 @@ mod tests {
         let rendered = counts.render();
         assert!(rendered.contains("accepted_risk 1"));
         assert!(rendered.contains("false_positive 1"));
+    }
+
+    #[test]
+    fn review_card_commands_parse_default_latest_and_explicit_id() {
+        assert_eq!(
+            parse_args(&["review".to_string(), "card".to_string()])
+                .expect("review card should parse"),
+            CliAction::CodeReviewCard { id: "latest".to_string() }
+        );
+        assert_eq!(
+            parse_args(&["review".to_string(), "card".to_string(), "review-123".to_string()])
+                .expect("review card explicit id should parse"),
+            CliAction::CodeReviewCard { id: "review-123".to_string() }
+        );
+        let error = parse_args(&[
+            "review".to_string(),
+            "card".to_string(),
+            "review-123".to_string(),
+            "extra".to_string(),
+        ])
+        .expect_err("review card should reject extra arguments");
+        assert!(error.contains("unexpected arguments for /review card"));
+    }
+
+    #[test]
+    fn review_card_latest_selects_the_newest_artifact() {
+        let root = temp_dir();
+        let reviews = root.join(".sego").join("reviews");
+        fs::create_dir_all(&reviews).expect("review output directory");
+        for (id, created_at) in [("review-old", 10_u64), ("review-new", 20_u64)] {
+            let artifact = json!({
+                "id": id,
+                "findings": [],
+                "raw_text": "No findings.",
+                "parse_status": "structured"
+            });
+            fs::write(
+                reviews.join(format!("{id}.json")),
+                serde_json::to_string(&artifact).expect("serialize artifact"),
+            )
+            .expect("write artifact");
+            fs::write(reviews.join(format!("{id}.md")), format!("# {id}\n"))
+                .expect("write markdown");
+            let entry = ReviewIndexEntry {
+                id: id.to_string(),
+                created_at_epoch_seconds: created_at,
+                scope: "staged".to_string(),
+                diff_hash: format!("hash-{id}"),
+                finding_count: 0,
+                highest_severity: None,
+                parse_status: runtime::ReviewParseStatus::Structured,
+                json_path: format!(".sego/reviews/{id}.json"),
+                markdown_path: format!(".sego/reviews/{id}.md"),
+            };
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(reviews.join("index.jsonl"))
+                .expect("open index")
+                .write_all(
+                    format!("{}\n", serde_json::to_string(&entry).expect("serialize index"))
+                        .as_bytes(),
+                )
+                .expect("append index");
+        }
+
+        let generated = generate_review_card_for(&root, "latest").expect("generate latest card");
+        assert_eq!(generated.review_id, "review-new");
+        assert!(generated.card_path.is_file());
+        assert!(generated.latest_card_path.is_file());
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn review_card_requires_an_existing_artifact() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("temp workspace");
+        let error = generate_review_card_for(&root, "latest")
+            .expect_err("review card should require an existing artifact");
+        assert!(error.to_string().contains("run `sego review` first"));
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
     }
 
     #[test]
