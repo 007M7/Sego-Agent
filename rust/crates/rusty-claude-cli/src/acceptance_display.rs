@@ -308,6 +308,7 @@ mod tests {
         assert_eq!(zh.node_review_count, en.node_review_count);
         assert_eq!(zh.full_review_count, en.full_review_count);
         assert_eq!(zh.unresolved_count, en.unresolved_count);
+        assert_eq!(zh.unresolved_count, 1);
         assert!(zh.primary_reason.contains("Missing authorization check"));
         assert!(en.primary_reason.contains("Missing authorization check"));
     }
@@ -330,6 +331,7 @@ mod tests {
         assert!(html.contains("Sego acceptance status"));
         assert!(html.contains("Key risk (original evidence)"));
         assert!(html.contains("&lt;unsafe&gt;&amp;evidence"));
+        assert!(!html.contains("Historical cache finding fixed after rerun"));
         assert!(html.contains("not release approval or security certification"));
     }
 }

@@ -22,7 +22,18 @@
         "changed_files": ["src/cache.rs"]
       },
       "artifact_json_path": ".sego/reviews/review-node.json",
-      "artifact_markdown_path": ".sego/reviews/review-node.md"
+      "artifact_markdown_path": ".sego/reviews/review-node.md",
+      "unresolved_findings": [
+        {
+          "finding_id": "finding-cache-history",
+          "severity": "medium",
+          "title_original": "Historical cache finding fixed after rerun",
+          "evidence_original": "The original node review finding remains available as history.",
+          "file": "src/cache.rs",
+          "line": 18,
+          "human_decision_required": false
+        }
+      ]
     },
     {
       "event_id": "full-1",

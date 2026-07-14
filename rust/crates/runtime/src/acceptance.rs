@@ -165,29 +165,53 @@ impl AcceptanceRecord {
 
     #[must_use]
     pub fn unresolved_findings(&self) -> Vec<&UnresolvedFinding> {
-        self.review_events.iter().flat_map(|event| event.unresolved_findings.iter()).collect()
+        self.review_events
+            .iter()
+            .filter(|event| event_is_current(event))
+            .flat_map(|event| event.unresolved_findings.iter())
+            .collect()
     }
+
+    #[must_use]
+    pub fn historical_findings(&self) -> Vec<&UnresolvedFinding> {
+        self.review_events
+            .iter()
+            .filter(|event| !event_is_current(event))
+            .flat_map(|event| event.unresolved_findings.iter())
+            .collect()
+    }
+}
+
+fn event_is_current(event: &ReviewEvent) -> bool {
+    event.remediation.status != RemediationStatus::AppliedAndRerunPassed
 }
 
 fn aggregate_state(events: &[ReviewEvent]) -> (AcceptanceState, Vec<AcceptanceReasonCode>) {
     let mut reasons = Vec::new();
-    let has = |predicate: fn(&ReviewEvent) -> bool| events.iter().any(predicate);
-    let has_finding = |predicate: fn(&UnresolvedFinding) -> bool| {
-        events.iter().flat_map(|event| event.unresolved_findings.iter()).any(predicate)
+    let has_current_event = |predicate: fn(&ReviewEvent) -> bool| {
+        events.iter().filter(|event| event_is_current(event)).any(predicate)
+    };
+    let has_current_finding = |predicate: fn(&UnresolvedFinding) -> bool| {
+        events
+            .iter()
+            .filter(|event| event_is_current(event))
+            .flat_map(|event| event.unresolved_findings.iter())
+            .any(predicate)
     };
 
-    if has(|event| event.outcome == ReviewOutcome::Blocked) {
+    if has_current_event(|event| event.outcome == ReviewOutcome::Blocked) {
         reasons.push(AcceptanceReasonCode::BlockedReview);
     }
-    if has(|event| event.parse_status != ReviewParseStatus::Structured) {
+    if has_current_event(|event| event.parse_status != ReviewParseStatus::Structured) {
         reasons.push(AcceptanceReasonCode::UnreliableArtifact);
     }
-    if has(|event| event.highest_severity == Some(ReviewSeverity::Critical))
-        || has_finding(|finding| finding.severity == ReviewSeverity::Critical)
+    if has_current_event(|event| event.highest_severity == Some(ReviewSeverity::Critical))
+        || has_current_finding(|finding| finding.severity == ReviewSeverity::Critical)
     {
         reasons.push(AcceptanceReasonCode::CriticalFinding);
     }
-    if has(|event| event.remediation.status == RemediationStatus::AppliedRerunFailed) {
+    if has_current_event(|event| event.remediation.status == RemediationStatus::AppliedRerunFailed)
+    {
         reasons.push(AcceptanceReasonCode::RemediationRerunFailed);
     }
 
@@ -195,33 +219,26 @@ fn aggregate_state(events: &[ReviewEvent]) -> (AcceptanceState, Vec<AcceptanceRe
         return (AcceptanceState::NeedsAttention, reasons);
     }
 
-    if has_finding(|finding| finding.severity == ReviewSeverity::High)
-        || has(|event| {
-            event.highest_severity == Some(ReviewSeverity::High)
-                && event.remediation.status != RemediationStatus::AppliedAndRerunPassed
-        })
+    if has_current_finding(|finding| finding.severity == ReviewSeverity::High)
+        || has_current_event(|event| event.highest_severity == Some(ReviewSeverity::High))
     {
         reasons.push(AcceptanceReasonCode::UnresolvedHighRisk);
     }
-    if has_finding(|finding| finding.severity == ReviewSeverity::Medium)
-        || has(|event| {
-            event.highest_severity == Some(ReviewSeverity::Medium)
-                && event.remediation.status != RemediationStatus::AppliedAndRerunPassed
-        })
+    if has_current_finding(|finding| finding.severity == ReviewSeverity::Medium)
+        || has_current_event(|event| event.highest_severity == Some(ReviewSeverity::Medium))
     {
         reasons.push(AcceptanceReasonCode::UnresolvedMediumRisk);
     }
-    if has(|event| {
+    if has_current_event(|event| {
         event.review_kind == ReviewKind::Full && event.outcome == ReviewOutcome::CoverageGap
     }) {
         reasons.push(AcceptanceReasonCode::FullReviewCoverageGap);
     }
-    if has_finding(|finding| finding.human_decision_required) {
+    if has_current_finding(|finding| finding.human_decision_required) {
         reasons.push(AcceptanceReasonCode::HumanDecisionRequired);
     }
-    if has(|event| {
+    if has_current_event(|event| {
         event.outcome == ReviewOutcome::Warning
-            && event.remediation.status != RemediationStatus::AppliedAndRerunPassed
             && matches!(
                 event.highest_severity,
                 None | Some(ReviewSeverity::Low) | Some(ReviewSeverity::Info)
@@ -363,6 +380,36 @@ mod tests {
         assert_eq!(record.acceptance_state, AcceptanceState::NeedsReview);
         assert_eq!(record.reason_codes, vec![AcceptanceReasonCode::UnresolvedHighRisk]);
         assert_eq!(record.next_action_code, NextActionCode::ConfirmOrFixRiskThenRerun);
+    }
+
+    #[test]
+    fn rerun_passed_history_is_not_currently_unresolved() {
+        let mut node = event(ReviewKind::Node, ReviewOutcome::Warning);
+        node.highest_severity = Some(ReviewSeverity::Critical);
+        node.unresolved_findings.push(unresolved(ReviewSeverity::Critical, true));
+        node.remediation.status = RemediationStatus::AppliedAndRerunPassed;
+        let full = event(ReviewKind::Full, ReviewOutcome::CoverageGap);
+        let record = AcceptanceRecord::from_review_events("task-42", vec![node, full]);
+
+        assert_eq!(record.acceptance_state, AcceptanceState::NeedsReview);
+        assert_eq!(record.reason_codes, vec![AcceptanceReasonCode::FullReviewCoverageGap]);
+        assert!(record.unresolved_findings().is_empty());
+        assert_eq!(record.historical_findings().len(), 1);
+        assert_eq!(record.review_events[0].unresolved_findings.len(), 1);
+    }
+
+    #[test]
+    fn rerun_failed_event_remains_current_and_requires_attention() {
+        let mut node = event(ReviewKind::Node, ReviewOutcome::Warning);
+        node.highest_severity = Some(ReviewSeverity::Critical);
+        node.unresolved_findings.push(unresolved(ReviewSeverity::Critical, true));
+        node.remediation.status = RemediationStatus::AppliedRerunFailed;
+        let record = AcceptanceRecord::from_review_events("task-42", vec![node]);
+
+        assert_eq!(record.acceptance_state, AcceptanceState::NeedsAttention);
+        assert!(record.reason_codes.contains(&AcceptanceReasonCode::RemediationRerunFailed));
+        assert_eq!(record.unresolved_findings().len(), 1);
+        assert!(record.historical_findings().is_empty());
     }
 
     #[test]
