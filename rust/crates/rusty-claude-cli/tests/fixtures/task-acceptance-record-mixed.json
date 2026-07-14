@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "task_id": "codex-task-42",
+  "acceptance_state": "needs_review",
+  "reason_codes": [
+    "unresolved_high_risk",
+    "full_review_coverage_gap",
+    "human_decision_required"
+  ],
+  "next_action_code": "confirm_or_fix_risk_then_rerun",
+  "review_events": [
+    {
+      "event_id": "node-1",
+      "review_kind": "node",
+      "trigger": "automatic",
+      "review_id": "review-node",
+      "outcome": "warning",
+      "highest_severity": "medium",
+      "parse_status": "structured",
+      "remediation": {
+        "status": "applied_and_rerun_passed",
+        "changed_files": ["src/cache.rs"]
+      },
+      "artifact_json_path": ".sego/reviews/review-node.json",
+      "artifact_markdown_path": ".sego/reviews/review-node.md"
+    },
+    {
+      "event_id": "full-1",
+      "review_kind": "full",
+      "trigger": "automatic",
+      "review_id": "review-full",
+      "outcome": "coverage_gap",
+      "highest_severity": "high",
+      "parse_status": "structured",
+      "remediation": {
+        "status": "not_attempted"
+      },
+      "artifact_json_path": ".sego/reviews/review-full.json",
+      "artifact_markdown_path": ".sego/reviews/review-full.md",
+      "unresolved_findings": [
+        {
+          "finding_id": "finding-auth",
+          "severity": "high",
+          "title_original": "Missing authorization check before account update",
+          "evidence_original": "The update handler writes account data before checking the caller role.",
+          "file": "src/auth.rs",
+          "line": 42,
+          "human_decision_required": true
+        }
+      ]
+    }
+  ],
+  "evidence_links": {
+    "artifact_json_paths": [
+      ".sego/reviews/review-full.json",
+      ".sego/reviews/review-node.json"
+    ],
+    "artifact_markdown_paths": [
+      ".sego/reviews/review-full.md",
+      ".sego/reviews/review-node.md"
+    ]
+  }
+}

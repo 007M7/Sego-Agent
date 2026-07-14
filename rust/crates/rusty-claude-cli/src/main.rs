@@ -6,6 +6,7 @@
     clippy::unnecessary_wraps,
     clippy::unused_self
 )]
+mod acceptance_display;
 mod full_scope_preflight;
 mod init;
 mod input;
