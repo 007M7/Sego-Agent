@@ -9951,6 +9951,53 @@ mod tests {
     }
 
     #[test]
+    fn review_card_normalizes_extended_paths_from_review_index() {
+        let root = temp_dir();
+        let reviews = root.join(".sego").join("reviews");
+        fs::create_dir_all(&reviews).expect("review dir");
+        let id = "review-extended";
+        let artifact = json!({
+            "schema_version": 1,
+            "id": id,
+            "findings": [],
+            "raw_text": "No findings.",
+            "parse_status": "structured"
+        });
+        let json_path = reviews.join(format!("{id}.json"));
+        let markdown_path = reviews.join(format!("{id}.md"));
+        fs::write(&json_path, serde_json::to_string(&artifact).expect("serialize artifact"))
+            .expect("write artifact");
+        fs::write(&markdown_path, format!("# {id}\n")).expect("write markdown");
+        let extended_root = format!("//?/{}", root.to_string_lossy().replace('\\', "/"));
+        let entry = ReviewIndexEntry {
+            id: id.to_string(),
+            created_at_epoch_seconds: 1_783_877_710,
+            scope: "full_repo:.".to_string(),
+            diff_hash: "hash-extended".to_string(),
+            finding_count: 0,
+            highest_severity: None,
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: format!("{extended_root}/.sego/reviews/{id}.json"),
+            markdown_path: format!("{extended_root}/.sego/reviews/{id}.md"),
+        };
+        fs::write(
+            reviews.join("index.jsonl"),
+            format!("{}\n", serde_json::to_string(&entry).expect("serialize index")),
+        )
+        .expect("write index");
+
+        let generated = generate_review_card_for(&root, id).expect("generate card");
+        let html = fs::read_to_string(generated.card_path).expect("read generated card");
+        let normalized_root = root.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+        assert!(
+            html.contains(&format!("href=\"file:///{normalized_root}/.sego/reviews/{id}.json\""))
+        );
+        assert!(html.contains(&format!("href=\"file:///{normalized_root}/.sego/reviews/{id}.md\"")));
+        assert!(!html.contains("file:////%3F/"));
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
+    }
+
+    #[test]
     fn review_card_requires_an_existing_artifact() {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("temp workspace");

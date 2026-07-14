@@ -226,9 +226,13 @@ fn artifact_link(label: &str, path: &Path) -> String {
 
 #[must_use]
 pub fn local_file_url(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('\\', "/");
+    let raw = normalize_windows_extended_path(&path.to_string_lossy()).replace('\\', "/");
     let prefix = if raw.starts_with('/') { "file://" } else { "file:///" };
     format!("{prefix}{}", percent_encode_file_path(&raw))
+}
+
+fn normalize_windows_extended_path(value: &str) -> &str {
+    value.strip_prefix(r"\\?\").or_else(|| value.strip_prefix("//?/")).unwrap_or(value)
 }
 
 fn percent_encode_file_path(value: &str) -> String {
@@ -373,6 +377,18 @@ mod tests {
         assert_eq!(
             local_file_url(Path::new(r"C:\Sego max\.sego\reviews\latest card.html")),
             "file:///C:/Sego%20max/.sego/reviews/latest%20card.html"
+        );
+    }
+
+    #[test]
+    fn local_file_urls_normalize_windows_extended_length_prefixes() {
+        assert_eq!(
+            local_file_url(Path::new(r"\\?\E:\Sego max\.sego\reviews\review.json")),
+            "file:///E:/Sego%20max/.sego/reviews/review.json"
+        );
+        assert_eq!(
+            local_file_url(Path::new("//?/E:/Sego max/.sego/reviews/review.md")),
+            "file:///E:/Sego%20max/.sego/reviews/review.md"
         );
     }
 }
