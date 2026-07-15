@@ -117,6 +117,9 @@ impl WorkflowStore {
                 .green_level
                 .map(super::super::green_contract::GreenLevel::as_str)),
         );
+        // Preserve the event log; it is the source of timestamps, route actions,
+        // outcomes, and failure details used for local recovery/audit records.
+        record.insert("lane_events".to_string(), serde_json::json!(snapshot.lane_events));
 
         let timestamp = snapshot.started_at.as_deref().unwrap_or("unknown").replace(':', "-");
         let filename = format!("{timestamp}.json");
@@ -218,6 +221,7 @@ impl WorkflowStore {
 mod tests {
     use super::*;
     use crate::workflow::SessionSummary;
+    use crate::{LaneEvent, LaneEventName, LaneEventStatus};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -248,6 +252,46 @@ mod tests {
         let loaded = store.load_session(&path).expect("load should succeed");
         assert_eq!(loaded["session_id"], "test-session-1");
         assert_eq!(loaded["failure_count"], 1);
+
+        fs::remove_dir_all(store.root).expect("cleanup should succeed");
+    }
+
+    #[test]
+    fn persists_route_result_and_recovery_events_in_session_record() {
+        let tmp = std::env::temp_dir().join(format!("claw-wf-test-{}", rand_id()));
+        let store = WorkflowStore::new(&tmp);
+
+        let mut snap = WorkflowSnapshot::new("record-contract-session");
+        snap.record_event(LaneEvent::started("2026-07-15T09:00:00Z"));
+        snap.record_event(
+            LaneEvent::new(
+                LaneEventName::BranchStaleAgainstMain,
+                LaneEventStatus::Blocked,
+                "2026-07-15T09:01:00Z",
+            )
+            .with_detail("route to rebase recovery"),
+        );
+        snap.record_event(LaneEvent::finished(
+            "2026-07-15T09:03:00Z",
+            Some("recovered and verified".to_string()),
+        ));
+        snap.recovery_stats.attempts = 1;
+        snap.recovery_stats.successes = 1;
+        snap.compute_efficiency();
+
+        let path = store.save_session(&snap).expect("save should succeed");
+        let loaded = store.load_session(&path).expect("load should succeed");
+
+        let events =
+            loaded["lane_events"].as_array().expect("session record should preserve lane events");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1]["event"], "branch.stale_against_main");
+        assert_eq!(events[1]["status"], "blocked");
+        assert_eq!(events[1]["emittedAt"], "2026-07-15T09:01:00Z");
+        assert_eq!(events[1]["detail"], "route to rebase recovery");
+        assert_eq!(events[2]["status"], "completed");
+        assert_eq!(loaded["recovery_attempts"], 1);
+        assert_eq!(loaded["recovery_successes"], 1);
 
         fs::remove_dir_all(store.root).expect("cleanup should succeed");
     }
