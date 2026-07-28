@@ -147,7 +147,7 @@ pub fn parse_required_review_command(input: &str) -> RequiredReviewResult {
             (String::new(), String::new())
         };
         let ns = scope.trim();
-        if ns.is_empty() || ns == "staged" || ns == "workspace" || ns.starts_with("--full ") {
+        if is_supported_review_scope(ns) {
             let final_scope = if ns.is_empty() { "workspace".to_string() } else { ns.to_string() };
             return RequiredReviewResult::Execute { scope: final_scope };
         }
@@ -273,11 +273,7 @@ pub fn parse_required_review_command(input: &str) -> RequiredReviewResult {
     }
 
     // Allowlist.
-    if normalized_scope.is_empty()
-        || normalized_scope == "staged"
-        || normalized_scope == "workspace"
-        || normalized_scope.starts_with("--full ")
-    {
+    if is_supported_review_scope(normalized_scope) {
         let final_scope = if normalized_scope.is_empty() {
             "workspace".to_string()
         } else {
@@ -296,6 +292,36 @@ pub fn parse_required_review_command(input: &str) -> RequiredReviewResult {
     }
 }
 
+fn is_supported_review_scope(scope: &str) -> bool {
+    scope.is_empty()
+        || matches!(scope, "staged" | "workspace" | "unstaged")
+        || scope.starts_with("--full ")
+        || is_path_review_scope(scope)
+}
+
+/// Accept only a single, path-shaped Git review scope from a task file.
+/// This intentionally performs no filesystem access; the runtime preflight later
+/// checks existence, Git ownership and tracked content before review execution.
+fn is_path_review_scope(scope: &str) -> bool {
+    let scope = scope.trim();
+    if scope.is_empty()
+        || scope.starts_with('-')
+        || scope.chars().any(|ch| matches!(ch, '\0' | '&' | '|' | ';' | '<' | '>'))
+    {
+        return false;
+    }
+
+    let windows_drive = scope.len() >= 3
+        && scope.as_bytes()[0].is_ascii_alphabetic()
+        && scope.as_bytes()[1] == b':'
+        && matches!(scope.as_bytes()[2], b'\\' | b'/');
+    let has_separator = scope.contains('/') || scope.contains('\\');
+    let dotted_file = scope
+        .rsplit_once('.')
+        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
+
+    windows_drive || has_separator || dotted_file
+}
 fn is_task_like_multiline(input: &str) -> bool {
     let lines: Vec<&str> = input.lines().collect();
     if lines.len() == 1 {
@@ -667,6 +693,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn single_line_review_path_scope_detected() {
+        let input = "/review rust/crates/api/src/providers/openai_compat.rs";
+        assert_eq!(
+            parse_required_review_command(input),
+            RequiredReviewResult::Execute {
+                scope: "rust/crates/api/src/providers/openai_compat.rs".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn required_command_review_path_scope_detected() {
+        let input = "Required command: /review rust/crates/api/src/providers/openai_compat.rs";
+        assert_eq!(
+            parse_required_review_command(input),
+            RequiredReviewResult::Execute {
+                scope: "rust/crates/api/src/providers/openai_compat.rs".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn continuation_review_windows_path_with_spaces_detected() {
+        let input = "Step 1: prepare\nStep 2: /review E:\\Sego Fixture Space\\src\\lib.rs";
+        assert_eq!(
+            parse_required_review_command(input),
+            RequiredReviewResult::Execute {
+                scope: "E:\\Sego Fixture Space\\src\\lib.rs".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn path_scope_rejects_shell_metacharacters_and_plain_scope_words() {
+        assert!(matches!(
+            parse_required_review_command("/review src/lib.rs && /commit"),
+            RequiredReviewResult::Blocked { .. }
+        ));
+        assert!(matches!(
+            parse_required_review_command("/review custom-scope"),
+            RequiredReviewResult::Blocked { .. }
+        ));
+    }
     // ===== C20.6-C R4 acceptance tests =====
 
     #[test]

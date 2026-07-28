@@ -54,7 +54,21 @@ If your change touches review behavior, attach a short before/after example to t
 
 ---
 
-## 4. Code style
+## 4. Development Cutover and release-QA boundaries
+
+For local Development Cutover or source-governance work, use the evidence checklist in [`docs/DEVELOPMENT_CUTOVER_EVIDENCE.md`](docs/DEVELOPMENT_CUTOVER_EVIDENCE.md).
+
+The current repository distinguishes local verification from release approval:
+
+- [`docs/RELEASE_QA_CAPABILITY_MATRIX.md`](docs/RELEASE_QA_CAPABILITY_MATRIX.md) records local/CI/release-workflow capability evidence and explicitly marks FAT/UAT/CANARY/PRO as not evidenced unless separate records exist.
+- [`docs/PUBLIC_CLAIM_BOUNDARY.md`](docs/PUBLIC_CLAIM_BOUNDARY.md) states which public claims are allowed and which require separate evidence.
+- [`docs/LEGACY_SOURCE_BOUNDARY.md`](docs/LEGACY_SOURCE_BOUNDARY.md) records the no-copy legacy source rule.
+
+Tests passed, local review evidence, workflow existence, release approval, and production readiness are separate states.
+
+---
+
+## 5. Code style
 
 - Run `cargo fmt` before pushing.
 - Follow the existing module structure under `rust/crates/`. Add new code to the most specific crate that fits; create a new crate only with a clear reason.
@@ -63,7 +77,7 @@ If your change touches review behavior, attach a short before/after example to t
 
 ---
 
-## 5. Configuration during development
+## 6. Configuration during development
 
 Sego reads runtime configuration from a small number of well-known locations. For day-to-day development you usually do not need to set anything — the defaults work.
 
@@ -77,7 +91,7 @@ cp .sego/dev.toml.example .sego/dev.toml
 
 ---
 
-## 6. Public surface and contracts
+## 7. Public surface and contracts
 
 The following parts of the repo are public contracts. Changes to them require an explicit note in the PR:
 
@@ -90,7 +104,7 @@ If your change modifies any of the above, call that out explicitly in the PR tit
 
 ---
 
-## 7. Releasing
+## 8. Releasing
 
 Releases are produced by the GitHub Actions workflow under `.github/workflows/release.yml`. Maintainers tag a release; the workflow builds platform binaries, validates artifacts, generates checksums, and publishes the GitHub Release.
 
@@ -98,7 +112,7 @@ You generally do not need to run the release workflow locally. If a release fail
 
 ---
 
-## 8. Sensitive content
+## 9. Sensitive content
 
 Before pushing, double-check that your change does not include:
 
@@ -111,7 +125,7 @@ The repo has secret scanning enabled. If you are unsure whether something is sen
 
 ---
 
-## 9. Where to ask
+## 10. Where to ask
 
 - GitHub Issues for bug reports and feature requests.
 - [SECURITY.md](SECURITY.md) for security-sensitive reports — do not file those publicly.

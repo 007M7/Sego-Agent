@@ -4,6 +4,7 @@
 //! MCP plumbing, tool-facing file operations, and the core conversation loop
 //! that drives interactive and one-shot turns.
 
+pub mod acceptance;
 pub mod active_task;
 mod bash;
 pub mod bash_command_classifier;
@@ -53,6 +54,11 @@ pub mod verification;
 pub mod worker_boot;
 pub mod workflow;
 
+pub use acceptance::{
+    AcceptanceEvidenceLinks, AcceptanceReasonCode, AcceptanceRecord, AcceptanceState,
+    NextActionCode, RemediationRecord, RemediationStatus, ReviewEvent, ReviewKind, ReviewOutcome,
+    ReviewTrigger, UnresolvedFinding, ACCEPTANCE_RECORD_SCHEMA_VERSION,
+};
 pub use active_task::{
     generate_task_id, ActiveTask, ActiveTaskError, ActiveTaskStatus, ActiveTaskStore,
     TrackedProcess,
@@ -63,7 +69,7 @@ pub use branch_lock::BranchLockRegistry;
 pub use code_review::{
     build_review_prompt, latest_review_finding_statuses, load_review_finding_statuses,
     load_review_index, persist_review_artifact, record_review_finding_status, review_diff_hash,
-    PersistedReviewArtifact, ReviewContext, ReviewFinding, ReviewFindingStatus,
+    EvidenceStatus, PersistedReviewArtifact, ReviewContext, ReviewFinding, ReviewFindingStatus,
     ReviewFindingStatusEntry, ReviewIndexEntry, ReviewParseStatus, ReviewPromptOptions,
     ReviewReport, ReviewScope, ReviewScopeParseError, ReviewSeverity, ReviewTarget,
 };

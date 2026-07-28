@@ -28,6 +28,10 @@ impl ReviewScope {
                 let path = raw["--full ".len()..].trim();
                 if path.is_empty() {
                     Ok(Self::FullRepo(PathBuf::from(".")))
+                } else if let Some(flag) =
+                    path.split_whitespace().find(|part| part.starts_with('-'))
+                {
+                    Err(ReviewScopeParseError::UnsupportedFlag { value: flag.to_string() })
                 } else {
                     Ok(Self::FullRepo(PathBuf::from(path)))
                 }
@@ -100,6 +104,16 @@ mod tests {
     fn rejects_unknown_flags() {
         assert_eq!(
             ReviewScope::parse(Some("--json")),
+            Err(ReviewScopeParseError::UnsupportedFlag { value: "--json".to_string() })
+        );
+    }
+
+    // FSP-10: an option after --full is an incompatible scope form,
+    // not a filesystem target. Parsing must block before filesystem access.
+    #[test]
+    fn rejects_flag_after_full_scope() {
+        assert_eq!(
+            ReviewScope::parse(Some("--full --json")),
             Err(ReviewScopeParseError::UnsupportedFlag { value: "--json".to_string() })
         );
     }

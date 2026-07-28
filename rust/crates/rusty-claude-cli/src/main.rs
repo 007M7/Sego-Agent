@@ -6,10 +6,13 @@
     clippy::unnecessary_wraps,
     clippy::unused_self
 )]
+mod acceptance_display;
+mod full_scope_preflight;
 mod init;
 mod input;
 mod nl_intent;
 mod render;
+mod review_card;
 mod sidecar;
 mod task_parser;
 
@@ -42,6 +45,10 @@ use init::initialize_repo;
 use nl_intent::{classify_nl_intent_miss, parse_nl_intent, NlIntent, NlIntentMiss};
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
+use review_card::{
+    local_file_url, render_html as render_review_card_html,
+    render_terminal_summary as render_review_card_terminal_summary, ReviewCardData,
+};
 use runtime::{
     build_review_prompt, build_verification_plan, clear_oauth_credentials,
     community_learning::CommunityLearning,
@@ -348,6 +355,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::CodeReviewList => print_code_review_history()?,
         CliAction::CodeReviewShow { id } => print_code_review_report(&id)?,
         CliAction::CodeReviewShowJson { id } => print_code_review_summary_json(&id)?,
+        CliAction::CodeReviewCard { id } => print_code_review_card(&id)?,
         CliAction::CodeReviewStatus { id } => print_code_review_finding_status(&id)?,
         CliAction::CodeReviewMark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)?;
@@ -436,6 +444,9 @@ enum CliAction {
         id: String,
     },
     CodeReviewShowJson {
+        id: String,
+    },
+    CodeReviewCard {
         id: String,
     },
     CodeReviewStatus {
@@ -760,6 +771,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                         sub.as_str(),
                         "list"
                             | "show"
+                            | "card"
                             | "status"
                             | "mark"
                             | "ready"
@@ -1507,6 +1519,15 @@ struct StatusContext {
     git_branch: Option<String>,
     git_summary: GitWorkspaceSummary,
     sandbox_status: runtime::SandboxStatus,
+}
+
+fn provider_kind_label(kind: api::ProviderKind) -> &'static str {
+    match kind {
+        api::ProviderKind::Anthropic => "anthropic",
+        api::ProviderKind::Xai => "xai",
+        api::ProviderKind::OpenAi => "openai",
+        api::ProviderKind::DeepSeek => "deepseek",
+    }
 }
 
 struct WorkspaceContext {
@@ -3874,12 +3895,20 @@ impl LiveCli {
         let cwd = env::current_dir()?;
         let review_scope = ReviewScope::parse(scope)?;
         let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
-        // Full repo audit works on non-Git directories too (C20).
+        // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+        // Non-full scopes still require a Git worktree at cwd.
         if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(());
         }
-        let target = collect_review_target(&cwd, review_scope)?;
+        let target = match collect_review_target(&cwd, review_scope) {
+            Ok(t) => t,
+            Err(e) => {
+                // Phase 2-C: preflight block is a structured message, not a crash.
+                eprintln!("{e}");
+                return Ok(());
+            }
+        };
         if target.is_empty() {
             print_clean_review_scope(&target);
             return Ok(());
@@ -3904,7 +3933,8 @@ impl LiveCli {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
         let is_full_repo = matches!(&target.scope, ReviewScope::FullRepo(_));
-        // Full repo audit works on non-Git directories too (C20).
+        // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+        // Non-full scopes still require a Git worktree at cwd.
         if !is_full_repo && !is_git_worktree(&cwd) {
             eprintln!("{}", non_git_review_error(&cwd));
             return Ok(()); // REPL: print friendly message and continue, do not exit process
@@ -4367,6 +4397,7 @@ fn render_natural_language_directory() -> String {
             .to_string(),
         "    /review staged                  review staged changes / 审查已暂存改动".to_string(),
         "    /review workspace               审查整个项目代码 / audit full workspace".to_string(),
+        "    /review card [latest|<id>]      生成并打开 Sego 验收卡".to_string(),
         "    /review safety staged           检查已暂存代码的安全风险".to_string(),
         "    /review --full E:\\repo           审查整个仓库(无需git diff) / full repo audit"
             .to_string(),
@@ -4542,6 +4573,17 @@ fn format_status_report(
             usage.cumulative.input_tokens,
             usage.cumulative.output_tokens,
             usage.cumulative.total_tokens(),
+        ),
+        format!(
+            "Provider/cache
+  Provider         {}
+  Latest cache     create {}, read {}
+  Cumulative cache create {}, read {}",
+            provider_kind_label(detect_provider_kind(model)),
+            usage.latest.cache_creation_input_tokens,
+            usage.latest.cache_read_input_tokens,
+            usage.cumulative.cache_creation_input_tokens,
+            usage.cumulative.cache_read_input_tokens,
         ),
         format!(
             "Workspace
@@ -5306,21 +5348,16 @@ fn collect_review_target(
     cwd: &Path,
     scope: ReviewScope,
 ) -> Result<ReviewTarget, Box<dyn std::error::Error>> {
-    // C20: Full repository audit — walk the tree instead of running git diff.
+    // C20: Full repository audit - walk the tree instead of running git diff.
     if let ReviewScope::FullRepo(ref audit_path) = scope {
-        let repo_root_raw =
-            if audit_path.is_absolute() { audit_path.clone() } else { cwd.join(audit_path) };
-        // R2: canonicalize for stable hash/label.
-        let repo_root = std::fs::canonicalize(&repo_root_raw).map_err(|e| {
-            format!("cannot resolve full repo audit path {}: {e}", repo_root_raw.display())
-        })?;
-        if !repo_root.is_dir() {
-            return Err(format!(
-                "full repo audit target is not a directory: {}",
-                repo_root.display()
-            )
-            .into());
+        // Phase 2-C: run allow/block preflight before any snapshot collection.
+        let preflight = full_scope_preflight::run_full_review_preflight(cwd, audit_path);
+        if preflight.is_block() {
+            return Err(format_preflight_block_error(&preflight).into());
         }
+        // Preflight allowed: use the resolved target from preflight evidence.
+        let repo_root =
+            preflight.resolved_target.clone().ok_or("preflight allow but no resolved target")?;
         let full_tree = collect_full_repo_snapshot(&repo_root)?;
         // R2: git_status from the target repo, not cwd.
         let git_status = if is_git_worktree(&repo_root) {
@@ -5350,6 +5387,11 @@ fn collect_review_target(
         }
         ReviewScope::Unstaged => (String::new(), run_git_diff_command_in(cwd, &["diff"])?),
         ReviewScope::Path(path) => {
+            // Phase 2-C: Git-path preflight - path must exist and be inside Git root.
+            let preflight = full_scope_preflight::run_git_path_preflight(cwd, path);
+            if preflight.is_block() {
+                return Err(format_preflight_block_error(&preflight).into());
+            }
             let path = path.to_string_lossy();
             (
                 run_git_diff_command_in(cwd, &["diff", "--cached", "--", path.as_ref()])?,
@@ -5688,12 +5730,20 @@ fn run_code_review_cli(
     let cwd = env::current_dir()?;
     let review_scope = ReviewScope::parse(scope)?;
     let is_full_repo = matches!(&review_scope, ReviewScope::FullRepo(_));
-    // Full repo audit works on non-Git directories too (C20).
+    // Phase 2-C: full repo preflight handles its own Git/non-Git gate.
+    // Non-full scopes still require a Git worktree at cwd.
     if !is_full_repo && !is_git_worktree(&cwd) {
         eprintln!("{}", non_git_review_error(&cwd));
         std::process::exit(1);
     }
-    let target = collect_review_target(&cwd, review_scope)?;
+    let target = match collect_review_target(&cwd, review_scope) {
+        Ok(t) => t,
+        Err(e) => {
+            // Phase 2-C: preflight block is a structured message, not a crash.
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     if target.is_empty() {
         print_clean_review_scope(&target);
         return Ok(());
@@ -5723,6 +5773,7 @@ fn run_code_review_cli(
 enum ReviewHistoryCommand {
     List,
     Show { id: String, json: bool },
+    Card { id: String },
     Status { id: String },
     Mark { id: String, finding_id: String, status: ReviewFindingStatus, note: Option<String> },
     Ready,
@@ -5763,6 +5814,9 @@ fn parse_review_history_command(
             Ok(Some(ReviewHistoryCommand::Show { id: (*id).to_string(), json: true }))
         }
         ["show", ..] => Err("unexpected arguments for /review show <id|latest> [--json]".into()),
+        ["card"] => Ok(Some(ReviewHistoryCommand::Card { id: "latest".to_string() })),
+        ["card", id] => Ok(Some(ReviewHistoryCommand::Card { id: (*id).to_string() })),
+        ["card", ..] => Err("unexpected arguments for /review card [latest|<review-id>]".into()),
         ["status"] => Err("missing review id for /review status <id>".into()),
         ["status", id] => Ok(Some(ReviewHistoryCommand::Status { id: (*id).to_string() })),
         ["status", ..] => Err("unexpected arguments for /review status <id>".into()),
@@ -5797,6 +5851,7 @@ fn review_history_command_to_cli_action(command: ReviewHistoryCommand) -> CliAct
                 CliAction::CodeReviewShow { id }
             }
         }
+        ReviewHistoryCommand::Card { id } => CliAction::CodeReviewCard { id },
         ReviewHistoryCommand::Status { id } => CliAction::CodeReviewStatus { id },
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             CliAction::CodeReviewMark { id, finding_id, status, note }
@@ -5820,6 +5875,7 @@ fn run_review_history_command(
                 print_code_review_report(&id)
             }
         }
+        ReviewHistoryCommand::Card { id } => print_code_review_card(&id),
         ReviewHistoryCommand::Status { id } => print_code_review_finding_status(&id),
         ReviewHistoryCommand::Mark { id, finding_id, status, note } => {
             mark_code_review_finding(&id, &finding_id, status, note)
@@ -5907,6 +5963,8 @@ struct ReviewFindingStatusCounts {
     open: usize,
     acknowledged: usize,
     fixed: usize,
+    accepted_risk: usize,
+    false_positive: usize,
     ignored: usize,
 }
 
@@ -5920,6 +5978,8 @@ impl ReviewFindingStatusCounts {
                 ReviewFindingStatus::Open => counts.open += 1,
                 ReviewFindingStatus::Acknowledged => counts.acknowledged += 1,
                 ReviewFindingStatus::Fixed => counts.fixed += 1,
+                ReviewFindingStatus::AcceptedRisk => counts.accepted_risk += 1,
+                ReviewFindingStatus::FalsePositive => counts.false_positive += 1,
                 ReviewFindingStatus::Ignored => counts.ignored += 1,
             }
         }
@@ -5927,13 +5987,23 @@ impl ReviewFindingStatusCounts {
     }
 
     fn is_empty(&self) -> bool {
-        self.open == 0 && self.acknowledged == 0 && self.fixed == 0 && self.ignored == 0
+        self.open == 0
+            && self.acknowledged == 0
+            && self.fixed == 0
+            && self.accepted_risk == 0
+            && self.false_positive == 0
+            && self.ignored == 0
     }
 
     fn render(&self) -> String {
         format!(
-            "open {}, acknowledged {}, fixed {}, ignored {}",
-            self.open, self.acknowledged, self.fixed, self.ignored
+            "open {}, acknowledged {}, fixed {}, accepted_risk {}, false_positive {}, ignored {}",
+            self.open,
+            self.acknowledged,
+            self.fixed,
+            self.accepted_risk,
+            self.false_positive,
+            self.ignored
         )
     }
 }
@@ -6366,6 +6436,66 @@ fn print_code_review_summary_json(id: &str) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedReviewCard {
+    review_id: String,
+    card_path: PathBuf,
+    latest_card_path: PathBuf,
+    terminal_summary: String,
+}
+
+fn print_code_review_card(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let generated = generate_review_card_for(&cwd, id)?;
+    open_browser(&local_file_url(&generated.card_path))?;
+    println!("{}", generated.terminal_summary);
+    println!("  Auto-open: Windows default browser launch requested");
+    Ok(())
+}
+
+fn generate_review_card_for(
+    workspace_root: &Path,
+    id: &str,
+) -> Result<GeneratedReviewCard, Box<dyn std::error::Error>> {
+    let entries = load_review_index(workspace_root)?;
+    if entries.is_empty() {
+        return Err("no review artifact found; run `sego review` first".into());
+    }
+
+    let entry = resolve_review_entry(&entries, id)?;
+    if !entry.id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+        return Err(format!("refusing unsafe review id for card output: {}", entry.id).into());
+    }
+
+    let report = load_review_report_from_index_entry(workspace_root, entry)?;
+    let json_path = resolve_review_json_path(workspace_root, entry);
+    let markdown_path = resolve_review_markdown_path(workspace_root, entry);
+    let card_data = ReviewCardData {
+        id: &entry.id,
+        scope: &entry.scope,
+        finding_count: entry.finding_count,
+        highest_severity: entry.highest_severity.or_else(|| report.highest_severity()),
+        parse_status: report.parse_status,
+        findings: &report.findings,
+        json_path: &json_path,
+        markdown_path: &markdown_path,
+    };
+    let reviews_dir = workspace_root.join(".sego").join("reviews");
+    fs::create_dir_all(&reviews_dir)?;
+    let card_path = reviews_dir.join(format!("{}-card.html", entry.id));
+    let latest_card_path = reviews_dir.join("latest-card.html");
+    let html = render_review_card_html(&card_data);
+    fs::write(&card_path, &html)?;
+    fs::write(&latest_card_path, html)?;
+
+    Ok(GeneratedReviewCard {
+        review_id: entry.id.clone(),
+        terminal_summary: render_review_card_terminal_summary(&card_data, &card_path),
+        card_path,
+        latest_card_path,
+    })
+}
+
 fn build_code_review_summary_json(
     cwd: &Path,
     id: &str,
@@ -6418,6 +6548,8 @@ fn build_review_summary_json_value(
             "open": status_counts.open,
             "acknowledged": status_counts.acknowledged,
             "fixed": status_counts.fixed,
+            "accepted_risk": status_counts.accepted_risk,
+            "false_positive": status_counts.false_positive,
             "ignored": status_counts.ignored,
         }
     })
@@ -6449,6 +6581,14 @@ fn review_finding_status_counts_for_summary(
             ReviewFindingStatus::Fixed => {
                 counts.open = counts.open.saturating_sub(1);
                 counts.fixed += 1;
+            }
+            ReviewFindingStatus::AcceptedRisk => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.accepted_risk += 1;
+            }
+            ReviewFindingStatus::FalsePositive => {
+                counts.open = counts.open.saturating_sub(1);
+                counts.false_positive += 1;
             }
             ReviewFindingStatus::Ignored => {
                 counts.open = counts.open.saturating_sub(1);
@@ -6613,6 +6753,30 @@ fn print_clean_review_scope(target: &ReviewTarget) {
         "Review\n  Result           clean review scope\n  Scope            {}\n  Detail           no current changes",
         target.scope.label()
     );
+}
+
+/// Phase 2-C: Format a preflight block as a structured error message.
+///
+/// Block guarantees snapshot collection and model runtime are not reached.
+/// This message is shown to the user; it is not a review artifact.
+fn format_preflight_block_error(preflight: &full_scope_preflight::PreflightResult) -> String {
+    let reason = preflight.block_reason.as_ref().expect("block result must have a block reason");
+    let mut lines = vec![
+        "Review".to_string(),
+        "  Result           blocked by preflight".to_string(),
+        format!("  Block code        {}", reason.code()),
+        format!("  Block reason      {}", reason.message()),
+    ];
+    if let Some(target) = &preflight.resolved_target {
+        lines.push(format!("  Resolved target   {}", target.display()));
+    }
+    if let Some(root) = &preflight.git_root {
+        lines.push(format!("  Git root          {}", root.display()));
+    }
+    lines.push(
+        "  Boundary          preflight block; snapshot and model runtime not reached".to_string(),
+    );
+    lines.join("\n")
 }
 
 fn run_code_verify_cli(scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
@@ -8840,7 +9004,7 @@ mod tests {
         format_permissions_switch_report, format_pr_report, format_resume_report,
         format_review_completion_summary, format_status_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, is_git_worktree,
+        format_unknown_slash_command_message, generate_review_card_for, is_git_worktree,
         is_no_assistant_response_export_error, is_turn_cancelled_message,
         latest_review_index_entry, non_git_review_error, normalize_permission_mode, parse_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
@@ -8867,6 +9031,7 @@ mod tests {
     };
     use serde_json::json;
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -9641,7 +9806,14 @@ mod tests {
         let summary = build_review_summary_json_value(
             "latest",
             &entry,
-            ReviewFindingStatusCounts { open: 2, acknowledged: 1, fixed: 0, ignored: 0 },
+            ReviewFindingStatusCounts {
+                open: 2,
+                acknowledged: 1,
+                fixed: 0,
+                accepted_risk: 0,
+                false_positive: 0,
+                ignored: 0,
+            },
         );
         assert_eq!(summary["schema_version"], 1);
         assert_eq!(summary["kind"], "sego_latest_review_summary");
@@ -9653,8 +9825,183 @@ mod tests {
         assert_eq!(summary["review"]["json_path"], ".sego/reviews/review-123.json");
         assert_eq!(summary["review"]["markdown_path"], ".sego/reviews/review-123.md");
         assert_eq!(summary["status_counts"]["open"], 2);
+        assert_eq!(summary["status_counts"]["accepted_risk"], 0);
+        assert_eq!(summary["status_counts"]["false_positive"], 0);
         assert!(summary.get("raw_text").is_none());
         assert!(summary.get("findings").is_none());
+    }
+
+    #[test]
+    fn review_summary_json_counts_explicit_terminal_dispositions() {
+        let entry = ReviewIndexEntry {
+            id: "review-456".to_string(),
+            created_at_epoch_seconds: 1_782_600_001,
+            scope: "workspace".to_string(),
+            diff_hash: "def456".to_string(),
+            finding_count: 4,
+            highest_severity: Some(runtime::ReviewSeverity::High),
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: ".sego/reviews/review-456.json".to_string(),
+            markdown_path: ".sego/reviews/review-456.md".to_string(),
+        };
+        let summary = build_review_summary_json_value(
+            "review-456",
+            &entry,
+            ReviewFindingStatusCounts {
+                open: 1,
+                acknowledged: 0,
+                fixed: 1,
+                accepted_risk: 1,
+                false_positive: 1,
+                ignored: 0,
+            },
+        );
+
+        assert_eq!(summary["status_counts"]["open"], 1);
+        assert_eq!(summary["status_counts"]["fixed"], 1);
+        assert_eq!(summary["status_counts"]["accepted_risk"], 1);
+        assert_eq!(summary["status_counts"]["false_positive"], 1);
+    }
+
+    #[test]
+    fn review_status_counts_render_explicit_terminal_dispositions() {
+        let counts = ReviewFindingStatusCounts {
+            open: 1,
+            acknowledged: 1,
+            fixed: 1,
+            accepted_risk: 1,
+            false_positive: 1,
+            ignored: 1,
+        };
+
+        let rendered = counts.render();
+        assert!(rendered.contains("accepted_risk 1"));
+        assert!(rendered.contains("false_positive 1"));
+    }
+
+    #[test]
+    fn review_card_commands_parse_default_latest_and_explicit_id() {
+        assert_eq!(
+            parse_args(&["review".to_string(), "card".to_string()])
+                .expect("review card should parse"),
+            CliAction::CodeReviewCard { id: "latest".to_string() }
+        );
+        assert_eq!(
+            parse_args(&["review".to_string(), "card".to_string(), "review-123".to_string()])
+                .expect("review card explicit id should parse"),
+            CliAction::CodeReviewCard { id: "review-123".to_string() }
+        );
+        let error = parse_args(&[
+            "review".to_string(),
+            "card".to_string(),
+            "review-123".to_string(),
+            "extra".to_string(),
+        ])
+        .expect_err("review card should reject extra arguments");
+        assert!(error.contains("unexpected arguments for /review card"));
+    }
+
+    #[test]
+    fn review_card_latest_selects_the_newest_artifact() {
+        let root = temp_dir();
+        let reviews = root.join(".sego").join("reviews");
+        fs::create_dir_all(&reviews).expect("review output directory");
+        for (id, created_at) in [("review-old", 10_u64), ("review-new", 20_u64)] {
+            let artifact = json!({
+                "id": id,
+                "findings": [],
+                "raw_text": "No findings.",
+                "parse_status": "structured"
+            });
+            fs::write(
+                reviews.join(format!("{id}.json")),
+                serde_json::to_string(&artifact).expect("serialize artifact"),
+            )
+            .expect("write artifact");
+            fs::write(reviews.join(format!("{id}.md")), format!("# {id}\n"))
+                .expect("write markdown");
+            let entry = ReviewIndexEntry {
+                id: id.to_string(),
+                created_at_epoch_seconds: created_at,
+                scope: "staged".to_string(),
+                diff_hash: format!("hash-{id}"),
+                finding_count: 0,
+                highest_severity: None,
+                parse_status: runtime::ReviewParseStatus::Structured,
+                json_path: format!(".sego/reviews/{id}.json"),
+                markdown_path: format!(".sego/reviews/{id}.md"),
+            };
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(reviews.join("index.jsonl"))
+                .expect("open index")
+                .write_all(
+                    format!("{}\n", serde_json::to_string(&entry).expect("serialize index"))
+                        .as_bytes(),
+                )
+                .expect("append index");
+        }
+
+        let generated = generate_review_card_for(&root, "latest").expect("generate latest card");
+        assert_eq!(generated.review_id, "review-new");
+        assert!(generated.card_path.is_file());
+        assert!(generated.latest_card_path.is_file());
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn review_card_normalizes_extended_paths_from_review_index() {
+        let root = temp_dir();
+        let reviews = root.join(".sego").join("reviews");
+        fs::create_dir_all(&reviews).expect("review dir");
+        let id = "review-extended";
+        let artifact = json!({
+            "schema_version": 1,
+            "id": id,
+            "findings": [],
+            "raw_text": "No findings.",
+            "parse_status": "structured"
+        });
+        let json_path = reviews.join(format!("{id}.json"));
+        let markdown_path = reviews.join(format!("{id}.md"));
+        fs::write(&json_path, serde_json::to_string(&artifact).expect("serialize artifact"))
+            .expect("write artifact");
+        fs::write(&markdown_path, format!("# {id}\n")).expect("write markdown");
+        let extended_root = format!("//?/{}", root.to_string_lossy().replace('\\', "/"));
+        let entry = ReviewIndexEntry {
+            id: id.to_string(),
+            created_at_epoch_seconds: 1_783_877_710,
+            scope: "full_repo:.".to_string(),
+            diff_hash: "hash-extended".to_string(),
+            finding_count: 0,
+            highest_severity: None,
+            parse_status: runtime::ReviewParseStatus::Structured,
+            json_path: format!("{extended_root}/.sego/reviews/{id}.json"),
+            markdown_path: format!("{extended_root}/.sego/reviews/{id}.md"),
+        };
+        fs::write(
+            reviews.join("index.jsonl"),
+            format!("{}\n", serde_json::to_string(&entry).expect("serialize index")),
+        )
+        .expect("write index");
+
+        let generated = generate_review_card_for(&root, id).expect("generate card");
+        let html = fs::read_to_string(generated.card_path).expect("read generated card");
+        assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&json_path))));
+        assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&markdown_path))));
+        assert!(!html.contains("file:////%3F/"));
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn review_card_requires_an_existing_artifact() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("temp workspace");
+        let error = generate_review_card_for(&root, "latest")
+            .expect_err("review card should require an existing artifact");
+        assert!(error.to_string().contains("run `sego review` first"));
+        fs::remove_dir_all(root).expect("cleanup temp workspace");
     }
 
     #[test]
@@ -10151,6 +10498,10 @@ mod tests {
         assert!(status.contains("Messages         7"));
         assert!(status.contains("Latest total     10"));
         assert!(status.contains("Cumulative total 31"));
+        assert!(status.contains("Provider/cache"));
+        assert!(status.contains("Provider         anthropic"));
+        assert!(status.contains("Latest cache     create 1, read 0"));
+        assert!(status.contains("Cumulative cache create 2, read 1"));
         assert!(status.contains("Cwd              /tmp/project"));
         assert!(status.contains("Project root     /tmp"));
         assert!(status.contains("Git branch       main"));

@@ -5,6 +5,9 @@ All notable changes to the Sego Agent project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Sego Review Card MVP**: `sego review card`, `sego review card latest`, and `sego review card <review-id>` render an existing local review JSON artifact into an escaped, offline HTML card, update `latest-card.html`, print a compact Green/Yellow/Red summary, and request opening it in the default browser. The card is a review proof, not release approval or security certification.
+- **Task acceptance record minimum practice**: adds a locale-neutral `AcceptanceRecord` contract that aggregates node, task-end, and full-review events, remediation trace, unresolved findings, and evidence links. A Chinese/English task-box and compact HTML display adapter localize Sego-owned copy while preserving original artifact evidence.
+- **Development Cutover evidence docs**: documented local cutover verification, release-QA capability boundaries, public claim boundaries, and legacy source no-copy rules.
 - **C21 latest review summary interface**: `sego review show latest --json` and `/review show latest --json` now print a stable machine-readable summary of the latest review proof. Human-readable `show latest` prints the latest Markdown report, and the no-review case returns a stable JSON shape or clear guidance.
 - **C21 agent-callable review proof**: documented the public review artifact contract, agent handoff workflow, and integration templates so AI coding agents can call Sego after code generation and explain the resulting proof to users.
 - **Reviewer identity metadata**: new review artifacts now include local trust metadata (`reviewer`, `engine_version`, `review_mode`). These fields are attribution/debug metadata, not cryptographic signatures or provenance attestations.

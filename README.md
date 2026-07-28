@@ -32,6 +32,14 @@ Sego 做独立的第三方审查——不和任何生成工具绑定，输出结
 
 ---
 
+## 当前边界 / Current boundaries
+
+Sego 的 review artifact 是工程判断证据，不是安全认证、合规认证、部署批准或发布批准。高风险合并/发布仍需要测试、CI、人工审查、Release QA 与业务上下文共同决策。
+
+- Public wording boundary: [`docs/PUBLIC_CLAIM_BOUNDARY.md`](docs/PUBLIC_CLAIM_BOUNDARY.md)
+- Release/QA capability evidence: [`docs/RELEASE_QA_CAPABILITY_MATRIX.md`](docs/RELEASE_QA_CAPABILITY_MATRIX.md)
+- Legacy source boundary: [`docs/LEGACY_SOURCE_BOUNDARY.md`](docs/LEGACY_SOURCE_BOUNDARY.md)
+
 ## First Users / 免费代码体检
 
 Sego 正在招募第一批 AI Coding 用户。如果你正在用 Cursor、Claude Code、Codex、Copilot 或其他 AI 编码工具，可以申请一次免费的 Sego 审查。
