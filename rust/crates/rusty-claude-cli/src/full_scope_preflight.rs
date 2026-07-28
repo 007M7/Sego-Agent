@@ -961,6 +961,8 @@ mod tests {
         let aion = root.join("AionUi");
         fs::create_dir_all(&aion).expect("aion dir");
         git(&["init", "--quiet"], &aion);
+        git(&["config", "user.email", "tests@example.com"], &aion);
+        git(&["config", "user.name", "Sego Preflight Tests"], &aion);
         fs::write(aion.join("stub.txt"), "external\n").expect("stub");
         git(&["add", "."], &aion);
         git(&["commit", "-m", "ext", "--quiet"], &aion);

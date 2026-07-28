@@ -9988,11 +9988,8 @@ mod tests {
 
         let generated = generate_review_card_for(&root, id).expect("generate card");
         let html = fs::read_to_string(generated.card_path).expect("read generated card");
-        let normalized_root = root.to_string_lossy().replace('\\', "/").replace(' ', "%20");
-        assert!(
-            html.contains(&format!("href=\"file:///{normalized_root}/.sego/reviews/{id}.json\""))
-        );
-        assert!(html.contains(&format!("href=\"file:///{normalized_root}/.sego/reviews/{id}.md\"")));
+        assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&json_path))));
+        assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&markdown_path))));
         assert!(!html.contains("file:////%3F/"));
         fs::remove_dir_all(root).expect("cleanup temp workspace");
     }
