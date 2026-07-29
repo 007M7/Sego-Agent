@@ -2,7 +2,8 @@
 
 <p align="center">
   <strong>AI Coding 的工程信任层</strong><br>
-  让 AI 生成的代码变得可审查、可验证、可交付。
+  让 AI 生成的代码变得可审查、可验证、可交付。<br>
+  <sub>The engineering trust layer for AI-generated code — independent review, evidence, and acceptance after your AI coding tool writes the code.</sub>
 </p>
 
 <p align="center">
@@ -10,6 +11,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green?style=flat-square" alt="MIT 许可证"></a>
   <img src="https://img.shields.io/badge/Rust-原生-orange?style=flat-square" alt="Rust 原生">
   <img src="https://img.shields.io/badge/平台-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="支持平台">
+</p>
+
+<p align="center">
+  <img src="assets/sego-cli-demo.png" width="720" alt="sego /review staged 终端演示：结构化 findings、严重度分级、证据持久化到 .sego/reviews/">
 </p>
 
 ---
