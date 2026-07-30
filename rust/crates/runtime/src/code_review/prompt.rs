@@ -51,6 +51,17 @@ pub fn build_review_prompt(context: &ReviewContext, options: ReviewPromptOptions
     prompt.push("- For generated or optimized code, actively look for newly introduced regressions and include verification commands in each finding when practical.".to_string());
     prompt.push(String::new());
 
+    prompt.push("Mitigation awareness (reduce false positives):".to_string());
+    prompt.push("- Before reporting a security vulnerability, check whether the code already contains a mitigation that neutralizes the risk. Common mitigations to look for:".to_string());
+    prompt.push("  * Parameterized queries / prepared statements (e.g., cursor.execute(sql, (params,)) with placeholder syntax like %s, ?, :name) — NOT string concatenation.".to_string());
+    prompt.push("  * Allowlist / denylist validation (e.g., netloc allowlist for redirects, event-type allowlist for webhooks, input regex validation).".to_string());
+    prompt.push("  * Cryptographic authentication replacing a relaxed check (e.g., HMAC-SHA256 signature verification on webhook endpoints that are @csrf_exempt, JWT verification, constant-time comparison).".to_string());
+    prompt.push("  * Sandboxed or restricted eval/exec (e.g., __builtins__ cleared, globals/locals allowlist, input sanitized to a strict character set).".to_string());
+    prompt.push("  * Shell=False with argument-list form (e.g., subprocess.run([\"cmd\", arg]) without shell=True, plus input validation).".to_string());
+    prompt.push("- If a mitigation is present and correctly implemented, do NOT report the 'vulnerable pattern' as a high/critical finding. At most, report it as info with a note like 'Mitigated by <mechanism>; verify the mitigation is correctly applied.'".to_string());
+    prompt.push("- If the mitigation appears incomplete or bypassable (e.g., allowlist uses startswith instead of exact match, or eval sandbox has a known escape), THEN report it — but explain the specific bypass in the evidence.".to_string());
+    prompt.push(String::new());
+
     if is_full_repo {
         prompt.push("Evidence gate (full repository audit):".to_string());
         prompt.push("- Every file path mentioned in a finding MUST appear in the file tree below. If you cannot locate a file, label it as unverified.".to_string());
