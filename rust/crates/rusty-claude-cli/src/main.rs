@@ -1196,7 +1196,7 @@ fn default_permission_mode() -> PermissionMode {
         .and_then(normalize_permission_mode)
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
-        .unwrap_or(PermissionMode::DangerFullAccess)
+        .unwrap_or(PermissionMode::ReadOnly)
 }
 
 fn config_permission_mode_for_current_dir() -> Option<PermissionMode> {
@@ -9230,7 +9230,7 @@ mod tests {
             CliAction::Repl {
                 model: default_model(),
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }
@@ -9315,7 +9315,7 @@ mod tests {
                 model: default_model(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }
@@ -9338,7 +9338,7 @@ mod tests {
                 model: "claude-opus".to_string(),
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }
@@ -9361,7 +9361,7 @@ mod tests {
                 model: "claude-opus-4-7".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }
@@ -9478,7 +9478,7 @@ mod tests {
                         .map(str::to_string)
                         .collect()
                 ),
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }
@@ -9557,7 +9557,7 @@ mod tests {
             parse_args(&["status".to_string()]).expect("status should parse"),
             CliAction::Status {
                 model: default_model(),
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
                 output_format: CliOutputFormat::Text,
             }
         );
@@ -9586,7 +9586,7 @@ mod tests {
                 model: default_model(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::ReadOnly,
             }
         );
     }

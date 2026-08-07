@@ -101,8 +101,8 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_danger_full_access_permission_mode() {
+    fn defaults_to_read_only_permission_mode() {
         let cli = Cli::parse_from(["rusty-claude-cli"]);
-        assert_eq!(cli.permission_mode, PermissionMode::DangerFullAccess);
+        assert_eq!(cli.permission_mode, PermissionMode::ReadOnly);
     }
 }
