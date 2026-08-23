@@ -1,3 +1,4 @@
+mod command_runner;
 mod hooks;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use command_runner::{is_literal_command, plugin_command};
 
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
 
@@ -1859,10 +1862,6 @@ fn resolve_hook_entry(root: &Path, entry: &str) -> String {
     }
 }
 
-fn is_literal_command(entry: &str) -> bool {
-    !entry.starts_with("./") && !entry.starts_with("../") && !Path::new(entry).is_absolute()
-}
-
 fn run_lifecycle_commands(
     metadata: &PluginMetadata,
     lifecycle: &PluginLifecycle,
@@ -1874,29 +1873,21 @@ fn run_lifecycle_commands(
     }
 
     for command in commands {
-        let mut process = if Path::new(command).exists() {
-            if cfg!(windows) {
-                let mut process = Command::new("cmd");
-                process.arg("/C").arg(command);
-                process
-            } else {
-                let mut process = Command::new("sh");
-                process.arg(command);
-                process
-            }
-        } else if cfg!(windows) {
-            let mut process = Command::new("cmd");
-            process.arg("/C").arg(command);
-            process
-        } else {
-            let mut process = Command::new("sh");
-            process.arg("-lc").arg(command);
-            process
-        };
+        let mut process = plugin_command(command).map_err(|error| {
+            PluginError::CommandFailed(format!(
+                "plugin `{}` {} could not prepare `{command}`: {error}",
+                metadata.id, phase
+            ))
+        })?;
         if let Some(root) = &metadata.root {
             process.current_dir(root);
         }
-        let output = process.output()?;
+        let output = process.output().map_err(|error| {
+            PluginError::CommandFailed(format!(
+                "plugin `{}` {} failed to start `{command}`: {error}",
+                metadata.id, phase
+            ))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -2155,22 +2146,46 @@ mod tests {
 
     fn write_lifecycle_plugin(root: &Path, name: &str, version: &str) -> PathBuf {
         let log_path = root.join("lifecycle.log");
-        write_file(
-            root.join("lifecycle").join("init.sh").as_path(),
-            "#!/bin/sh\nprintf 'init\\n' >> lifecycle.log\n",
-        );
-        write_file(
-            root.join("lifecycle").join("shutdown.sh").as_path(),
-            "#!/bin/sh\nprintf 'shutdown\\n' >> lifecycle.log\n",
-        );
+        let (init_command, init_body) = lifecycle_script("init", 0);
+        let (shutdown_command, shutdown_body) = lifecycle_script("shutdown", 0);
+        write_file(root.join(init_command.trim_start_matches("./")).as_path(), &init_body);
+        write_file(root.join(shutdown_command.trim_start_matches("./")).as_path(), &shutdown_body);
         write_file(
             root.join(MANIFEST_RELATIVE_PATH).as_path(),
             format!(
-                "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"lifecycle plugin\",\n  \"lifecycle\": {{\n    \"Init\": [\"./lifecycle/init.sh\"],\n    \"Shutdown\": [\"./lifecycle/shutdown.sh\"]\n  }}\n}}"
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"lifecycle plugin\",\n  \"lifecycle\": {{\n    \"Init\": [\"{init_command}\"],\n    \"Shutdown\": [\"{shutdown_command}\"]\n  }}\n}}"
             )
             .as_str(),
         );
         log_path
+    }
+
+    fn write_failing_lifecycle_plugin(root: &Path, name: &str) {
+        let (init_command, init_body) = lifecycle_script("failing-init", 7);
+        write_file(root.join(init_command.trim_start_matches("./")).as_path(), &init_body);
+        write_file(
+            root.join(MANIFEST_RELATIVE_PATH).as_path(),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"description\": \"failing lifecycle plugin\",\n  \"lifecycle\": {{\n    \"Init\": [\"{init_command}\"]\n  }}\n}}"
+            )
+            .as_str(),
+        );
+    }
+
+    #[cfg(windows)]
+    fn lifecycle_script(name: &str, exit_code: i32) -> (String, String) {
+        (
+            format!("./lifecycle/{name}.cmd"),
+            format!("@echo off\r\n>> lifecycle.log echo {name}\r\nexit /B {exit_code}\r\n"),
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn lifecycle_script(name: &str, exit_code: i32) -> (String, String) {
+        (
+            format!("./lifecycle/{name}.sh"),
+            format!("#!/bin/sh\nprintf '{name}\\n' >> lifecycle.log\nexit {exit_code}\n"),
+        )
     }
 
     fn write_tool_plugin(root: &Path, name: &str, version: &str) {
@@ -3039,7 +3054,26 @@ mod tests {
         registry.shutdown().expect("shutdown should succeed");
 
         let log = fs::read_to_string(&log_path).expect("lifecycle log should exist");
-        assert_eq!(log, "init\nshutdown\n");
+        assert_eq!(log.replace("\r\n", "\n"), "init\nshutdown\n");
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn plugin_registry_propagates_lifecycle_command_failures() {
+        let config_home = temp_dir("failing-lifecycle-home");
+        let source_root = temp_dir("failing-lifecycle-source");
+        write_failing_lifecycle_plugin(&source_root, "failing-lifecycle-demo");
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        manager.install(source_root.to_str().expect("utf8 path")).expect("install should succeed");
+        let registry = manager.plugin_registry().expect("registry should build");
+
+        let error = registry.initialize().expect_err("non-zero lifecycle exit must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("failing-lifecycle-demo@external"), "{message}");
+        assert!(message.contains('7'), "{message}");
 
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(source_root);

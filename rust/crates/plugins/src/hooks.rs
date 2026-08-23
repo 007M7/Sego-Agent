@@ -1,11 +1,9 @@
 use std::ffi::OsStr;
-#[cfg(not(windows))]
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::{PluginError, PluginHooks, PluginRegistry};
+use crate::{command_runner::plugin_command, PluginError, PluginHooks, PluginRegistry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
@@ -53,26 +51,70 @@ impl HookRunResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HookCommand {
+    command: String,
+    working_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct HookPlan {
+    pre_tool_use: Vec<HookCommand>,
+    post_tool_use: Vec<HookCommand>,
+    post_tool_use_failure: Vec<HookCommand>,
+}
+
+impl HookPlan {
+    fn without_working_dir(hooks: PluginHooks) -> Self {
+        let commands = |entries: Vec<String>| {
+            entries.into_iter().map(|command| HookCommand { command, working_dir: None }).collect()
+        };
+        Self {
+            pre_tool_use: commands(hooks.pre_tool_use),
+            post_tool_use: commands(hooks.post_tool_use),
+            post_tool_use_failure: commands(hooks.post_tool_use_failure),
+        }
+    }
+
+    fn extend(&mut self, hooks: &PluginHooks, working_dir: Option<&Path>) {
+        let append = |target: &mut Vec<HookCommand>, commands: &[String]| {
+            target.extend(commands.iter().map(|command| HookCommand {
+                command: command.clone(),
+                working_dir: working_dir.map(Path::to_path_buf),
+            }));
+        };
+
+        append(&mut self.pre_tool_use, &hooks.pre_tool_use);
+        append(&mut self.post_tool_use, &hooks.post_tool_use);
+        append(&mut self.post_tool_use_failure, &hooks.post_tool_use_failure);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HookRunner {
-    hooks: PluginHooks,
+    plan: HookPlan,
 }
 
 impl HookRunner {
     #[must_use]
     pub fn new(hooks: PluginHooks) -> Self {
-        Self { hooks }
+        Self { plan: HookPlan::without_working_dir(hooks) }
     }
 
     pub fn from_registry(plugin_registry: &PluginRegistry) -> Result<Self, PluginError> {
-        Ok(Self::new(plugin_registry.aggregated_hooks()?))
+        let mut plan = HookPlan::default();
+        for plugin in plugin_registry.plugins().iter().filter(|plugin| plugin.is_enabled()) {
+            plugin.validate()?;
+            plan.extend(plugin.hooks(), plugin.metadata().root.as_deref());
+        }
+        Ok(Self { plan })
     }
 
     #[must_use]
     pub fn run_pre_tool_use(&self, tool_name: &str, tool_input: &str) -> HookRunResult {
         Self::run_commands(
             HookEvent::PreToolUse,
-            &self.hooks.pre_tool_use,
+            &self.plan.pre_tool_use,
             tool_name,
             tool_input,
             None,
@@ -90,7 +132,7 @@ impl HookRunner {
     ) -> HookRunResult {
         Self::run_commands(
             HookEvent::PostToolUse,
-            &self.hooks.post_tool_use,
+            &self.plan.post_tool_use,
             tool_name,
             tool_input,
             Some(tool_output),
@@ -107,7 +149,7 @@ impl HookRunner {
     ) -> HookRunResult {
         Self::run_commands(
             HookEvent::PostToolUseFailure,
-            &self.hooks.post_tool_use_failure,
+            &self.plan.post_tool_use_failure,
             tool_name,
             tool_input,
             Some(tool_error),
@@ -117,7 +159,7 @@ impl HookRunner {
 
     fn run_commands(
         event: HookEvent,
-        commands: &[String],
+        commands: &[HookCommand],
         tool_name: &str,
         tool_input: &str,
         tool_output: Option<&str>,
@@ -164,7 +206,7 @@ impl HookRunner {
 
     #[allow(clippy::too_many_arguments)]
     fn run_command(
-        command: &str,
+        hook_command: &HookCommand,
         event: HookEvent,
         tool_name: &str,
         tool_input: &str,
@@ -172,7 +214,23 @@ impl HookRunner {
         is_error: bool,
         payload: &str,
     ) -> HookCommandOutcome {
-        let mut child = shell_command(command);
+        let command = hook_command.command.as_str();
+        let mut process = match plugin_command(command) {
+            Ok(process) => process,
+            Err(error) => {
+                return HookCommandOutcome::Failed {
+                    message: format!(
+                        "{} hook `{command}` could not be prepared for `{tool_name}`: {error}",
+                        event.as_str()
+                    ),
+                };
+            }
+        };
+        if let Some(working_dir) = &hook_command.working_dir {
+            process.current_dir(working_dir).env("CLAWD_PLUGIN_ROOT", working_dir.as_os_str());
+        }
+
+        let mut child = CommandWithStdin::new(process);
         child.stdin(std::process::Stdio::piped());
         child.stdout(std::process::Stdio::piped());
         child.stderr(std::process::Stdio::piped());
@@ -267,34 +325,12 @@ fn format_hook_warning(command: &str, code: i32, stdout: Option<&str>, stderr: &
     message
 }
 
-fn shell_command(command: &str) -> CommandWithStdin {
-    #[cfg(windows)]
-    let command_builder = {
-        let mut command_builder = Command::new("cmd");
-        command_builder.arg("/C").arg(command);
-        CommandWithStdin::new(command_builder)
-    };
-
-    #[cfg(not(windows))]
-    let command_builder = if Path::new(command).exists() {
-        let mut command_builder = Command::new("sh");
-        command_builder.arg("-c").arg("exec sh \"$1\"").arg("sh").arg(command);
-        CommandWithStdin::new(command_builder)
-    } else {
-        let mut command_builder = Command::new("sh");
-        command_builder.arg("-lc").arg(command);
-        CommandWithStdin::new(command_builder)
-    };
-
-    command_builder
-}
-
 struct CommandWithStdin {
-    command: Command,
+    command: std::process::Command,
 }
 
 impl CommandWithStdin {
-    fn new(command: Command) -> Self {
+    fn new(command: std::process::Command) -> Self {
         Self { command }
     }
 
@@ -388,6 +424,37 @@ mod tests {
         .expect("write plugin manifest");
     }
 
+    fn write_root_probe_hook_plugin(root: &Path, name: &str) {
+        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join("hooks")).expect("hooks dir");
+        let (script_command, script_body) = root_probe_script();
+        fs::write(root.join(script_command.trim_start_matches("./")), script_body)
+            .expect("write root probe hook");
+        fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"description\": \"root probe hook plugin\",\n  \"hooks\": {{\n    \"PreToolUse\": [\"{script_command}\"]\n  }}\n}}"
+            ),
+        )
+        .expect("write root probe manifest");
+    }
+
+    #[cfg(windows)]
+    fn root_probe_script() -> (String, String) {
+        (
+            "./hooks/root-probe.cmd".to_string(),
+            "@echo off\r\n>> hook-root.log echo rooted\r\necho root ok\r\n".to_string(),
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn root_probe_script() -> (String, String) {
+        (
+            "./hooks/root-probe.sh".to_string(),
+            "#!/bin/sh\nprintf 'rooted\\n' >> hook-root.log\nprintf 'root ok\\n'\n".to_string(),
+        )
+    }
+
     #[cfg(windows)]
     fn hook_script(name: &str, message: &str) -> (String, String) {
         (format!("./hooks/{name}.cmd"), format!("@echo off\r\necho {message}\r\n"))
@@ -464,6 +531,34 @@ mod tests {
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(first_source_root);
         let _ = fs::remove_dir_all(second_source_root);
+    }
+
+    #[test]
+    fn registry_hooks_run_synchronously_in_their_plugin_root() {
+        let config_home = temp_dir("root-probe-config");
+        let source_root = temp_dir("root-probe-source");
+        write_root_probe_hook_plugin(&source_root, "root-probe");
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        let install = manager
+            .install(source_root.to_str().expect("utf8 path"))
+            .expect("plugin install should succeed");
+        let registry = manager.plugin_registry().expect("registry should build");
+        let runner = HookRunner::from_registry(&registry).expect("plugin hooks should load");
+
+        let result = runner.run_pre_tool_use("Read", r#"{"path":"README.md"}"#);
+
+        assert_eq!(result, HookRunResult::allow(vec!["root ok".to_string()]));
+        assert_eq!(
+            fs::read_to_string(install.install_path.join("hook-root.log"))
+                .expect("hook root log should exist")
+                .replace("\r\n", "\n"),
+            "rooted\n"
+        );
+        assert!(!source_root.join("hook-root.log").exists());
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(source_root);
     }
 
     #[test]

@@ -9184,34 +9184,32 @@ mod tests {
 
     fn write_plugin_fixture(root: &Path, name: &str, include_hooks: bool, include_lifecycle: bool) {
         fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        let (hook_command, hook_body) = plugin_fixture_hook();
+        let (init_command, init_body, shutdown_command, shutdown_body) = plugin_fixture_lifecycle();
         if include_hooks {
             fs::create_dir_all(root.join("hooks")).expect("hooks dir");
-            fs::write(root.join("hooks").join("pre.sh"), "#!/bin/sh\nprintf 'plugin pre hook'\n")
+            fs::write(root.join(hook_command.trim_start_matches("./")), hook_body)
                 .expect("write hook");
         }
         if include_lifecycle {
             fs::create_dir_all(root.join("lifecycle")).expect("lifecycle dir");
-            fs::write(
-                root.join("lifecycle").join("init.sh"),
-                "#!/bin/sh\nprintf 'init\\n' >> lifecycle.log\n",
-            )
-            .expect("write init lifecycle");
-            fs::write(
-                root.join("lifecycle").join("shutdown.sh"),
-                "#!/bin/sh\nprintf 'shutdown\\n' >> lifecycle.log\n",
-            )
-            .expect("write shutdown lifecycle");
+            fs::write(root.join(init_command.trim_start_matches("./")), init_body)
+                .expect("write init lifecycle");
+            fs::write(root.join(shutdown_command.trim_start_matches("./")), shutdown_body)
+                .expect("write shutdown lifecycle");
         }
 
         let hooks = if include_hooks {
-            ",\n  \"hooks\": {\n    \"PreToolUse\": [\"./hooks/pre.sh\"]\n  }"
+            format!(",\n  \"hooks\": {{\n    \"PreToolUse\": [\"{hook_command}\"]\n  }}")
         } else {
-            ""
+            String::new()
         };
         let lifecycle = if include_lifecycle {
-            ",\n  \"lifecycle\": {\n    \"Init\": [\"./lifecycle/init.sh\"],\n    \"Shutdown\": [\"./lifecycle/shutdown.sh\"]\n  }"
+            format!(
+                ",\n  \"lifecycle\": {{\n    \"Init\": [\"{init_command}\"],\n    \"Shutdown\": [\"{shutdown_command}\"]\n  }}"
+            )
         } else {
-            ""
+            String::new()
         };
         fs::write(
             root.join(".claude-plugin").join("plugin.json"),
@@ -9220,6 +9218,36 @@ mod tests {
             ),
         )
         .expect("write plugin manifest");
+    }
+
+    #[cfg(windows)]
+    fn plugin_fixture_hook() -> (&'static str, &'static str) {
+        ("./hooks/pre.cmd", "@echo off\r\necho plugin pre hook\r\n")
+    }
+
+    #[cfg(not(windows))]
+    fn plugin_fixture_hook() -> (&'static str, &'static str) {
+        ("./hooks/pre.sh", "#!/bin/sh\nprintf 'plugin pre hook'\n")
+    }
+
+    #[cfg(windows)]
+    fn plugin_fixture_lifecycle() -> (&'static str, &'static str, &'static str, &'static str) {
+        (
+            "./lifecycle/init.cmd",
+            "@echo off\r\n>> lifecycle.log echo init\r\n",
+            "./lifecycle/shutdown.cmd",
+            "@echo off\r\n>> lifecycle.log echo shutdown\r\n",
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn plugin_fixture_lifecycle() -> (&'static str, &'static str, &'static str, &'static str) {
+        (
+            "./lifecycle/init.sh",
+            "#!/bin/sh\nprintf 'init\\n' >> lifecycle.log\n",
+            "./lifecycle/shutdown.sh",
+            "#!/bin/sh\nprintf 'shutdown\\n' >> lifecycle.log\n",
+        )
     }
     #[test]
     fn defaults_to_repl_when_no_args() {
@@ -11546,8 +11574,9 @@ UU conflicted.rs",
             .expect("plugin state should load");
         let pre_hooks = state.feature_config.hooks().pre_tool_use();
         assert_eq!(pre_hooks.len(), 1);
+        let (fixture_hook_path, _) = plugin_fixture_hook();
         assert!(
-            pre_hooks[0].ends_with("hooks/pre.sh"),
+            Path::new(&pre_hooks[0]).ends_with(fixture_hook_path.trim_start_matches("./")),
             "expected installed plugin hook path, got {pre_hooks:?}"
         );
 
@@ -11734,12 +11763,15 @@ UU conflicted.rs",
         )
         .expect("runtime should build");
 
-        assert_eq!(fs::read_to_string(&log_path).expect("init log should exist"), "init\n");
+        assert_eq!(
+            fs::read_to_string(&log_path).expect("init log should exist").replace("\r\n", "\n"),
+            "init\n"
+        );
 
         runtime.shutdown_plugins().expect("plugin shutdown should succeed");
 
         assert_eq!(
-            fs::read_to_string(&log_path).expect("shutdown log should exist"),
+            fs::read_to_string(&log_path).expect("shutdown log should exist").replace("\r\n", "\n"),
             "init\nshutdown\n"
         );
 

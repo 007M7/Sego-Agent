@@ -4,6 +4,8 @@ All notable changes to the Sego Agent project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-24
+
 ### Added
 - **Sego Review Card MVP**: `sego review card`, `sego review card latest`, and `sego review card <review-id>` render an existing local review JSON artifact into an escaped, offline HTML card, update `latest-card.html`, print a compact Green/Yellow/Red summary, and request opening it in the default browser. The card is a review proof, not release approval or security certification.
 - **Task acceptance record minimum practice**: adds a locale-neutral `AcceptanceRecord` contract that aggregates node, task-end, and full-review events, remediation trace, unresolved findings, and evidence links. A Chinese/English task-box and compact HTML display adapter localize Sego-owned copy while preserving original artifact evidence.
@@ -14,6 +16,7 @@ All notable changes to the Sego Agent project will be documented in this file.
 
 ### Changed
 - Updated review artifact JSON Schemas to include current parse/evidence status values (`parse_attempted_but_failed`, `evidence_status`) plus optional C21 metadata fields.
+- Plugin lifecycle and hook script paths now use explicit synchronous platform runners instead of Windows file associations; unsupported scripts, missing interpreters, and non-zero exits fail closed.
 
 ## [0.1.8] - 2026-06-23
 
