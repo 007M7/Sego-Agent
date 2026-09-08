@@ -1,13 +1,13 @@
 <h1>Sego <img src="assets/sego-ui-icon.png" width="34" height="34" alt="Sego 图标" align="right"></h1>
 
 <p align="center">
-  <strong>AI Coding 的工程信任层</strong><br>
-  让 AI 生成的代码变得可审查、可验证、可交付。<br>
-  <sub>The engineering trust layer for AI-generated code — independent review, evidence, and acceptance after your AI coding tool writes the code.</sub>
+  <strong>验证 AI 主张的工程信任层</strong><br>
+  为 AI 生成的改动提供有证据的审查与验证——保留问题、覆盖范围和未验证项。<br>
+  <sub>The engineering trust layer for verifying AI claims — traceable, evidence-backed review of AI-generated code changes.</sub>
 </p>
 
 <p align="center">
-  <a href="#快速开始"><img src="https://img.shields.io/badge/快速开始-5分钟-blue?style=flat-square" alt="快速开始"></a>
+  <a href="#快速开始"><img src="https://img.shields.io/badge/快速开始-blue?style=flat-square" alt="快速开始"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green?style=flat-square" alt="MIT 许可证"></a>
   <img src="https://img.shields.io/badge/Rust-原生-orange?style=flat-square" alt="Rust 原生">
   <img src="https://img.shields.io/badge/平台-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="支持平台">
@@ -19,39 +19,17 @@
 
 ---
 
-## Sego 是什么
+## Sego 解决什么问题
 
-Sego 不是另一个 AI 编码工具，也不是 IDE。它是一层**工程信任层**——在 AI 编码工具（Claude Code、Codex、Cursor 等）生成代码之后，Sego 对改动做独立的工程审查、安全检查和结构化记录。
+Sego 不是另一个 AI 编码工具，也不是 IDE。它工作在 AI 编码工具（Claude Code、Codex、Cursor 等）生成代码**之后**：对明确范围的改动做模型驱动的受约束审查 + 确定性证据校验，把结果变成可复查的结构化产物。
 
-> AI 负责生成代码，Sego 负责审查它是否值得被合并。
+三个真实的痛点：
 
-### 为什么需要 Sego
+- **利益冲突**：AI 编码工具既生成代码又审查自己的代码。对 200+ 个 vibe-coded 应用的评估发现 91.5% 存在可溯源到 AI 的漏洞（[Keyhole Software 2026](https://keyholesoftware.com/vibe-coding-trends-2026/)）；而 63% 的 vibe coding 用户自我认同为非专业开发者——他们没有能力自己做第二遍把关（同上）。
+- **"说完成"不等于"完成"**：模型声称任务完成，但缺少可接受的证据，未验证项被静默吞掉。
+- **结果不可复查**：审查发现没有证据绑定，"零发现"被当成"通过"。
 
-AI 编码已经普及，但生成的代码质量缺乏独立把关：
-
-- **91.5%** 的 AI 编码应用含安全漏洞（[Keyhole Software 2026](https://keyholesoftware.com/vibe-coding-trends-2026/)）
-- **63%** 的 vibe coding 用户不是专业开发者——他们看不懂 AI 生成的代码（同上）
-- 现有 AI 编码工具的内置审查有**利益冲突**：它们既生成代码又审查自己的代码
-
-Sego 做独立的第三方审查——不和任何生成工具绑定，输出结构化的风险发现，帮你判断"这次改动能不能提交"。
-
----
-
-## 当前边界 / Current boundaries
-
-Sego 的 review artifact 是工程判断证据，不是安全认证、合规认证、部署批准或发布批准。高风险合并/发布仍需要测试、CI、人工审查、Release QA 与业务上下文共同决策。
-
-- Public wording boundary: [`docs/PUBLIC_CLAIM_BOUNDARY.md`](docs/PUBLIC_CLAIM_BOUNDARY.md)
-- Release/QA capability evidence: [`docs/RELEASE_QA_CAPABILITY_MATRIX.md`](docs/RELEASE_QA_CAPABILITY_MATRIX.md)
-- Legacy source boundary: [`docs/LEGACY_SOURCE_BOUNDARY.md`](docs/LEGACY_SOURCE_BOUNDARY.md)
-
-## First Users / 免费代码体检
-
-Sego 正在招募第一批 AI Coding 用户。如果你正在用 Cursor、Claude Code、Codex、Copilot 或其他 AI 编码工具，可以申请一次免费的 Sego 审查。
-
-- [Apply for Free Sego Audit](docs/LAUNCH.md)
-- [Request Private AI Code Audit](docs/LAUNCH.md)
-- [Launch landing page](docs/index.html)
+Sego 的回答：输入是明确范围的改动与验收预期，输出是结构化 findings + 逐条证据状态 + 持久化到 `.sego/reviews/` 的可复查产物。**零发现不等于验收通过。**
 
 ---
 
@@ -114,6 +92,10 @@ export DEEPSEEK_MODEL="deepseek-v4-flash"
 export ANTHROPIC_API_KEY="your-key"
 ```
 
+### 安全默认
+
+Sego **默认以只读（ReadOnly）权限启动**：审查会话不能写入文件或执行命令。需要写入、命令执行或自主能力时，必须通过 `--permission-mode` 显式选择（如 `workspace-write`、`danger-full-access`），或用 `RUSTY_CLAUDE_PERMISSION_MODE` 环境变量 / 项目配置授权。
+
 ### 第一次 review
 
 ```bash
@@ -126,178 +108,113 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 
 ---
 
-## 已实现能力
+## 结果如何阅读
 
-### 1. AI 代码审查（Code Review）
+> Review results are machine-readable and human-readable: every finding carries severity, evidence, and an evidence-status produced by a deterministic gate — not just model prose.
 
-```bash
-sego /review staged       # 审查暂存区改动
-sego /review              # 审查工作区改动
-sego /review ready        # 提交前 readiness gate
-sego /review summary      # 交付摘要
-sego /review safety staged # staged 安全锁
-```
+### 每条 finding 的结构
 
-- **结构化 findings**：每个发现含 severity / file / line / title / evidence / risk / suggestion / confidence
-- **安全锁**：检测疑似密钥、硬编码凭据、危险命令、本机绝对路径
-- **审查历史**：findings 持久化到 `.sego/reviews/`，支持查看、标记状态、复盘
-- **多模型支持**：DeepSeek（含推理模式）和 Anthropic
-- **Windows 稳定增强**：非 Git 目录友好提示、交互命令防挂死、Shell 写文件拦截修正
+- **severity**：`critical / high / medium / low / info`
+- **file / line / title**：定位到具体改动
+- **evidence**：来自 diff 或文件内容的具体证据
+- **risk / suggestion**：为什么重要、怎么修
+- **confidence**：模型置信度
+- **evidence_status**：确定性证据门的校验结果（见下）
 
-### 2. 自然语言本地动作（NL Intent Router）
+### 证据门（evidence gate）：`verified` 不等于"缺陷已复现"
 
-在交互窗口里，常见控制动作可以直接用口语表达，Sego 会在本地确定执行，不把这些请求交给模型乱试命令：
+每条 finding 都经过确定性校验并标注 `evidence_status`：
 
-```text
-当前工作区
-切换到 D:\YourProject
-帮我 review 当前改动
-检查安全问题
-把刚才的审查结果写成 ./review.md
-导出当前会话
-检查更新
-退出
-```
+| evidence_status | 含义 |
+|---|---|
+| `verified` | 引用路径在捕获范围内且行号有效——**仅代表位置有效、内容已捕获，不代表缺陷已被复现证实** |
+| `unverified_file` / `unverified_line` / `unverified_dependency` | 引用的文件 / 行号 / 依赖无法在捕获内容中确认 |
+| `scope_not_captured` / `content_not_captured` / `content_truncated` | 范围未捕获 / 内容未捕获 / 内容被截断 |
 
-更严谨的命令式入口仍然保留：`/workspace`、`/cd`、`/review`、`/export`、`sego update --check`。
+模型输出无法解析时，审查结果会明确标注 `parse_attempted_but_failed`——绝不静默显示"0 findings"。
 
-如果 Sego 判断你像是在说本地控制动作、但缺少路径或对象，会提示你补全说法；输入 `/dir` 可以查看常用指令和自然语言示例。
+### 四种状态分开看
 
-### 3. Crash Recovery（崩溃恢复）
+| 维度 | 问的问题 | 公开措辞 |
+|---|---|---|
+| 执行状态 | 检查是否跑完？ | 检查完成 / 失败 / 取消 |
+| 验证结论 | 证据是否支持主张？ | 未发现支持充分的问题（仍可能有未验证项）|
+| 问题处理状态 | 发现如何处理？ | 已修复（需关联复验）/ 争议 / 接受风险 |
+| 用户决定 | 接受还是返工？ | 等待用户决定——**不由验证结论自动生成** |
 
-```bash
-sego --resume latest           # 恢复最近一次会话
-sego --resume latest /status   # 查看恢复状态
-```
+### 审查产物
 
-- 进程异常中断后，下次启动自动检测并提示恢复
-- 恢复时不重放旧工具调用（安全边界）
-- 正常退出的会话不会触发恢复提示
+每次审查写入 `.sego/reviews/`：
 
-### 4. Review-Trust 权限画像
+- `review-<id>.json` — 机器可读审查产物
+- `review-<id>.md` — 人类可读报告
+- `index.jsonl` — append-only 索引，供 agent 定位审查历史
 
 ```bash
-sego --permission-profile review-trust
+sego review show latest --json   # 机器可读的最新审查摘要
 ```
 
-在 review/verify 会话中降低权限交互噪音：
+字段契约见 [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md)，agent 接入工作流见 [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md)。
 
-- **自动放行**：只读命令（cat/rg/grep/ls/git status）、验证命令（cargo test/npm test）、`.sego/` 写入
-- **需要确认**：源码写入、依赖安装、git commit/merge
-- **直接拒绝**：rm -rf、git reset --hard、git push、sudo
+### 示例：一次正常审查
 
-`--permission-mode` 和 `--permission-profile` 互斥（不能同时使用）。
-
-### 5. Review artifact contract
-
-Every Sego review writes machine-readable and human-readable proof artifacts under `.sego/reviews/`:
-
-- `review-<id>.json` — machine-readable review artifact
-- `review-<id>.md` — human-readable report
-- `index.jsonl` — append-only index so agents can find review history
-
-Preferred machine-readable latest-review entry:
-
-```bash
-sego review show latest --json
-```
-
-See [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md) for the public field contract and [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md) for the recommended agent handoff workflow.
-
-### 6. Sidecar JSON 接口（PoC / experimental）
-
-```bash
-echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' \
-  | sego sidecar review
-```
-
-让外部工具通过 stdin/stdout JSON 调用 Sego 的审查能力：
-
-- stdin 接收 JSON request → stdout 返回 JSON response
-- skill 包（`skills/sego-review/`）可被支持 SKILL.md 协议的 AI 编码工具调用
-- 错误时返回结构化 error envelope（不崩溃）
-
-> **PoC 状态**：sidecar 当前仅支持 `review` action；stdout 保持 JSON 输出，诊断信息走 stderr。协议与 schema 仍可能调整，不承诺向后兼容。
-
-### 7. 验证计划
-
-```bash
-sego /verify fast    # 快速验证计划
-sego /verify         # 完整验证
-```
-
-根据项目类型识别验证命令（Rust: cargo build/test，Node: npm test/build）。
-
-### 8. 接入 AI 编码工具（Sidecar skill PoC）
-
-Sego 提供一个 sidecar skill 包，让支持 SKILL.md 协议的 AI 编码工具能调用 Sego review。
-
-**一键安装**：
-
-```bash
-# Mac / Linux
-bash skills/sego-review/install.sh
-
-# Windows
-powershell -File skills\sego-review\install.ps1
-```
-
-脚本会检测已安装的兼容 AI 工具并复制 skill 包到对应目录，安装后重启目标工具即可。
-
-**手动调用**（不依赖任何 IDE）：
-
-```bash
-echo '{"schema_version":1,"action":"review","cwd":"/your/project","scope":"staged"}' \
-  | sego sidecar review
-```
-
-> **PoC 状态**：sidecar skill 当前仅支持 `review` action。这是早期集成（experimental），不承诺完整 IDE 插件生态，也不承诺与任何具体外部工具的稳定契约。
-
----
-
-## Demo 示例
-
-以下是对一段含安全漏洞的 Python 代码做 `/review staged` 的真实输出：
-
-**输入代码**（`app.py`，故意包含漏洞）：
+对一段含安全漏洞的 Python 代码（`app.py`）做 `/review staged` 的输出示例：
 
 ```python
 def get_user(name):
     query = "SELECT * FROM users WHERE name = '" + name + "'"  # SQL 注入
     return db.execute(query)
 
-def get_password(user_id):
-    return db.execute("SELECT password FROM users WHERE id = " + str(user_id))  # SQL 注入
-
 def hash_password(pw):
     return pw ^ 0x12345678  # XOR 不是安全 hash
-
-def check_access(user, action):
-    return True  # 永远返回 True
 ```
 
-**Sego 输出**（findings）：
+| severity | file | line | title |
+|---|---|---|---|
+| critical | app.py | 2 | SQL injection via string concatenation |
+| critical | app.py | 5 | XOR used as password hashing (reversible) |
 
-| severity | file | line | title | confidence |
-|---|---|---|---|---|
-| critical | app.py | 6 | SQL injection in get_user — unsanitized string concatenation | 1.0 |
-| critical | app.py | 11 | SQL injection in get_password — unsanitised integer concatenation | 1.0 |
-| high | app.py | 15 | XOR is not a secure hash function | 0.9 |
+### 示例：零发现不等于通过（示例数据）
 
-每个 finding 包含完整的 evidence、risk、suggestion 和 verification_hint。审查结果持久化到 `.sego/reviews/`：
+对一个纯重构 diff（仅重命名变量、调整格式），Sego 可能返回 **0 findings**。这表示"未发现支持充分的问题"，**不是**"该改动已通过验收"——改动是否可交付仍由你决定。审查产物中的覆盖范围与未验证项会一并保留，供你复查。
 
-```
-.sego/reviews/
-├── index.jsonl                    # 索引（append-only）
-├── review-{timestamp}-{hash}.json # 结构化 artifact
-└── review-{timestamp}-{hash}.md   # 人类可读 markdown
-```
+---
+
+## 真实能力边界
+
+> Sego review is model-driven, not exhaustive static analysis. Unverified items are preserved as explicit gaps — never silently converted into "passed".
+
+- **模型驱动，不是穷尽式静态分析**：`sego review`（含 `--full`）是模型对 manifests、入口点和目录上下文快照的审查，不保证找出所有 bug，不替代成熟的静态分析器、安全扫描器或形式化验证。
+- **verify-before-trust**：证据缺失、截断、越界都会保留为明确缺口，不会被模型补全成"已观察事实"；未验证项不会被标成通过。
+- **已知局限**（诚实列出）：
+  - 对"看似危险但有缓解措施"的代码（参数化查询、白名单、HMAC 校验等）曾存在误报倾向——内部校准评测已识别此问题，review prompt 已加入缓解措施识别（已合入 main，将随下一版本发布）；
+  - 对时序 / 并发类缺陷的检出能力有限，不能替代针对性测试；
+  - 模型输出偶发无效 JSON（会被 `parse_attempted_but_failed` 显式标注，不会伪装成零发现）。
+- **不取代**：Sego 的 review artifact 是工程判断证据，不是安全认证、合规认证、部署批准或发布批准。高风险合并 / 发布仍需要测试、CI、人工审查、Release QA 与业务上下文共同决策。
+
+| 能力 | 状态 | 版本 / 证据 |
+|---|---|---|
+| `/review` 结构化审查 + 证据门 | available | v0.1.8+；[`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md) |
+| Review card / acceptance record | available | v0.1.9 |
+| Reviewer identity 元数据 | available（归因用途，非签名 / 非来源证明）| v0.1.9 |
+| Review artifact JSON Schema | available | v0.1.7+（v0.1.9 更新至当前值）；[`schema/`](schema/) |
+| Sidecar JSON 接口 + skill 包 | experimental (PoC) | 仅 `review` action，不承诺向后兼容 |
+| 缓解措施识别（降低误报）| 已合入 main，将随下一版本发布 | [#76](https://github.com/007M7/Sego-Agent/pull/76) |
+| CI 集成 / artifact 签名 / 跨工具产物格式 | planned | 见 [ROADMAP](ROADMAP.md) |
+
+公开宣称边界详见：[`docs/PUBLIC_CLAIM_BOUNDARY.md`](docs/PUBLIC_CLAIM_BOUNDARY.md) · [`docs/RELEASE_QA_CAPABILITY_MATRIX.md`](docs/RELEASE_QA_CAPABILITY_MATRIX.md) · [`docs/LEGACY_SOURCE_BOUNDARY.md`](docs/LEGACY_SOURCE_BOUNDARY.md)
+
+---
+
+## 与 EgoPulse 的关系
+
+Sego 是 [EgoPulse](https://github.com/007M7)（Founder 的 Personal Agent OS）架构中的**第二层信任层（Layer 2）**：EgoPulse 治理内核保留任务、权限、记忆、裁决和发布的权威，Sego 承担其中的验证职责——把 AI 主张与证据的差距变成可追溯的 VerificationArtifact。
+
+**Sego 可完全独立使用**：本 README 描述的全部工作流不依赖 EgoPulse。EgoPulse 通过版本化的验证合同消费 Sego 的验证结果，集成细节不在本仓库展开。
 
 ---
 
 ## 架构
-
-Sego 是一套本地优先的代码审查与工程信任层，公开层面可以分为以下几层：
 
 ```
 Sego Agent (local-first, Rust-native)
@@ -306,8 +223,9 @@ Sego Agent (local-first, Rust-native)
 ├── 模型 Provider 层     DeepSeek / Anthropic 等多模型 provider 抽象
 ├── Artifact 层          `.sego/reviews/` 结构化产物（JSON + Markdown + index）
 └── Integration 层       Sidecar / JSON Schema / Skill 包（experimental, PoC）
+    └── EgoPulse 集成     经 VerificationArtifact 合同（可选，见上文）
 
-.sego/                   运行时产物，默认 git 忽略
+.sego/                   运行时产物（reviews/ 与 recovery/ 默认 git 忽略）
 ├── reviews/             审查 artifact（JSON + MD + index）
 └── recovery/            崩溃恢复状态
 
@@ -318,13 +236,12 @@ schema/                  JSON Schema 公开契约（仓库根，进 GitHub）
 ```
 
 - **纯 Rust，本地优先**：`unsafe_code = "forbid"`，clippy pedantic。
-- **数据不出域**：所有 artifact 存在项目 `.sego/` 目录。
 - **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
 - **Integration 层目前是 experimental / PoC**：sidecar 协议、JSON Schema、skill 包属于早期集成，不承诺稳定生态契约，后续可能演进。
 
 ---
 
-## 开发
+## 开发与贡献
 
 ```bash
 # 构建
@@ -341,9 +258,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p rusty-claude-cli --bin sego
 ```
 
-详细开发指南见 [DEVELOPMENT.md](DEVELOPMENT.md) 和 [AGENTS.md](AGENTS.md)。
+贡献流程见 [AGENTS.md](AGENTS.md)（fork → topic branch → 小而聚焦的 PR；触及 `schema/` 或 sidecar 协议视为合同变更，需在 PR 中显式标注）与 [DEVELOPMENT.md](DEVELOPMENT.md)。PR 请更新 `CHANGELOG.md` 的 `[Unreleased]` 段。
 
----
+- 问题反馈：[GitHub Issues](https://github.com/007M7/Sego-Agent/issues)
+- 安全问题：按 [SECURITY.md](SECURITY.md) 处理，不要公开提交
+- 免费 / 私有审查服务：见 [docs/LAUNCH.md](docs/LAUNCH.md)
 
 ## License
 

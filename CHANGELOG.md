@@ -4,6 +4,15 @@ All notable changes to the Sego Agent project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Mitigation awareness in review prompt**: the code review prompt now instructs the model to check for existing mitigations (parameterized queries, allowlists, HMAC/JWT signature verification, sandboxed eval, `shell=False` argument-list form) before reporting a vulnerability pattern. If a mitigation is present and correctly implemented, the finding is downgraded to info; if incomplete or bypassable, it is reported with the specific bypass explained. Identified by an internal 40-diff calibration evaluation (security recall 10/10; false-positive traps revealed over-reporting on mitigated code such as CSRF-exempt webhooks with HMAC verification and allowlist-validated redirects). (#76)
+
+### Changed
+- **README rewritten** to a narrative six-section structure (problem → reproducible usage → how to read results → capability boundaries → EgoPulse relationship → development), aligned with the current product positioning ("engineering trust layer for verifying AI claims"). Removes "independent review" wording (review is model-driven constrained review + deterministic evidence gate), corrects the 91.5% statistic to the faithful source phrasing, documents the read-only default permission, and adds an available/experimental/planned capability matrix.
+
+### Documented
+- The default permission mode fallback changed from `DangerFullAccess` to **ReadOnly** in code merged before v0.1.9 (PR #74), but this change was missing from the original v0.1.9 release notes. Recorded here for completeness: a plain `sego` launch now starts read-only; write/command access requires explicit `--permission-mode`, `RUSTY_CLAUDE_PERMISSION_MODE`, or project config.
+
 ## [0.1.9] - 2026-08-24
 
 ### Added
