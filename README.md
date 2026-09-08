@@ -31,6 +31,19 @@ Sego 不是另一个 AI 编码工具，也不是 IDE。它工作在 AI 编码工
 
 Sego 的回答：输入是明确范围的改动与验收预期，输出是结构化 findings + 逐条证据状态 + 持久化到 `.sego/reviews/` 的可复查产物。**零发现不等于验收通过。**
 
+```mermaid
+flowchart LR
+    A["AI 编码工具生成改动<br/>Claude Code · Codex · Cursor"] --> B["git staged diff<br/>明确审查范围"]
+    B --> C["sego review<br/>模型审查"]
+    C --> D{"evidence gate<br/>确定性逐条校验"}
+    D -->|"位置有效 · 内容已捕获"| E["结构化 findings<br/>severity + evidence"]
+    D -->|"越界 · 截断 · 未捕获"| F["保留为未验证缺口<br/>不由模型补全"]
+    E --> G[(".sego/reviews/<br/>JSON · MD · index")]
+    F --> G
+    G --> H["你阅读报告<br/>决定 merge / rework / reject"]
+    style H fill:#e8f5e9,stroke:#2e7d32
+```
+
 ---
 
 ## 快速开始
@@ -206,34 +219,55 @@ def hash_password(pw):
 
 ---
 
-## 与 EgoPulse 的关系
+## 集成（可选）
 
-Sego 是 [EgoPulse](https://github.com/007M7)（Founder 的 Personal Agent OS）架构中的**第二层信任层（Layer 2）**：EgoPulse 治理内核保留任务、权限、记忆、裁决和发布的权威，Sego 承担其中的验证职责——把 AI 主张与证据的差距变成可追溯的 VerificationArtifact。
+Sego 完全可独立使用——本 README 描述的全部工作流不依赖任何平台。在此基础上，它的验证结果可以按两种方式被外部系统消费：
 
-**Sego 可完全独立使用**：本 README 描述的全部工作流不依赖 EgoPulse。EgoPulse 通过版本化的验证合同消费 Sego 的验证结果，集成细节不在本仓库展开。
+| 集成对象 | 方式 | 状态 |
+|---|---|---|
+| **AI 编码工具**（Claude Code / Codex / Cursor 等） | sidecar JSON 接口或 skill 包调用 Sego 审查 | experimental (PoC) |
+| **治理平台 / CI 工作流** | 通过版本化的 VerificationArtifact 合同读取结构化验证结果与未验证项，作为独立验证证据；任务与发布裁决始终保留在集成方 | 设计中 |
+
+> 该验证合同的首个消费方是 EgoPulse（一个个人 Agent 治理体系）。集成细节与公开示例将随验证合同稳定后另行发布。
 
 ---
 
 ## 架构
 
+```mermaid
+flowchart TB
+    subgraph cli["Local CLI 层"]
+        C1["交互入口 · slash 命令 · 自然语言本地动作 · 会话恢复"]
+    end
+    subgraph rt["Review 运行时"]
+        R1["审查执行 · permissions · verification · recovery"]
+    end
+    subgraph prov["模型 Provider 层"]
+        P1["DeepSeek"]
+        P2["Anthropic"]
+    end
+    subgraph art["Artifact 层"]
+        A1[".sego/reviews/<br/>JSON + Markdown + index.jsonl"]
+    end
+    subgraph integ["Integration 层 · experimental"]
+        I1["sidecar · JSON Schema · skill 包"]
+    end
+    cli --> rt
+    rt --> prov
+    rt --> art
+    art --> integ
+    style cli fill:#e3f2fd,stroke:#1565c0
+    style rt fill:#e8f5e9,stroke:#2e7d32
+    style prov fill:#fff3e0,stroke:#ef6c00
+    style art fill:#f3e5f5,stroke:#6a1b9a
+    style integ fill:#fafafa,stroke:#9e9e9e
 ```
-Sego Agent (local-first, Rust-native)
-├── Local CLI 层         交互入口、slash 命令、自然语言本地动作、会话恢复
-├── Review 运行时        代码审查执行、permissions、verification、recovery
-├── 模型 Provider 层     DeepSeek / Anthropic 等多模型 provider 抽象
-├── Artifact 层          `.sego/reviews/` 结构化产物（JSON + Markdown + index）
-└── Integration 层       Sidecar / JSON Schema / Skill 包（experimental, PoC）
-    └── EgoPulse 集成     经 VerificationArtifact 合同（可选，见上文）
 
-.sego/                   运行时产物（reviews/ 与 recovery/ 默认 git 忽略）
-├── reviews/             审查 artifact（JSON + MD + index）
-└── recovery/            崩溃恢复状态
+`schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
 
-schema/                  JSON Schema 公开契约（仓库根，进 GitHub）
-├── review-artifact.schema.json
-├── review-index-entry.schema.json
-└── sidecar-request-response.schema.json
-```
+- `review-artifact.schema.json`
+- `review-index-entry.schema.json`
+- `sidecar-request-response.schema.json`
 
 - **纯 Rust，本地优先**：`unsafe_code = "forbid"`，clippy pedantic。
 - **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
