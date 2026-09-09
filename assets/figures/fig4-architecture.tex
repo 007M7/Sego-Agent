@@ -1,0 +1,76 @@
+% fig4-architecture.tex — Figure 4: 五层架构
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{xeCJK}
+\setCJKmainfont{Microsoft YaHei}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\small,
+  comp/.style={draw, rounded corners=1.5pt, fill=white, minimum height=8mm,
+               align=center, inner sep=3pt, font=\footnotesize},
+  arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!70},
+  sarr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!45, dashed},
+  lab/.style={font=\footnotesize, text=black!55},
+  laylab/.style={font=\footnotesize\bfseries, anchor=west}
+]
+
+% Layer 1: CLI
+\node[draw, rounded corners=2pt, thick, fill=blue!8, draw=blue!45!black,
+      minimum width=118mm, minimum height=12mm] (cli) {};
+\node[laylab, text=blue!45!black] at ([xshift=3mm, yshift=1.2mm]cli.north west) {Local CLI 层};
+\node[comp] at ([xshift=-34mm]cli.center) (c1) {REPL / prompt};
+\node[comp] at ([xshift=-8mm]cli.center)  (c2) {slash 命令};
+\node[comp] at ([xshift=15mm]cli.center)  (c3) {自然语言本地动作};
+\node[comp] at ([xshift=39mm]cli.center)  (c4) {会话恢复};
+
+% Layer 2: Review runtime
+\node[draw, rounded corners=2pt, thick, fill=green!8, draw=green!45!black,
+      below=6mm of cli, minimum width=118mm, minimum height=12mm] (rt) {};
+\node[laylab, text=green!45!black] at ([xshift=3mm, yshift=1.2mm]rt.north west) {Review 运行时};
+\node[comp] at ([xshift=-34mm]rt.center) (r1) {审查执行};
+\node[comp] at ([xshift=-8mm]rt.center)  (r2) {permissions};
+\node[comp] at ([xshift=15mm]rt.center)  (r3) {evidence gate};
+\node[comp] at ([xshift=39mm]rt.center)  (r4) {recovery};
+
+% Layer 3a: Providers
+\node[draw, rounded corners=2pt, thick, fill=orange!10, draw=orange!55!black,
+      below=14mm of rt.south west, anchor=north west,
+      minimum width=56mm, minimum height=14mm] (prov) {};
+\node[laylab, text=orange!50!black] at ([xshift=3mm, yshift=1mm]prov.north west) {模型 Provider 层};
+\node[comp] at ([xshift=-12mm]prov.center) (p1) {DeepSeek};
+\node[comp] at ([xshift=12mm]prov.center)  (p2) {Anthropic};
+
+% Layer 3b: Artifacts
+\node[draw, rounded corners=2pt, thick, fill=violet!8, draw=violet!50!black,
+      below=14mm of rt.south east, anchor=north east,
+      minimum width=56mm, minimum height=14mm] (art) {};
+\node[laylab, text=violet!50!black] at ([xshift=3mm, yshift=1mm]art.north west) {Artifact 层};
+\node[comp] at (art.center) (a1) {\texttt{.sego/reviews/}（JSON + MD + index）};
+
+% Layer 4: Integration
+\node[draw, rounded corners=2pt, thick, fill=black!4, draw=black!40,
+      below=12mm of prov.south west, anchor=north west,
+      minimum width=118mm, minimum height=12mm] (integ) {};
+\node[laylab, text=black!55] at ([xshift=3mm, yshift=1.2mm]integ.north west) {Integration 层 \footnotesize（experimental / PoC）};
+\node[comp] at ([xshift=-34mm]integ.center) (i1) {治理平台合同};
+\node[comp] at ([xshift=-8mm]integ.center)  (i2) {sidecar JSON};
+\node[comp] at ([xshift=15mm]integ.center)  (i3) {JSON Schema};
+\node[comp] at ([xshift=39mm]integ.center)  (i4) {skill 包};
+
+% Flows
+\draw[arr] (cli) -- (rt);
+\draw[arr] (rt.south) -- node[lab, left, pos=0.45] {模型调用} (prov.north);
+\draw[arr] (rt.south) -- node[lab, right, pos=0.45] {产物落盘} (art.north);
+\draw[sarr] (art.south) -- node[lab, right, pos=0.5] {受控消费} (integ.north -| art.south);
+
+% Side note
+\node[lab, anchor=west, align=left] at ($(integ.east)+(3mm,-1mm)$)
+  {安全默认：ReadOnly\\ \footnotesize \texttt{unsafe\_code = "forbid"}\\ \footnotesize \texttt{diff\_hash} 绑定\\ \footnotesize 产物与索引仅存本机};
+
+\begin{scope}[on background layer]
+  \node[draw=black!12, dashed, rounded corners=3pt, fill=black!1,
+        fit=(prov)(art), inner sep=4pt] {};
+\end{scope}
+\end{tikzpicture}
+\end{document}

@@ -31,18 +31,15 @@ Sego 不是另一个 AI 编码工具，也不是 IDE。它工作在 AI 编码工
 
 Sego 的回答：输入是明确范围的改动与验收预期，输出是结构化 findings + 逐条证据状态 + 持久化到 `.sego/reviews/` 的可复查产物。**零发现不等于验收通过。**
 
-```mermaid
-flowchart LR
-    A["AI 编码工具生成改动<br/>Claude Code · Codex · Cursor"] --> B["git staged diff<br/>明确审查范围"]
-    B --> C["sego review<br/>模型审查"]
-    C --> D{"evidence gate<br/>确定性逐条校验"}
-    D -->|"位置有效 · 内容已捕获"| E["结构化 findings<br/>severity + evidence"]
-    D -->|"越界 · 截断 · 未捕获"| F["保留为未验证缺口<br/>不由模型补全"]
-    E --> G[(".sego/reviews/<br/>JSON · MD · index")]
-    F --> G
-    G --> H["你阅读报告<br/>决定 merge / rework / reject"]
-    style H fill:#e8f5e9,stroke:#2e7d32
-```
+<p align="center">
+  <img src="assets/figures/fig1-motivation.svg" width="820" alt="三条风险链：生成与审查同源 · 说完成≠完成 · 结果不可复查">
+</p>
+<p align="center"><sub><b>图 1</b>：AI 编码工作流中的三条风险链。Sego 针对的正是这三点。</sub></p>
+
+<p align="center">
+  <img src="assets/figures/fig2-pipeline.svg" width="900" alt="审查流水线：受约束模型审查 + 确定性证据门 + 结构化产物 + 人工决定">
+</p>
+<p align="center"><sub><b>图 2</b>：审查流水线总览。Evidence Gate 对每条候选 finding 做确定性校验：通过者成为 verified finding，越界 / 截断 / 未捕获者保留为未验证缺口——两条路径都写入产物，零发现不等于通过。</sub></p>
 
 ---
 
@@ -169,6 +166,11 @@ sego review show latest --json   # 机器可读的最新审查摘要
 
 字段契约见 [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md)，agent 接入工作流见 [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md)。
 
+<p align="center">
+  <img src="assets/figures/fig3-artifact-lifecycle.svg" width="880" alt="审查产物生命周期：diff_hash 绑定、append-only 索引、四种状态分离、finding 处理状态机">
+</p>
+<p align="center"><sub><b>图 3</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
+
 ### 示例：一次正常审查
 
 对一段含安全漏洞的 Python 代码（`app.py`）做 `/review staged` 的输出示例：
@@ -219,49 +221,12 @@ def hash_password(pw):
 
 ---
 
-## 集成（可选）
-
-Sego 完全可独立使用——本 README 描述的全部工作流不依赖任何平台。在此基础上，它的验证结果可以按两种方式被外部系统消费：
-
-| 集成对象 | 方式 | 状态 |
-|---|---|---|
-| **AI 编码工具**（Claude Code / Codex / Cursor 等） | sidecar JSON 接口或 skill 包调用 Sego 审查 | experimental (PoC) |
-| **治理平台 / CI 工作流** | 通过版本化的 VerificationArtifact 合同读取结构化验证结果与未验证项，作为独立验证证据；任务与发布裁决始终保留在集成方 | 设计中 |
-
-> 该验证合同的首个消费方是 EgoPulse（一个个人 Agent 治理体系）。集成细节与公开示例将随验证合同稳定后另行发布。
-
----
-
 ## 架构
 
-```mermaid
-flowchart TB
-    subgraph cli["Local CLI 层"]
-        C1["交互入口 · slash 命令 · 自然语言本地动作 · 会话恢复"]
-    end
-    subgraph rt["Review 运行时"]
-        R1["审查执行 · permissions · verification · recovery"]
-    end
-    subgraph prov["模型 Provider 层"]
-        P1["DeepSeek"]
-        P2["Anthropic"]
-    end
-    subgraph art["Artifact 层"]
-        A1[".sego/reviews/<br/>JSON + Markdown + index.jsonl"]
-    end
-    subgraph integ["Integration 层 · experimental"]
-        I1["sidecar · JSON Schema · skill 包"]
-    end
-    cli --> rt
-    rt --> prov
-    rt --> art
-    art --> integ
-    style cli fill:#e3f2fd,stroke:#1565c0
-    style rt fill:#e8f5e9,stroke:#2e7d32
-    style prov fill:#fff3e0,stroke:#ef6c00
-    style art fill:#f3e5f5,stroke:#6a1b9a
-    style integ fill:#fafafa,stroke:#9e9e9e
-```
+<p align="center">
+  <img src="assets/figures/fig4-architecture.svg" width="880" alt="Sego 五层架构：Local CLI 层 / Review 运行时 / 模型 Provider 层与 Artifact 层 / Integration 层">
+</p>
+<p align="center"><sub><b>图 4</b>：Sego 五层架构（local-first，Rust 原生）。Review 运行时向上承接 CLI、向下调用模型 Provider 并产出 Artifact；Integration 层以受控方式对外暴露能力。</sub></p>
 
 `schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
 
@@ -272,6 +237,24 @@ flowchart TB
 - **纯 Rust，本地优先**：`unsafe_code = "forbid"`，clippy pedantic。
 - **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
 - **Integration 层目前是 experimental / PoC**：sidecar 协议、JSON Schema、skill 包属于早期集成，不承诺稳定生态契约，后续可能演进。
+
+---
+
+## 集成（可选）
+
+<p align="center">
+  <img src="assets/figures/fig5-integration.svg" width="820" alt="集成拓扑：AI 编码工具经 sidecar/skill 调用 Sego；治理平台经 VerificationArtifact 合同消费验证结果">
+</p>
+<p align="center"><sub><b>图 5</b>：集成拓扑。左：AI 编码工具经 sidecar / skill 包调用 Sego；右：治理平台经版本化合同消费验证结果——裁决权保留在集成方。</sub></p>
+
+Sego 完全可独立使用——本 README 描述的全部工作流不依赖任何平台。在此基础上，它的验证结果可以按两种方式被外部系统消费：
+
+| 集成对象 | 方式 | 状态 |
+|---|---|---|
+| **AI 编码工具**（Claude Code / Codex / Cursor 等） | sidecar JSON 接口或 skill 包调用 Sego 审查 | experimental (PoC) |
+| **治理平台 / CI 工作流** | 通过版本化的 VerificationArtifact 合同读取结构化验证结果与未验证项，作为独立验证证据；任务与发布裁决始终保留在集成方 | 设计中 |
+
+> 该验证合同的首个消费方是 EgoPulse（一个个人 Agent 治理体系）。集成细节与公开示例将随验证合同稳定后另行发布。
 
 ---
 

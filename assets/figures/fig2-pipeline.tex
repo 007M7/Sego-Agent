@@ -1,0 +1,57 @@
+% fig2-pipeline.tex — Figure 2: 审查管线总览（system overview）
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{xeCJK}
+\setCJKmainfont{Microsoft YaHei}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\small,
+  stage/.style={draw, rounded corners=2pt, thick, fill=blue!8, draw=blue!45!black,
+                minimum width=27mm, minimum height=11mm, align=center, inner sep=3pt},
+  gate/.style={draw, diamond, aspect=2.2, thick, fill=orange!18, draw=orange!60!black,
+               align=center, inner sep=1pt, font=\small},
+  outcome/.style={draw, rounded corners=2pt, thick, align=center, inner sep=3pt},
+  store/.style={draw, cylinder, shape border rotate=90, aspect=0.28, thick,
+                fill=violet!10, draw=violet!55!black, align=center, inner sep=2pt},
+  human/.style={draw, rounded corners=2pt, thick, fill=green!12, draw=green!45!black,
+                minimum height=11mm, align=center, inner sep=3pt},
+  lab/.style={font=\footnotesize, text=black!60},
+  arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!70}
+]
+
+\node[stage] (gen) {AI 编码工具生成改动\\ \footnotesize Claude Code · Codex · Cursor};
+\node[stage, right=7mm of gen] (diff) {git staged diff\\ \footnotesize 明确审查范围};
+\node[stage, right=7mm of diff, fill=blue!14] (review) {\textbf{sego review}\\ \footnotesize 受约束模型审查};
+\node[gate,  right=7mm of review] (gate) {Evidence Gate\\ \footnotesize 确定性逐条校验};
+
+\node[outcome, above right=4mm and 8mm of gate, fill=green!10, draw=green!45!black] (find)
+  {结构化 findings\\ \footnotesize severity + evidence};
+\node[outcome, below right=4mm and 8mm of gate, fill=orange!12, draw=orange!55!black] (gap)
+  {保留未验证缺口\\ \footnotesize 不由模型补全};
+
+\node[store] (art) at ($(find.east)!0.5!(gap.east) + (24mm, 0)$)
+  {.sego/reviews/\\ \footnotesize JSON · MD · index};
+
+\node[human, right=8mm of art] (human)
+  {\textbf{人工决定}\\ \footnotesize merge / rework / reject};
+
+\draw[arr] (gen)   -- node[lab, above] {改动} (diff);
+\draw[arr] (diff)  -- node[lab, above] {输入} (review);
+\draw[arr] (review)-- node[lab, above] {候选 findings} (gate);
+\draw[arr] (gate.east) -- node[lab, above, pos=0.45] {verified} (find.west);
+\draw[arr] (gate.east) -- node[lab, below, pos=0.32] {unverified / truncated} (gap.west);
+\draw[arr] (find.east) -- (art.west);
+\draw[arr] (gap.east) -- (art.west);
+\draw[arr] (art) -- node[lab, above] {可复查证据} (human);
+
+\begin{scope}[on background layer]
+  \node[draw=black!15, dashed, rounded corners=3pt, fill=black!2,
+        fit=(gen)(review)(gate), inner sep=4pt,
+        label={[font=\footnotesize\itshape, text=black!60]north west:审查流水线（本地执行）}] {};
+\end{scope}
+
+\node[lab, anchor=north west] at ($(gen.south west)+(-2mm,-6mm)$)
+  {注：模型推理经所选 Provider（DeepSeek / Anthropic）执行，diff 会发送至该 Provider；产物与索引仅存本机。};
+\end{tikzpicture}
+\end{document}

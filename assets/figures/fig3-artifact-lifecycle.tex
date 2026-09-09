@@ -1,0 +1,66 @@
+% fig3-artifact-lifecycle.tex — Figure 3: 审查产物生命周期与状态分离
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{xeCJK}
+\setCJKmainfont{Microsoft YaHei}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\small,
+  file/.style={draw, thick, align=center, inner sep=3pt, minimum height=8mm},
+  st/.style={draw, rounded corners=2pt, thick, minimum height=8mm, align=center, inner sep=3pt},
+  arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!70},
+  sarr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!45},
+  lab/.style={font=\footnotesize, text=black!60},
+  seclab/.style={font=\footnotesize\bfseries, anchor=north, text=black!75}
+]
+
+% ===== Left panel: artifact store =====
+\node[seclab] at (2.6, 1.0) {.sego/reviews/（append-only）};
+\node[file, fill=violet!10, draw=violet!50!black] (json) at (2.6, 0)
+  {\texttt{review-<id>.json}\\ \footnotesize 机器可读产物};
+\node[file, fill=violet!6,  draw=violet!50!black] (md)   at (2.6, -1.6)
+  {\texttt{review-<id>.md}\\ \footnotesize 人类可读报告};
+\node[file, fill=violet!6,  draw=violet!50!black] (idx)  at (2.6, -3.2)
+  {\texttt{index.jsonl}\\ \footnotesize append-only 索引};
+
+\node[st, fill=blue!8, draw=blue!45!black, minimum width=30mm] (diff) at (-2.6, -1.6)
+  {staged diff\\ \footnotesize \texttt{diff\_hash} 绑定};
+\draw[arr] (diff) -- node[lab, above] {审查} (json.west);
+
+% ===== Right panel: four states =====
+\node[seclab] at (11.6, 1.0) {四种状态分开（不合并为单一“通过”）};
+
+\node[st, fill=blue!8,    draw=blue!45!black,  minimum width=40mm] (s1) at (9.4, -0.4)
+  {执行状态\\ \footnotesize 检查完成 / 失败 / 取消};
+\node[st, fill=green!10,  draw=green!45!black, minimum width=40mm] (s2) at (14.2, -0.4)
+  {验证结论\\ \footnotesize 未发现支持充分的问题\\ \footnotesize $\neq$ 通过};
+\node[st, fill=orange!12, draw=orange!55!black, minimum width=40mm] (s3) at (9.4, -2.6)
+  {问题处理状态\\ \footnotesize 已修复（关联复验）/ 争议 /\\ \footnotesize 接受风险};
+\node[st, fill=purple!10, draw=purple!50!black, minimum width=40mm] (s4) at (14.2, -2.6)
+  {用户决定\\ \footnotesize merge / rework / reject\\ \footnotesize ——由人作出，非自动生成};
+
+\draw[sarr] (s1) -- (s2);
+\draw[sarr] (s2) -- (s4);
+\draw[sarr] (s3) -- (s4);
+\draw[sarr] (s1.south) |- ($(s3.north)+(0,0.3)$) -- (s3.north);
+
+% ===== Bottom panel: finding status machine =====
+\node[seclab] at (2.6, -4.6) {单条 finding 的处理状态机};
+\node[st, fill=white] (f1) at (0.2, -5.8)   {open};
+\node[st, fill=white] (f2) at (2.2, -5.8)   {acknowledged};
+\node[st, fill=green!10, draw=green!45!black] (f3) at (4.6, -5.8) {fixed\\ \footnotesize 关联复验};
+\node[st, fill=white] (f4) at (2.2, -7.1)   {ignored};
+
+\draw[arr] (f1) -- (f2);
+\draw[arr] (f2) -- (f3);
+\draw[arr] (f2) -- (f4);
+\node[lab, anchor=west] at (5.6, -5.8) {原始发现不可静默删除，};
+\node[lab, anchor=west] at (5.6, -6.35) {修复必须关联后续复验。};
+
+\begin{scope}[on background layer]
+  \node[draw=black!12, dashed, rounded corners=3pt, fit=(diff)(idx), inner sep=6pt] {};
+  \node[draw=black!12, dashed, rounded corners=3pt, fit=(s1)(s4), inner sep=6pt] {};
+\end{scope}
+\end{tikzpicture}
+\end{document}

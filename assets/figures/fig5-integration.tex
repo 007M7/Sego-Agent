@@ -1,0 +1,60 @@
+% fig5-integration.tex — Figure 5: 集成拓扑（消费方式）
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{xeCJK}
+\setCJKmainfont{Microsoft YaHei}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\small,
+  ext/.style={draw, rounded corners=2pt, thick, fill=blue!8, draw=blue!45!black,
+              minimum width=34mm, minimum height=10mm, align=center, inner sep=3pt},
+  iface/.style={draw, thick, fill=orange!12, draw=orange!55!black,
+                minimum width=36mm, minimum height=9mm, align=center, inner sep=3pt},
+  core/.style={draw, rounded corners=3pt, very thick, fill=green!10, draw=green!45!black,
+               minimum width=52mm, minimum height=16mm, align=center},
+  arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!70},
+  sarr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!45, dashed},
+  lab/.style={font=\footnotesize, text=black!60},
+  seclab/.style={font=\footnotesize\bfseries, text=black!75}
+]
+
+% Left: AI coding tools
+\node[seclab] at (-4.6, 1.2) {AI 编码工具};
+\node[ext] (cc)   at (-4.6, 0)    {Claude Code};
+\node[ext] (codex) at (-4.6, -1.6) {Codex};
+\node[ext] (cur)  at (-4.6, -3.2) {Cursor};
+
+% Center: Sego core
+\node[core] (sego) at (1.8, -1.6)
+  {\textbf{Sego}\\ \footnotesize 受约束模型审查 $+$ 确定性证据门\\ \footnotesize 产物：\texttt{.sego/reviews/}};
+
+% Interfaces
+\node[iface] (side) at (1.8, 1.1)  {sidecar JSON / skill 包（experimental）};
+\node[iface] (vcontract) at (7.6, -1.6) {VerificationArtifact 合同\\ \footnotesize 版本化 · 结构化 · 含未验证项};
+
+% Right: governance platform
+\node[seclab] at (7.6, 1.2) {治理平台 / CI 工作流};
+\node[ext, fill=black!4, draw=black!40] (plat) at (7.6, -3.4)
+  {读取验证结论 + 未验证项\\ \footnotesize 任务与发布裁决保留在集成方};
+
+% Connections
+\draw[arr] (cc.east)   -- node[lab, above, pos=0.5] {} ($(sego.west)+(0,0.5)$);
+\draw[arr] (codex.east) -- (sego.west);
+\draw[arr] (cur.east)  -- ($(sego.west)-(0,0.5)$);
+
+\draw[arr] (sego.east) -- node[lab, above] {验证结果} (vcontract.west);
+\draw[arr] (vcontract.south) -- node[lab, right, pos=0.5] {作为独立验证证据} (plat.north);
+
+% Notes
+\node[lab, anchor=north west, align=left] at ($(plat.south west)+(-1.5mm,-3.5mm)$)
+  {Sego 不接管任务、权限或发布裁决；};
+\node[lab, anchor=north west, align=left] at ($(plat.south west)+(-1.5mm,-8.5mm)$)
+  {独立使用时全部工作流不依赖任何平台。};
+
+\begin{scope}[on background layer]
+  \node[draw=black!12, dashed, rounded corners=3pt, fit=(cc)(cur), inner sep=5pt] {};
+  \node[draw=black!12, dashed, rounded corners=3pt, fit=(sego)(side), inner sep=6pt] {};
+\end{scope}
+\end{tikzpicture}
+\end{document}
