@@ -224,9 +224,9 @@ def hash_password(pw):
 ## 架构
 
 <p align="center">
-  <img src="assets/figures/fig4-architecture.svg" width="880" alt="Sego 五层架构：Local CLI 层 / Review 运行时 / 模型 Provider 层与 Artifact 层 / Integration 层">
+  <img src="assets/figures/fig4-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
 </p>
-<p align="center"><sub><b>图 4</b>：Sego 五层架构（local-first，Rust 原生）。Review 运行时向上承接 CLI、向下调用模型 Provider 并产出 Artifact；Integration 层以受控方式对外暴露能力。</sub></p>
+<p align="center"><sub><b>图 4</b>：Sego 核心架构（按仓库真实子系统）。CLI 与意图路由承接输入；<b>Review Engine</b> 是核心流水线——scope 预检 → prompt 构建 → 模型调用 → report parser → <b>Evidence Gate</b>；Safety Lock \& Permissions 全程守护（ReadOnly 默认）；Runtime Engine 承载会话与工具循环；Verification 提供验证证据；产物经受控消费进入集成层。</sub></p>
 
 `schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
 

@@ -1,76 +1,76 @@
-% fig4-architecture.tex — Figure 4: 五层架构
+% fig4-architecture.tex — Figure 4: Sego core architecture (English)
+% Subsystems follow the repository structure (cf. deepwiki.com/007M7/Sego-Agent)
+% Layout uses positioning chains only — node sizes adapt to content (no truncation).
 \documentclass[tikz,border=10pt]{standalone}
-\usepackage{xeCJK}
-\setCJKmainfont{Microsoft YaHei}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
 
 \begin{document}
 \begin{tikzpicture}[
   font=\small,
-  comp/.style={draw, rounded corners=1.5pt, fill=white, minimum height=8mm,
-               align=center, inner sep=3pt, font=\footnotesize},
+  comp/.style={draw, rounded corners=1.5pt, fill=white, font=\footnotesize,
+               align=center, inner sep=4pt},
+  sys/.style={comp, align=center},
   arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!70},
-  sarr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!45, dashed},
-  lab/.style={font=\footnotesize, text=black!55},
-  laylab/.style={font=\footnotesize\bfseries, anchor=west}
+  darr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!45, dashed},
+  lab/.style={font=\footnotesize, text=black!60},
+  grp/.style={draw=black!15, dashed, rounded corners=3pt, inner sep=6pt}
 ]
 
-% Layer 1: CLI
-\node[draw, rounded corners=2pt, thick, fill=blue!8, draw=blue!45!black,
-      minimum width=118mm, minimum height=12mm] (cli) {};
-\node[laylab, text=blue!45!black] at ([xshift=3mm, yshift=1.2mm]cli.north west) {Local CLI 层};
-\node[comp] at ([xshift=-34mm]cli.center) (c1) {REPL / prompt};
-\node[comp] at ([xshift=-8mm]cli.center)  (c2) {slash 命令};
-\node[comp] at ([xshift=15mm]cli.center)  (c3) {自然语言本地动作};
-\node[comp] at ([xshift=39mm]cli.center)  (c4) {会话恢复};
+% ================= Row 1: CLI =================
+\node[sys, fill=blue!8, draw=blue!45!black] (cli)
+  {\textbf{CLI \& Intent Router} \; (\texttt{rusty-claude-cli})\\
+   \footnotesize slash commands · NL intent router · task parser · sidecar I/O};
 
-% Layer 2: Review runtime
-\node[draw, rounded corners=2pt, thick, fill=green!8, draw=green!45!black,
-      below=6mm of cli, minimum width=118mm, minimum height=12mm] (rt) {};
-\node[laylab, text=green!45!black] at ([xshift=3mm, yshift=1.2mm]rt.north west) {Review 运行时};
-\node[comp] at ([xshift=-34mm]rt.center) (r1) {审查执行};
-\node[comp] at ([xshift=-8mm]rt.center)  (r2) {permissions};
-\node[comp] at ([xshift=15mm]rt.center)  (r3) {evidence gate};
-\node[comp] at ([xshift=39mm]rt.center)  (r4) {recovery};
-
-% Layer 3a: Providers
-\node[draw, rounded corners=2pt, thick, fill=orange!10, draw=orange!55!black,
-      below=14mm of rt.south west, anchor=north west,
-      minimum width=56mm, minimum height=14mm] (prov) {};
-\node[laylab, text=orange!50!black] at ([xshift=3mm, yshift=1mm]prov.north west) {模型 Provider 层};
-\node[comp] at ([xshift=-12mm]prov.center) (p1) {DeepSeek};
-\node[comp] at ([xshift=12mm]prov.center)  (p2) {Anthropic};
-
-% Layer 3b: Artifacts
-\node[draw, rounded corners=2pt, thick, fill=violet!8, draw=violet!50!black,
-      below=14mm of rt.south east, anchor=north east,
-      minimum width=56mm, minimum height=14mm] (art) {};
-\node[laylab, text=violet!50!black] at ([xshift=3mm, yshift=1mm]art.north west) {Artifact 层};
-\node[comp] at (art.center) (a1) {\texttt{.sego/reviews/}（JSON + MD + index）};
-
-% Layer 4: Integration
-\node[draw, rounded corners=2pt, thick, fill=black!4, draw=black!40,
-      below=12mm of prov.south west, anchor=north west,
-      minimum width=118mm, minimum height=12mm] (integ) {};
-\node[laylab, text=black!55] at ([xshift=3mm, yshift=1.2mm]integ.north west) {Integration 层 \footnotesize（experimental / PoC）};
-\node[comp] at ([xshift=-34mm]integ.center) (i1) {治理平台合同};
-\node[comp] at ([xshift=-8mm]integ.center)  (i2) {sidecar JSON};
-\node[comp] at ([xshift=15mm]integ.center)  (i3) {JSON Schema};
-\node[comp] at ([xshift=39mm]integ.center)  (i4) {skill 包};
-
-% Flows
-\draw[arr] (cli) -- (rt);
-\draw[arr] (rt.south) -- node[lab, left, pos=0.45] {模型调用} (prov.north);
-\draw[arr] (rt.south) -- node[lab, right, pos=0.45] {产物落盘} (art.north);
-\draw[sarr] (art.south) -- node[lab, right, pos=0.5] {受控消费} (integ.north -| art.south);
-
-% Side note
-\node[lab, anchor=west, align=left] at ($(integ.east)+(3mm,-1mm)$)
-  {安全默认：ReadOnly\\ \footnotesize \texttt{unsafe\_code = "forbid"}\\ \footnotesize \texttt{diff\_hash} 绑定\\ \footnotesize 产物与索引仅存本机};
+% ================= Row 2: Review Engine pipeline =================
+\node[comp, below left=16mm and 0mm of cli.south west, anchor=north west] (pre)  {scope \&\\ preflight};
+\node[comp, right=7mm of pre]  (prompt) {prompt\\ builder};
+\node[comp, right=7mm of prompt] (mcall) {model\\ call};
+\node[comp, right=7mm of mcall] (parse) {report\\ parser};
+\node[comp, right=7mm of parse, fill=green!16] (gate) {\textbf{Evidence Gate}\\ deterministic, per finding};
 
 \begin{scope}[on background layer]
-  \node[draw=black!12, dashed, rounded corners=3pt, fill=black!1,
-        fit=(prov)(art), inner sep=4pt] {};
+  \node[grp, fill=green!6, draw=green!45!black] (rebox) at (0,0)
+    [fit=(pre)(gate)] {};
 \end{scope}
+\node[lab, text=green!45!black, anchor=south west]
+  at ([xshift=2mm]rebox.north west)
+  {\textbf{Review Engine} \; (\texttt{runtime::code\_review})};
+\draw[arr] (pre) -- (prompt);
+\draw[arr] (prompt) -- (mcall);
+\draw[arr] (mcall) -- (parse);
+\draw[arr] (parse) -- (gate);
+\draw[arr] (cli.south) -- node[lab, right, pos=0.4] {dispatch} (pre.north -| cli.south |- pre.north);
+
+% ================= Row 2 sides =================
+\node[sys, fill=red!8, draw=red!45!black, left=12mm of pre] (safety)
+  {\textbf{Safety Lock \& Permissions}\\ \footnotesize ReadOnly default · \texttt{diff\_hash} binding\\ \footnotesize secrets scan · bash classifier};
+\draw[darr] (safety.east) -- node[lab, above, pos=0.5] {guards} (pre.west);
+
+\node[sys, fill=orange!10, draw=orange!55!black, right=14mm of gate] (prov)
+  {\textbf{Provider Layer}\\ \footnotesize DeepSeek · Anthropic};
+\draw[arr] (rebox.east) -- node[lab, above, pos=0.5] {model calls} (prov.west);
+
+% ================= Row 3 =================
+\node[sys, fill=teal!8, draw=teal!50!black, below=14mm of pre] (runtime)
+  {\textbf{Runtime Engine}\\ \footnotesize ConversationRuntime · ToolExecutor\\ \footnotesize MCP · recovery · sessions};
+\node[sys, fill=violet!8, draw=violet!50!black, below=14mm of gate] (art)
+  {\textbf{Review Artifacts}\\ \footnotesize \texttt{.sego/reviews/} · JSON + MD\\ \footnotesize \texttt{index.jsonl} (append-only)};
+\node[sys, fill=yellow!14, draw=yellow!50!black, below=14mm of prov] (verif)
+  {\textbf{Verification}\\ \footnotesize \texttt{/verify} plans\\ \footnotesize cargo · npm};
+
+\draw[arr] (gate.south) -- node[lab, left, pos=0.4, align=right] {persist\\ \footnotesize \texttt{diff\_hash} bound} (art.north);
+\draw[darr] (runtime.north east) -- node[lab, above, pos=0.5] {hosts model loop} ($(rebox.south west)!0.45!(rebox.south)$);
+\draw[darr] (verif.north) -- node[lab, below right, pos=0.55] {verification evidence} (gate.south east);
+
+% ================= Row 4: Integration =================
+\node[sys, fill=black!4, draw=black!40, below=14mm of art] (integ)
+  {\textbf{Integration} \footnotesize(experimental)\\ \footnotesize sidecar JSON · JSON Schema · skill package};
+\draw[darr] (art.south) -- node[lab, right, pos=0.5] {consumed via} (integ.north);
+
+% ================= Side note =================
+\node[lab, anchor=north west, align=left] at ($(safety.south west)+(-1mm,-3mm)$)
+  {local-first: orchestration, session state and review artifacts\\
+   stay on device; only model inference is delegated to the provider.};
+
 \end{tikzpicture}
 \end{document}
