@@ -37,7 +37,7 @@ Sego 的回答：输入是明确范围的改动与验收预期，输出是结构
 <p align="center"><sub><b>图 1</b>：AI 编码工作流中的三条风险链。Sego 针对的正是这三点。</sub></p>
 
 <p align="center">
-  <img src="assets/figures/fig2-pipeline.svg" width="900" alt="审查流水线：受约束模型审查 + 确定性证据门 + 结构化产物 + 人工决定">
+  <img src="assets/figures/fig2-pipeline.svg?v=2" width="900" alt="审查流水线：受约束模型审查 + 确定性证据门 + 结构化产物 + 人工决定">
 </p>
 <p align="center"><sub><b>图 2</b>：审查流水线总览。Evidence Gate 对每条候选 finding 做确定性校验：通过者成为 verified finding，越界 / 截断 / 未捕获者保留为未验证缺口——两条路径都写入产物，零发现不等于通过。</sub></p>
 
