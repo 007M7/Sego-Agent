@@ -118,9 +118,29 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 
 ---
 
-## 结果如何阅读
+## 审查流水线：从 diff 到可复查证据
 
-> Review results are machine-readable and human-readable: every finding carries severity, evidence, and an evidence-status produced by a deterministic gate — not just model prose.
+一次 `sego review` 在内部经过五个阶段，每个阶段都有确定的工程行为：
+
+**① 审查范围与预检（`ReviewScope` + preflight）**
+三种范围：`Staged`（暂存区）/ `Workspace`（工作区）/ `FullRepo`（整仓快照，适用于非 Git 目录）。预检会检测嵌套 Git 仓库等风险并执行策略规则（PEP-001..005），产出包含 diff 与文件清单的 `ReviewTarget`。
+
+**② Prompt 构建（`build_review_prompt`）**
+把 ReviewTarget 组装为结构化 prompt：源 diff + 完整文件树作为上下文 + 明确的审查指令与输出契约，并在 token 预算内裁剪。
+
+**③ 模型调用与三级解析**
+模型输出经过三级解析策略——**Direct JSON → Fenced JSON → Prose Extraction**——兼容不同模型的输出格式。三级全部失败时明确标注 `parse_attempted_but_failed`，绝不静默显示"0 findings"。
+
+**④ Evidence Gate（证据门）**
+逐条校验 finding 引用的位置是否真实存在于被审改动中；通过的 finding 获得稳定的 `stable_finding_id` 用于跨版本追踪。
+
+**⑤ 产物持久化与展示**
+结果写入 `.sego/reviews/` 并渲染为终端摘要 / HTML Review Card（Green / Yellow / Red 置信度），聚合为 `AcceptanceRecord` 辅助验收决策。
+
+<p align="center">
+  <img src="assets/figures/fig3-artifact-lifecycle.svg" width="880" alt="审查产物生命周期：diff_hash 绑定、append-only 索引、四种状态分离、finding 处理状态机">
+</p>
+<p align="center"><sub><b>图 3</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
 
 ### 每条 finding 的结构
 
@@ -133,15 +153,11 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 
 ### 证据门（evidence gate）：`verified` 不等于"缺陷已复现"
 
-每条 finding 都经过确定性校验并标注 `evidence_status`：
-
 | evidence_status | 含义 |
 |---|---|
 | `verified` | 引用路径在捕获范围内且行号有效——**仅代表位置有效、内容已捕获，不代表缺陷已被复现证实** |
 | `unverified_file` / `unverified_line` / `unverified_dependency` | 引用的文件 / 行号 / 依赖无法在捕获内容中确认 |
 | `scope_not_captured` / `content_not_captured` / `content_truncated` | 范围未捕获 / 内容未捕获 / 内容被截断 |
-
-模型输出无法解析时，审查结果会明确标注 `parse_attempted_but_failed`——绝不静默显示"0 findings"。
 
 ### 四种状态分开看
 
@@ -149,7 +165,7 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 |---|---|---|
 | 执行状态 | 检查是否跑完？ | 检查完成 / 失败 / 取消 |
 | 验证结论 | 证据是否支持主张？ | 未发现支持充分的问题（仍可能有未验证项）|
-| 问题处理状态 | 发现如何处理？ | 已修复（需关联复验）/ 争议 / 接受风险 |
+| 问题处理状态 | 发现如何处理？ | open → acknowledged → fixed（需关联复验）/ ignored |
 | 用户决定 | 接受还是返工？ | 等待用户决定——**不由验证结论自动生成** |
 
 ### 审查产物
@@ -165,11 +181,6 @@ sego review show latest --json   # 机器可读的最新审查摘要
 ```
 
 字段契约见 [`docs/REVIEW_ARTIFACT_CONTRACT.md`](docs/REVIEW_ARTIFACT_CONTRACT.md)，agent 接入工作流见 [`docs/AGENT_REVIEW_HANDOFF.md`](docs/AGENT_REVIEW_HANDOFF.md)。
-
-<p align="center">
-  <img src="assets/figures/fig3-artifact-lifecycle.svg" width="880" alt="审查产物生命周期：diff_hash 绑定、append-only 索引、四种状态分离、finding 处理状态机">
-</p>
-<p align="center"><sub><b>图 3</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
 
 ### 示例：一次正常审查
 
@@ -221,12 +232,40 @@ def hash_password(pw):
 
 ---
 
-## 架构
+## 系统架构
 
 <p align="center">
   <img src="assets/figures/fig4-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
 </p>
 <p align="center"><sub><b>图 4</b>：Sego 核心架构（按仓库真实子系统）。CLI 与意图路由承接输入；<b>Review Engine</b> 是核心流水线——scope 预检 → prompt 构建 → 模型调用 → report parser → <b>Evidence Gate</b>；Safety Lock 和 Permissions 全程守护（ReadOnly 默认）；Runtime Engine 承载会话与工具循环；Verification 提供验证证据；产物经受控消费进入集成层。</sub></p>
+
+### Rust Workspace：9 个 crate
+
+Sego 是一个由 9 个 crate 组成的 Rust workspace，依赖流向严格分层——`rusty-claude-cli` 构建出 `sego` 二进制，作为编排入口消费其余功能 crate；`telemetry` 是零依赖叶子节点。
+
+| crate | 职责 | 关键组件 |
+|---|---|---|
+| **`rusty-claude-cli`** | `sego` 二进制入口：REPL、终端渲染、命令与意图路由 | `parse_args` · `parse_nl_intent` |
+| **`runtime`** | 核心引擎：会话状态、权限、审查流水线、恢复 | `ConversationRuntime` · `EvidenceStatus` · `PermissionPolicy` |
+| **`api`** | LLM HTTP 客户端与 provider 抽象、SSE 流式、prompt 缓存 | `Client` · `MessageRequest` · prompt cache |
+| **`tools`** | 内置工具实现（read/grep/bash 等）与工具注册 | `ToolExecutor` |
+| **`commands`** | 全部 slash 命令实现与注册表 | `CommandRegistry` |
+| **`plugins`** | 插件与 hooks：外部工具 / 生命周期钩子接入 | `PluginRegistry` · `HookRunner` |
+| **`telemetry`** | 轻量日志与性能监控（零第三方依赖叶子） | sink / tracer |
+| **`compat-harness`** | 与参考实现的 parity 校验层 | `extract_commands` |
+| **`mock-anthropic-service`** | 离线测试 harness：模拟 Anthropic API，按 scenario 返回确定性响应 | `MockAnthropicService` |
+
+### 核心子系统
+
+| 子系统 | 职责 | 关键符号 |
+|---|---|---|
+| **Review Engine** | diff 收集 → prompt 构建 → 模型审查 → 解析 → 证据门 → 持久化 | `ReviewScope` · `build_review_prompt` · `ReviewReport::from_model_output` · `stable_finding_id` |
+| **Runtime Engine** | 会话循环（输入 → 上下文组装 → 模型回合 → 工具执行 → 持久化） | `ConversationRuntime` · `SystemPromptBuilder` · `compact_session` |
+| **Safety Lock & Permissions** | 静态扫描（密钥 / 危险命令 / 硬编码路径）与权限策略 | `PermissionPolicy` · bash classifier |
+| **Verification** | 项目级验证计划（按项目类型生成 cargo / npm 验证命令） | `build_verification_plan` |
+| **MCP 集成** | 经 Stdio / SSE / WebSocket 消费外部 MCP server 的工具 | `McpToolRegistry` |
+
+会话状态经 `persist_recovery_state` 持久化，支持崩溃后恢复；超出阈值的上下文由 `compact_session` 自动压缩。
 
 `schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
 
