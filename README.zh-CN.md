@@ -25,7 +25,7 @@
   <img src="assets/sego-cli-demo.png" width="760" alt="sego /review staged 终端演示：结构化 findings、严重度分级、证据持久化到 .sego/reviews/">
 </p>
 
-**目录**：[解决什么问题](#what-problem-does-sego-solve) · [快速开始](#quick-start) · [审查流水线](#the-review-pipeline) · [能力边界](#capability-boundaries) · [系统架构](#architecture) · [集成](#integration-optional) · [开发与贡献](#development--contributing)
+**目录**：[解决什么问题](#what-problem-does-sego-solve) · [系统架构](#architecture) · [审查流水线](#the-review-pipeline) · [能力边界](#capability-boundaries) · [集成](#integration-optional) · [快速开始](#quick-start) · [开发与贡献](#development--contributing)
 
 ---
 
@@ -47,91 +47,63 @@ Sego 的回答：输入是明确范围的改动与验收预期，输出是结构
 </p>
 <p align="center"><sub><b>图 1</b>：AI 编码工作流中的三条风险链。Sego 针对的正是这三点。</sub></p>
 
-<p align="center">
-  <img src="assets/figures/fig2-pipeline.svg?v=3" width="900" alt="Review pipeline: constrained model review + deterministic evidence gate + structured artifacts + human decision">
-</p>
-<p align="center"><sub><b>图 2</b>：审查流水线总览。Evidence Gate 对每条候选 finding 做确定性校验：通过者成为 verified finding，越界 / 截断 / 未捕获者保留为未验证缺口——两条路径都写入产物，零发现不等于通过。</sub></p>
-
 ---
 
-<a id="quick-start"></a>
-## 快速开始
+<a id="architecture"></a>
+## 系统架构
 
-📘 第一次使用建议先看这份指南：
+<p align="center">
+  <img src="assets/figures/fig2-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
+</p>
+<p align="center"><sub><b>图 2</b>：Sego 核心架构（按仓库真实子系统）。CLI 与意图路由承接输入；<b>Review Engine</b> 是核心流水线——scope 预检 → prompt 构建 → 模型调用 → report parser → <b>Evidence Gate</b>；Safety Lock 和 Permissions 全程守护（ReadOnly 默认）；Runtime Engine 承载会话与工具循环；Verification 提供验证证据；产物经受控消费进入集成层。</sub></p>
 
-- [在线阅读版：Sego 使用指南](docs/Sego使用指南.md)
-- [Word 下载版](docs/Sego使用指南.docx?raw=1)（GitHub 不能直接预览 `.docx`，如果页面空白请下载后用 Word/WPS 打开）
+### Rust Workspace：9 个 crate
 
-### Windows（推荐：直接下载）
+Sego 是一个由 9 个 crate 组成的 Rust workspace，依赖流向严格分层——`rusty-claude-cli` 构建出 `sego` 二进制，作为编排入口消费其余功能 crate；`telemetry` 是零依赖叶子节点。
 
-打开 [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest)，下载 `sego-windows.zip`，解压后双击 `Sego.cmd` 即可启动。
+| crate | 职责 | 关键组件 |
+|---|---|---|
+| **`rusty-claude-cli`** | `sego` 二进制入口：REPL、终端渲染、命令与意图路由 | `parse_args` · `parse_nl_intent` |
+| **`runtime`** | 核心引擎：会话状态、权限、审查流水线、恢复 | `ConversationRuntime` · `EvidenceStatus` · `PermissionPolicy` |
+| **`api`** | LLM HTTP 客户端与 provider 抽象、SSE 流式、prompt 缓存 | `Client` · `MessageRequest` · prompt cache |
+| **`tools`** | 内置工具实现（read/grep/bash 等）与工具注册 | `ToolExecutor` |
+| **`commands`** | 全部 slash 命令实现与注册表 | `CommandRegistry` |
+| **`plugins`** | 插件与 hooks：外部工具 / 生命周期钩子接入 | `PluginRegistry` · `HookRunner` |
+| **`telemetry`** | 轻量日志与性能监控（零第三方依赖叶子） | sink / tracer |
+| **`compat-harness`** | 与参考实现的 parity 校验层 | `extract_commands` |
+| **`mock-anthropic-service`** | 离线测试 harness：模拟 Anthropic API，按 scenario 返回确定性响应 | `MockAnthropicService` |
 
-如果你从 GitHub 右上角 **Code → Download ZIP** 下载的是源码包，里面不会直接包含 `sego.exe`。这种情况下可以运行仓库根目录的 `start-sego-windows.cmd`，它会自动下载最新 release binary 并启动 Sego。
+### 核心子系统
 
-### Windows（一行安装）
+| 子系统 | 职责 | 关键符号 |
+|---|---|---|
+| **Review Engine** | diff 收集 → prompt 构建 → 模型审查 → 解析 → 证据门 → 持久化 | `ReviewScope` · `build_review_prompt` · `ReviewReport::from_model_output` · `stable_finding_id` |
+| **Runtime Engine** | 会话循环（输入 → 上下文组装 → 模型回合 → 工具执行 → 持久化） | `ConversationRuntime` · `SystemPromptBuilder` · `compact_session` |
+| **Safety Lock & Permissions** | 静态扫描（密钥 / 危险命令 / 硬编码路径）与权限策略 | `PermissionPolicy` · bash classifier |
+| **Verification** | 项目级验证计划（按项目类型生成 cargo / npm 验证命令） | `build_verification_plan` |
+| **MCP 集成** | 经 Stdio / SSE / WebSocket 消费外部 MCP server 的工具 | `McpToolRegistry` |
 
-```powershell
-irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
-```
+会话状态经 `persist_recovery_state` 持久化，支持崩溃后恢复；超出阈值的上下文由 `compact_session` 自动压缩。
 
-### macOS / Linux
+`schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
-```
+- `review-artifact.schema.json`
+- `review-index-entry.schema.json`
+- `sidecar-request-response.schema.json`
 
-### 从源码构建
-
-```bash
-git clone https://github.com/007M7/Sego-Agent.git
-cd Sego-Agent/rust
-cargo build --release
-./target/release/sego
-```
-
-### 配置模型
-
-Sego 支持 DeepSeek 和 Anthropic 模型。设置对应的环境变量：
-
-**Windows PowerShell / CMD（设置后重新打开终端生效）：**
-
-```powershell
-setx DEEPSEEK_API_KEY "your-key"
-setx DEEPSEEK_MODEL "deepseek-v4-flash"
-
-# 或 Anthropic
-setx ANTHROPIC_API_KEY "your-key"
-```
-
-**macOS / Linux：**
-
-```bash
-# DeepSeek（推荐，性价比高）
-export DEEPSEEK_API_KEY="your-key"
-export DEEPSEEK_MODEL="deepseek-v4-flash"
-
-# 或 Anthropic
-export ANTHROPIC_API_KEY="your-key"
-```
-
-### 安全默认
-
-Sego **默认以只读（ReadOnly）权限启动**：审查会话不能写入文件或执行命令。需要写入、命令执行或自主能力时，必须通过 `--permission-mode` 显式选择（如 `workspace-write`、`danger-full-access`），或用 `RUSTY_CLAUDE_PERMISSION_MODE` 环境变量 / 项目配置授权。
-
-### 第一次 review
-
-```bash
-cd your-project
-git add -A
-sego /review staged
-```
-
-Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度 / 文件 / 行号 / 证据 / 风险 / 修复建议），并将审查结果持久化到 `.sego/reviews/`。
+- **纯 Rust，本地优先**：主实现是纯 Rust workspace —— `unsafe_code = "forbid"`，clippy pedantic。仓库另保留 `src/` + `tests/` 的 Python parity 脚手架（非主线、不参与 CI、非支持路径；用于 parity 比对的上游 TypeScript 快照不随本仓库分发）。边界见 [`PARITY.md`](PARITY.md)。
+- **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
+- **Integration 层目前是 experimental / PoC**：sidecar 协议、JSON Schema、skill 包属于早期集成，不承诺稳定生态契约，后续可能演进。
 
 ---
 
 <a id="the-review-pipeline"></a>
 ## 审查流水线：从 diff 到可复查证据
+
+<p align="center">
+  <img src="assets/figures/fig3-pipeline.svg" width="900" alt="Review pipeline: constrained model review + deterministic evidence gate + structured artifacts + human decision">
+</p>
+<p align="center"><sub><b>图 3</b>：审查流水线总览。Evidence Gate 对每条候选 finding 做确定性校验：通过者成为 verified finding，越界 / 截断 / 未捕获者保留为未验证缺口——两条路径都写入产物，零发现不等于通过。</sub></p>
 
 一次 `sego review` 在内部经过五个阶段，每个阶段都有确定的工程行为：
 
@@ -151,9 +123,9 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 结果写入 `.sego/reviews/` 并渲染为终端摘要 / HTML Review Card（Green / Yellow / Red 置信度），聚合为 `AcceptanceRecord` 辅助验收决策。
 
 <p align="center">
-  <img src="assets/figures/fig3-artifact-lifecycle.svg?v=2" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">
+  <img src="assets/figures/fig4-artifact-lifecycle.svg" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">
 </p>
-<p align="center"><sub><b>图 3</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
+<p align="center"><sub><b>图 4</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
 
 ### 每条 finding 的结构
 
@@ -248,59 +220,11 @@ def hash_password(pw):
 
 ---
 
-<a id="architecture"></a>
-## 系统架构
-
-<p align="center">
-  <img src="assets/figures/fig4-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
-</p>
-<p align="center"><sub><b>图 4</b>：Sego 核心架构（按仓库真实子系统）。CLI 与意图路由承接输入；<b>Review Engine</b> 是核心流水线——scope 预检 → prompt 构建 → 模型调用 → report parser → <b>Evidence Gate</b>；Safety Lock 和 Permissions 全程守护（ReadOnly 默认）；Runtime Engine 承载会话与工具循环；Verification 提供验证证据；产物经受控消费进入集成层。</sub></p>
-
-### Rust Workspace：9 个 crate
-
-Sego 是一个由 9 个 crate 组成的 Rust workspace，依赖流向严格分层——`rusty-claude-cli` 构建出 `sego` 二进制，作为编排入口消费其余功能 crate；`telemetry` 是零依赖叶子节点。
-
-| crate | 职责 | 关键组件 |
-|---|---|---|
-| **`rusty-claude-cli`** | `sego` 二进制入口：REPL、终端渲染、命令与意图路由 | `parse_args` · `parse_nl_intent` |
-| **`runtime`** | 核心引擎：会话状态、权限、审查流水线、恢复 | `ConversationRuntime` · `EvidenceStatus` · `PermissionPolicy` |
-| **`api`** | LLM HTTP 客户端与 provider 抽象、SSE 流式、prompt 缓存 | `Client` · `MessageRequest` · prompt cache |
-| **`tools`** | 内置工具实现（read/grep/bash 等）与工具注册 | `ToolExecutor` |
-| **`commands`** | 全部 slash 命令实现与注册表 | `CommandRegistry` |
-| **`plugins`** | 插件与 hooks：外部工具 / 生命周期钩子接入 | `PluginRegistry` · `HookRunner` |
-| **`telemetry`** | 轻量日志与性能监控（零第三方依赖叶子） | sink / tracer |
-| **`compat-harness`** | 与参考实现的 parity 校验层 | `extract_commands` |
-| **`mock-anthropic-service`** | 离线测试 harness：模拟 Anthropic API，按 scenario 返回确定性响应 | `MockAnthropicService` |
-
-### 核心子系统
-
-| 子系统 | 职责 | 关键符号 |
-|---|---|---|
-| **Review Engine** | diff 收集 → prompt 构建 → 模型审查 → 解析 → 证据门 → 持久化 | `ReviewScope` · `build_review_prompt` · `ReviewReport::from_model_output` · `stable_finding_id` |
-| **Runtime Engine** | 会话循环（输入 → 上下文组装 → 模型回合 → 工具执行 → 持久化） | `ConversationRuntime` · `SystemPromptBuilder` · `compact_session` |
-| **Safety Lock & Permissions** | 静态扫描（密钥 / 危险命令 / 硬编码路径）与权限策略 | `PermissionPolicy` · bash classifier |
-| **Verification** | 项目级验证计划（按项目类型生成 cargo / npm 验证命令） | `build_verification_plan` |
-| **MCP 集成** | 经 Stdio / SSE / WebSocket 消费外部 MCP server 的工具 | `McpToolRegistry` |
-
-会话状态经 `persist_recovery_state` 持久化，支持崩溃后恢复；超出阈值的上下文由 `compact_session` 自动压缩。
-
-`schema/` 目录提供公开 JSON Schema 契约（进 GitHub）：
-
-- `review-artifact.schema.json`
-- `review-index-entry.schema.json`
-- `sidecar-request-response.schema.json`
-
-- **纯 Rust，本地优先**：`unsafe_code = "forbid"`，clippy pedantic。
-- **diff_hash 绑定**：review/verify 指向同一代码差异，防止"审查 A 提交 B"。
-- **Integration 层目前是 experimental / PoC**：sidecar 协议、JSON Schema、skill 包属于早期集成，不承诺稳定生态契约，后续可能演进。
-
----
-
 <a id="integration-optional"></a>
 ## 集成（可选）
 
 <p align="center">
-  <img src="assets/figures/fig5-integration.svg?v=2" width="820" alt="Integration topology: AI coding tools call Sego via sidecar/skill; governance platforms consume results via the VerificationArtifact contract">
+  <img src="assets/figures/fig5-integration.svg" width="820" alt="Integration topology: AI coding tools call Sego via sidecar/skill; governance platforms consume results via the VerificationArtifact contract">
 </p>
 <p align="center"><sub><b>图 5</b>：集成拓扑。左：AI 编码工具经 sidecar / skill 包调用 Sego；右：治理平台经版本化合同消费验证结果——裁决权保留在集成方。</sub></p>
 
@@ -312,6 +236,82 @@ Sego 完全可独立使用——本 README 描述的全部工作流不依赖任�
 | **治理平台 / CI 工作流** | 通过版本化的 VerificationArtifact 合同读取结构化验证结果与未验证项，作为独立验证证据；任务与发布裁决始终保留在集成方 | 设计中 |
 
 > 该验证合同的首个消费方是 EgoPulse（一个个人 Agent 治理体系）。集成细节与公开示例将随验证合同稳定后另行发布。
+
+---
+
+<a id="quick-start"></a>
+## 快速开始
+
+📘 第一次使用建议先看这份指南：
+
+- [在线阅读版：Sego 使用指南](docs/Sego使用指南.md)
+- [Word 下载版](docs/Sego使用指南.docx?raw=1)（GitHub 不能直接预览 `.docx`，如果页面空白请下载后用 Word/WPS 打开）
+
+### Windows（推荐：直接下载）
+
+打开 [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest)，下载 `sego-windows.zip`，解压后双击 `Sego.cmd` 即可启动。
+
+如果你从 GitHub 右上角 **Code → Download ZIP** 下载的是源码包，里面不会直接包含 `sego.exe`。这种情况下可以运行仓库根目录的 `start-sego-windows.cmd`，它会自动下载最新 release binary 并启动 Sego。
+
+### Windows（一行安装）
+
+```powershell
+irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+```
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+```
+
+### 从源码构建
+
+```bash
+git clone https://github.com/007M7/Sego-Agent.git
+cd Sego-Agent/rust
+cargo build --release
+./target/release/sego
+```
+
+### 配置模型
+
+Sego 支持 DeepSeek 和 Anthropic 模型。设置对应的环境变量：
+
+**Windows PowerShell / CMD（设置后重新打开终端生效）：**
+
+```powershell
+setx DEEPSEEK_API_KEY "your-key"
+setx DEEPSEEK_MODEL "deepseek-v4-flash"
+
+# 或 Anthropic
+setx ANTHROPIC_API_KEY "your-key"
+```
+
+**macOS / Linux：**
+
+```bash
+# DeepSeek（推荐，性价比高）
+export DEEPSEEK_API_KEY="your-key"
+export DEEPSEEK_MODEL="deepseek-v4-flash"
+
+# 或 Anthropic
+export ANTHROPIC_API_KEY="your-key"
+```
+
+### 安全默认
+
+Sego **默认以只读（ReadOnly）权限启动**：审查会话不能写入文件或执行命令。需要写入、命令执行或自主能力时，必须通过 `--permission-mode` 显式选择（如 `workspace-write`、`danger-full-access`），或用 `RUSTY_CLAUDE_PERMISSION_MODE` 环境变量 / 项目配置授权。
+
+### 第一次 review
+
+```bash
+cd your-project
+git add -A
+sego /review staged
+```
+
+Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度 / 文件 / 行号 / 证据 / 风险 / 修复建议），并将审查结果持久化到 `.sego/reviews/`。
 
 ---
 

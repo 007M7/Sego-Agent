@@ -25,7 +25,7 @@
   <img src="assets/sego-cli-demo.png" width="760" alt="sego /review staged terminal demo: structured findings, severity grading, evidence persisted to .sego/reviews/">
 </p>
 
-**Contents**: [What problem](#what-problem-does-sego-solve) · [Quick start](#quick-start) · [Review pipeline](#the-review-pipeline) · [Boundaries](#capability-boundaries) · [Architecture](#architecture) · [Integration](#integration-optional) · [Developing](#development--contributing)
+**Contents**: [What problem](#what-problem-does-sego-solve) · [Architecture](#architecture) · [Review pipeline](#the-review-pipeline) · [Boundaries](#capability-boundaries) · [Integration](#integration-optional) · [Quick start](#quick-start) · [Developing](#development--contributing)
 
 ---
 
@@ -47,91 +47,63 @@ Sego's answer: input is an explicitly scoped change plus acceptance expectations
 </p>
 <p align="center"><sub><b>Figure 1</b>: Three risk chains in AI coding workflows — exactly what Sego targets.</sub></p>
 
-<p align="center">
-  <img src="assets/figures/fig2-pipeline.svg?v=3" width="900" alt="Review pipeline: constrained model review + deterministic evidence gate + structured artifacts + human decision">
-</p>
-<p align="center"><sub><b>Figure 2</b>: Review pipeline overview. The Evidence Gate deterministically validates every candidate finding: those that pass become verified findings; out-of-scope / truncated / unconfirmed ones are preserved as unverified gaps — both paths are written to the artifacts, and zero findings is not a pass.</sub></p>
-
 ---
 
-<a id="quick-start"></a>
-## Quick start
+<a id="architecture"></a>
+## Architecture
 
-📘 First time? Start with the user guide:
+<p align="center">
+  <img src="assets/figures/fig2-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
+</p>
+<p align="center"><sub><b>Figure 2</b>: Sego core architecture (real subsystems). The CLI & Intent Router receives input; the <b>Review Engine</b> is the core pipeline — scope preflight → prompt builder → model call → report parser → <b>Evidence Gate</b>; Safety Lock & Permissions guard the whole path (ReadOnly by default); the Runtime Engine hosts the session and tool loop; Verification produces verification evidence; artifacts reach the integration layer via controlled consumption.</sub></p>
 
-- [Online user guide (Chinese)](docs/Sego使用指南.md)
-- [Word download (Chinese)](docs/Sego使用指南.docx?raw=1) (GitHub cannot preview `.docx` directly — download and open with Word/WPS if the page is blank)
+### Rust workspace: nine crates
 
-### Windows (recommended: direct download)
+Sego is a Rust workspace of nine crates with a strictly layered dependency flow — `rusty-claude-cli` builds the `sego` binary and acts as the orchestration entry point consuming the other functional crates; `telemetry` is a zero-dependency leaf.
 
-Open [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest), download `sego-windows.zip`, unzip and double-click `Sego.cmd`.
+| crate | responsibility | key components |
+|---|---|---|
+| **`rusty-claude-cli`** | `sego` binary entry: REPL, terminal rendering, command & intent routing | `parse_args` · `parse_nl_intent` |
+| **`runtime`** | core engine: session state, permissions, review pipeline, recovery | `ConversationRuntime` · `EvidenceStatus` · `PermissionPolicy` |
+| **`api`** | LLM HTTP clients & provider abstraction, SSE streaming, prompt cache | `Client` · `MessageRequest` · prompt cache |
+| **`tools`** | built-in tool implementations (read/grep/bash etc.) and registration | `ToolExecutor` |
+| **`commands`** | all slash command implementations and registry | `CommandRegistry` |
+| **`plugins`** | plugins & hooks: external tools / lifecycle hooks | `PluginRegistry` · `HookRunner` |
+| **`telemetry`** | lightweight logging & performance monitoring (zero-dependency leaf) | sink / tracer |
+| **`compat-harness`** | parity layer against the reference implementation | `extract_commands` |
+| **`mock-anthropic-service`** | offline test harness: mocks the Anthropic API with deterministic scenario responses | `MockAnthropicService` |
 
-If you used **Code → Download ZIP** from GitHub, the archive does not contain `sego.exe`. In that case run `start-sego-windows.cmd` from the repository root — it downloads the latest release binary and starts Sego.
+### Core subsystems
 
-### Windows (one-line install)
+| subsystem | responsibility | key symbols |
+|---|---|---|
+| **Review Engine** | diff collection → prompt construction → model review → parsing → evidence gate → persistence | `ReviewScope` · `build_review_prompt` · `ReviewReport::from_model_output` · `stable_finding_id` |
+| **Runtime Engine** | session loop (input → context assembly → model turn → tool execution → persistence) | `ConversationRuntime` · `SystemPromptBuilder` · `compact_session` |
+| **Safety Lock & Permissions** | static scans (secrets / dangerous commands / hardcoded paths) and permission policy | `PermissionPolicy` · bash classifier |
+| **Verification** | project-level verification plans (cargo / npm commands by project type) | `build_verification_plan` |
+| **MCP integration** | consume tools from external MCP servers over Stdio / SSE / WebSocket | `McpToolRegistry` |
 
-```powershell
-irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
-```
+Session state is persisted via `persist_recovery_state` and survives crashes; context beyond the threshold is auto-compacted by `compact_session`.
 
-### macOS / Linux
+`schema/` provides public JSON Schema contracts (in the GitHub repository):
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
-```
+- `review-artifact.schema.json`
+- `review-index-entry.schema.json`
+- `sidecar-request-response.schema.json`
 
-### Build from source
-
-```bash
-git clone https://github.com/007M7/Sego-Agent.git
-cd Sego-Agent/rust
-cargo build --release
-./target/release/sego
-```
-
-### Configure models
-
-Sego supports DeepSeek and Anthropic models. Set the corresponding environment variables:
-
-**Windows PowerShell / CMD (take effect in a new terminal):**
-
-```powershell
-setx DEEPSEEK_API_KEY "your-key"
-setx DEEPSEEK_MODEL "deepseek-v4-flash"
-
-# or Anthropic
-setx ANTHROPIC_API_KEY "your-key"
-```
-
-**macOS / Linux:**
-
-```bash
-# DeepSeek (recommended: cost-effective)
-export DEEPSEEK_API_KEY="your-key"
-export DEEPSEEK_MODEL="deepseek-v4-flash"
-
-# or Anthropic
-export ANTHROPIC_API_KEY="your-key"
-```
-
-### Safe by default
-
-Sego **starts with read-only (ReadOnly) permissions**: review sessions cannot write files or execute commands. Writing, command execution, or autonomy requires an explicit `--permission-mode` (e.g. `workspace-write`, `danger-full-access`) or the `RUSTY_CLAUDE_PERMISSION_MODE` environment variable / project configuration.
-
-### Your first review
-
-```bash
-cd your-project
-git add -A
-sego /review staged
-```
-
-Sego reviews your staged changes, outputs structured findings (severity / file / line / evidence / risk / suggestion), and persists the review result to `.sego/reviews/`.
+- **Pure Rust, local-first**: the primary implementation is a pure Rust workspace — `unsafe_code = "forbid"`, clippy pedantic. The repository also retains a Python parity scaffolding under `src/` + `tests/` (not the mainline, not executed by CI, not part of the supported user path; the archived upstream TypeScript snapshot used for parity comparison is not distributed with this repository). Boundary: [`PARITY.md`](PARITY.md).
+- **diff_hash binding**: review/verify point to the same code change, preventing "review A, commit B".
+- **The integration layer is experimental / PoC**: the sidecar protocol, JSON Schemas, and the skill package are early integrations without a stable ecosystem contract.
 
 ---
 
 <a id="the-review-pipeline"></a>
 ## The review pipeline: from diff to re-checkable evidence
+
+<p align="center">
+  <img src="assets/figures/fig3-pipeline.svg" width="900" alt="Review pipeline: constrained model review + deterministic evidence gate + structured artifacts + human decision">
+</p>
+<p align="center"><sub><b>Figure 3</b>: Review pipeline overview. The Evidence Gate deterministically validates every candidate finding: those that pass become verified findings; out-of-scope / truncated / unconfirmed ones are preserved as unverified gaps — both paths are written to the artifacts, and zero findings is not a pass.</sub></p>
 
 A `sego review` runs through five stages internally, each with deterministic engineering behavior:
 
@@ -151,9 +123,9 @@ Each finding is deterministically validated: does the cited location actually ex
 Results are written to `.sego/reviews/` and rendered as a terminal summary / HTML Review Card (Green / Yellow / Red confidence), aggregated into an `AcceptanceRecord` to support acceptance decisions.
 
 <p align="center">
-  <img src="assets/figures/fig3-artifact-lifecycle.svg?v=2" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">
+  <img src="assets/figures/fig4-artifact-lifecycle.svg" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">
 </p>
-<p align="center"><sub><b>Figure 3</b>: Artifact lifecycle. <code>diff_hash</code> binds each artifact to the reviewed code state; the four states (execution / verification outcome / disposition / user decision) are kept strictly separate; every fix must link a follow-up re-review.</sub></p>
+<p align="center"><sub><b>Figure 4</b>: Artifact lifecycle. <code>diff_hash</code> binds each artifact to the reviewed code state; the four states (execution / verification outcome / disposition / user decision) are kept strictly separate; every fix must link a follow-up re-review.</sub></p>
 
 ### Anatomy of a finding
 
@@ -248,59 +220,11 @@ Public claim boundaries: [`docs/PUBLIC_CLAIM_BOUNDARY.md`](docs/PUBLIC_CLAIM_BOU
 
 ---
 
-<a id="architecture"></a>
-## Architecture
-
-<p align="center">
-  <img src="assets/figures/fig4-architecture.svg" width="900" alt="Sego core architecture: CLI & Intent Router, Review Engine pipeline (preflight, prompt, model call, parser, Evidence Gate), Safety Lock & Permissions, Provider Layer, Review Artifacts, Runtime Engine, Verification, Integration">
-</p>
-<p align="center"><sub><b>Figure 4</b>: Sego core architecture (real subsystems). The CLI & Intent Router receives input; the <b>Review Engine</b> is the core pipeline — scope preflight → prompt builder → model call → report parser → <b>Evidence Gate</b>; Safety Lock & Permissions guard the whole path (ReadOnly by default); the Runtime Engine hosts the session and tool loop; Verification produces verification evidence; artifacts reach the integration layer via controlled consumption.</sub></p>
-
-### Rust workspace: nine crates
-
-Sego is a Rust workspace of nine crates with a strictly layered dependency flow — `rusty-claude-cli` builds the `sego` binary and acts as the orchestration entry point consuming the other functional crates; `telemetry` is a zero-dependency leaf.
-
-| crate | responsibility | key components |
-|---|---|---|
-| **`rusty-claude-cli`** | `sego` binary entry: REPL, terminal rendering, command & intent routing | `parse_args` · `parse_nl_intent` |
-| **`runtime`** | core engine: session state, permissions, review pipeline, recovery | `ConversationRuntime` · `EvidenceStatus` · `PermissionPolicy` |
-| **`api`** | LLM HTTP clients & provider abstraction, SSE streaming, prompt cache | `Client` · `MessageRequest` · prompt cache |
-| **`tools`** | built-in tool implementations (read/grep/bash etc.) and registration | `ToolExecutor` |
-| **`commands`** | all slash command implementations and registry | `CommandRegistry` |
-| **`plugins`** | plugins & hooks: external tools / lifecycle hooks | `PluginRegistry` · `HookRunner` |
-| **`telemetry`** | lightweight logging & performance monitoring (zero-dependency leaf) | sink / tracer |
-| **`compat-harness`** | parity layer against the reference implementation | `extract_commands` |
-| **`mock-anthropic-service`** | offline test harness: mocks the Anthropic API with deterministic scenario responses | `MockAnthropicService` |
-
-### Core subsystems
-
-| subsystem | responsibility | key symbols |
-|---|---|---|
-| **Review Engine** | diff collection → prompt construction → model review → parsing → evidence gate → persistence | `ReviewScope` · `build_review_prompt` · `ReviewReport::from_model_output` · `stable_finding_id` |
-| **Runtime Engine** | session loop (input → context assembly → model turn → tool execution → persistence) | `ConversationRuntime` · `SystemPromptBuilder` · `compact_session` |
-| **Safety Lock & Permissions** | static scans (secrets / dangerous commands / hardcoded paths) and permission policy | `PermissionPolicy` · bash classifier |
-| **Verification** | project-level verification plans (cargo / npm commands by project type) | `build_verification_plan` |
-| **MCP integration** | consume tools from external MCP servers over Stdio / SSE / WebSocket | `McpToolRegistry` |
-
-Session state is persisted via `persist_recovery_state` and survives crashes; context beyond the threshold is auto-compacted by `compact_session`.
-
-`schema/` provides public JSON Schema contracts (in the GitHub repository):
-
-- `review-artifact.schema.json`
-- `review-index-entry.schema.json`
-- `sidecar-request-response.schema.json`
-
-- **Pure Rust, local-first**: `unsafe_code = "forbid"`, clippy pedantic.
-- **diff_hash binding**: review/verify point to the same code change, preventing "review A, commit B".
-- **The integration layer is experimental / PoC**: the sidecar protocol, JSON Schemas, and the skill package are early integrations without a stable ecosystem contract.
-
----
-
 <a id="integration-optional"></a>
 ## Integration (optional)
 
 <p align="center">
-  <img src="assets/figures/fig5-integration.svg?v=2" width="820" alt="Integration topology: AI coding tools call Sego via sidecar/skill; governance platforms consume verification results via the VerificationArtifact contract">
+  <img src="assets/figures/fig5-integration.svg" width="820" alt="Integration topology: AI coding tools call Sego via sidecar/skill; governance platforms consume verification results via the VerificationArtifact contract">
 </p>
 <p align="center"><sub><b>Figure 5</b>: Integration topology. Left: AI coding tools call Sego via sidecar / skill package; right: governance platforms consume verification results via the versioned contract — decision authority stays with the integrator.</sub></p>
 
@@ -312,6 +236,82 @@ Sego is fully usable standalone — every workflow in this README works without 
 | **Governance platforms / CI workflows** | read structured verification results and unverified items through the versioned VerificationArtifact contract, as independent verification evidence; task and release authority always stays with the integrator | in design |
 
 > The first consumer of this contract is EgoPulse, a personal-agent governance system. Integration details and public examples will be published once the contract stabilizes.
+
+---
+
+<a id="quick-start"></a>
+## Quick start
+
+📘 First time? Start with the user guide:
+
+- [Online user guide (Chinese)](docs/Sego使用指南.md)
+- [Word download (Chinese)](docs/Sego使用指南.docx?raw=1) (GitHub cannot preview `.docx` directly — download and open with Word/WPS if the page is blank)
+
+### Windows (recommended: direct download)
+
+Open [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest), download `sego-windows.zip`, unzip and double-click `Sego.cmd`.
+
+If you used **Code → Download ZIP** from GitHub, the archive does not contain `sego.exe`. In that case run `start-sego-windows.cmd` from the repository root — it downloads the latest release binary and starts Sego.
+
+### Windows (one-line install)
+
+```powershell
+irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+```
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/007M7/Sego-Agent.git
+cd Sego-Agent/rust
+cargo build --release
+./target/release/sego
+```
+
+### Configure models
+
+Sego supports DeepSeek and Anthropic models. Set the corresponding environment variables:
+
+**Windows PowerShell / CMD (take effect in a new terminal):**
+
+```powershell
+setx DEEPSEEK_API_KEY "your-key"
+setx DEEPSEEK_MODEL "deepseek-v4-flash"
+
+# or Anthropic
+setx ANTHROPIC_API_KEY "your-key"
+```
+
+**macOS / Linux:**
+
+```bash
+# DeepSeek (recommended: cost-effective)
+export DEEPSEEK_API_KEY="your-key"
+export DEEPSEEK_MODEL="deepseek-v4-flash"
+
+# or Anthropic
+export ANTHROPIC_API_KEY="your-key"
+```
+
+### Safe by default
+
+Sego **starts with read-only (ReadOnly) permissions**: review sessions cannot write files or execute commands. Writing, command execution, or autonomy requires an explicit `--permission-mode` (e.g. `workspace-write`, `danger-full-access`) or the `RUSTY_CLAUDE_PERMISSION_MODE` environment variable / project configuration.
+
+### Your first review
+
+```bash
+cd your-project
+git add -A
+sego /review staged
+```
+
+Sego reviews your staged changes, outputs structured findings (severity / file / line / evidence / risk / suggestion), and persists the review result to `.sego/reviews/`.
 
 ---
 
