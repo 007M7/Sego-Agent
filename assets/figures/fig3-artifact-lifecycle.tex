@@ -1,7 +1,5 @@
-% fig3-artifact-lifecycle.tex — Figure 3: 审查产物生命周期与状态分离
+% fig3-artifact-lifecycle.tex — Figure 3: artifact lifecycle & state separation
 \documentclass[tikz,border=10pt]{standalone}
-\usepackage{xeCJK}
-\setCJKmainfont{Microsoft YaHei}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
 
 \begin{document}
@@ -16,29 +14,29 @@
 ]
 
 % ===== Left panel: artifact store =====
-\node[seclab] at (2.6, 1.0) {.sego/reviews/（append-only）};
+\node[seclab] at (2.6, 1.0) {.sego/reviews/ (append-only)};
 \node[file, fill=violet!10, draw=violet!50!black] (json) at (2.6, 0)
-  {\texttt{review-<id>.json}\\ \footnotesize 机器可读产物};
+  {\texttt{review-<id>.json}\\ \footnotesize machine-readable artifact};
 \node[file, fill=violet!6,  draw=violet!50!black] (md)   at (2.6, -1.6)
-  {\texttt{review-<id>.md}\\ \footnotesize 人类可读报告};
+  {\texttt{review-<id>.md}\\ \footnotesize human-readable report};
 \node[file, fill=violet!6,  draw=violet!50!black] (idx)  at (2.6, -3.2)
-  {\texttt{index.jsonl}\\ \footnotesize append-only 索引};
+  {\texttt{index.jsonl}\\ \footnotesize append-only index};
 
 \node[st, fill=blue!8, draw=blue!45!black, minimum width=30mm] (diff) at (-2.6, -1.6)
-  {staged diff\\ \footnotesize \texttt{diff\_hash} 绑定};
-\draw[arr] (diff) -- node[lab, above] {审查} (json.west);
+  {staged diff\\ \footnotesize \texttt{diff\_hash} bound};
+\draw[arr] (diff) -- node[lab, above] {review} (json.west);
 
 % ===== Right panel: four states =====
-\node[seclab] at (11.6, 1.0) {四种状态分开（不合并为单一“通过”）};
+\node[seclab] at (13.4, 1.0) {Four states kept separate (never merged into ``a pass'')};
 
-\node[st, fill=blue!8,    draw=blue!45!black,  minimum width=40mm] (s1) at (9.4, -0.4)
-  {执行状态\\ \footnotesize 检查完成 / 失败 / 取消};
-\node[st, fill=green!10,  draw=green!45!black, minimum width=40mm] (s2) at (14.2, -0.4)
-  {验证结论\\ \footnotesize 未发现支持充分的问题\\ \footnotesize $\neq$ 通过};
-\node[st, fill=orange!12, draw=orange!55!black, minimum width=40mm] (s3) at (9.4, -2.6)
-  {问题处理状态\\ \footnotesize 已修复（关联复验）/ 争议 /\\ \footnotesize 接受风险};
-\node[st, fill=purple!10, draw=purple!50!black, minimum width=40mm] (s4) at (14.2, -2.6)
-  {用户决定\\ \footnotesize merge / rework / reject\\ \footnotesize ——由人作出，非自动生成};
+\node[st, fill=blue!8,    draw=blue!45!black,  minimum width=42mm] (s1) at (10.6, -0.4)
+  {Execution state\\ \footnotesize completed / failed / cancelled};
+\node[st, fill=green!10,  draw=green!45!black, minimum width=42mm] (s2) at (16.0, -0.4)
+  {Verification outcome\\ \footnotesize no sufficiently supported findings\\ \footnotesize $\neq$ pass};
+\node[st, fill=orange!12, draw=orange!55!black, minimum width=42mm] (s3) at (10.6, -2.6)
+  {Disposition state\\ \footnotesize fixed (re-verified) / disputed /\\ \footnotesize accepted risk};
+\node[st, fill=purple!10, draw=purple!50!black, minimum width=42mm] (s4) at (16.0, -2.6)
+  {User decision\\ \footnotesize merge / rework / reject\\ \footnotesize --- made by a human, never auto-generated};
 
 \draw[sarr] (s1) -- (s2);
 \draw[sarr] (s2) -- (s4);
@@ -46,17 +44,17 @@
 \draw[sarr] (s1.south) |- ($(s3.north)+(0,0.3)$) -- (s3.north);
 
 % ===== Bottom panel: finding status machine =====
-\node[seclab] at (2.6, -4.6) {单条 finding 的处理状态机};
-\node[st, fill=white] (f1) at (0.2, -5.8)   {open};
-\node[st, fill=white] (f2) at (2.2, -5.8)   {acknowledged};
-\node[st, fill=green!10, draw=green!45!black] (f3) at (4.6, -5.8) {fixed\\ \footnotesize 关联复验};
-\node[st, fill=white] (f4) at (2.2, -7.1)   {ignored};
+\node[seclab] at (3.0, -4.6) {Finding disposition state machine};
+\node[st, fill=white] (f1) at (0.4, -5.8)   {open};
+\node[st, fill=white] (f2) at (2.6, -5.8)   {acknowledged};
+\node[st, fill=green!10, draw=green!45!black] (f3) at (5.2, -5.8) {fixed\\ \footnotesize re-verified};
+\node[st, fill=white] (f4) at (2.6, -7.1)   {ignored};
 
 \draw[arr] (f1) -- (f2);
 \draw[arr] (f2) -- (f3);
 \draw[arr] (f2) -- (f4);
-\node[lab, anchor=west] at (5.6, -5.8) {原始发现不可静默删除，};
-\node[lab, anchor=west] at (5.6, -6.35) {修复必须关联后续复验。};
+\node[lab, anchor=west, align=left] at (6.4, -5.8) {Original findings are never silently deleted;};
+\node[lab, anchor=west, align=left] at (6.4, -6.35) {fixes must link a follow-up re-review.};
 
 \begin{scope}[on background layer]
   \node[draw=black!12, dashed, rounded corners=3pt, fit=(diff)(idx), inner sep=6pt] {};

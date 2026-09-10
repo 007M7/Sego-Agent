@@ -1,7 +1,5 @@
-% fig1-motivation.tex — Figure 1: 三条风险链（问题动机）
+% fig1-motivation.tex — Figure 1: three risk chains (motivation)
 \documentclass[tikz,border=10pt]{standalone}
-\usepackage{xeCJK}
-\setCJKmainfont{Microsoft YaHei}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
 
 \begin{document}
@@ -18,33 +16,33 @@
 ]
 
 % ================= Panel 1 =================
-\node[panel, text=red!50!black] at (0, 1.1) {痛点 1 · 生成与审查同源};
-\node[box, bad]   (p1a) at (0, 0)    {AI 工具生成代码};
-\node[box, bad]   (p1b) at (0, -1.4) {同一工具链审查自己};
-\node[box, mid]   (p1c) at (0, -2.8) {缺陷被放行};
+\node[panel, text=red!50!black] at (0, 1.1) {Risk 1 · Review co-generated with code};
+\node[box, bad]   (p1a) at (0, 0)    {AI tool generates the change};
+\node[box, bad]   (p1b) at (0, -1.4) {Same toolchain reviews itself};
+\node[box, mid]   (p1c) at (0, -2.8) {Defects shipped};
 \draw[chain] (p1a) -- (p1b);
-\draw[chain] (p1b) -- node[lab, right] {利益冲突} (p1c);
+\draw[chain] (p1b) -- node[lab, right] {conflict of interest} (p1c);
 
 % ================= Panel 2 =================
-\node[panel, text=red!50!black] at (5.4, 1.1) {痛点 2 · “说完成”$\neq$完成};
-\node[box, bad]   (p2a) at (5.4, 0)    {模型声称任务完成};
-\node[box, mid]   (p2b) at (5.4, -1.4) {证据缺失 / 未验证项};
-\node[box, bad]   (p2c) at (5.4, -2.8) {缺口被静默吞掉};
+\node[panel, text=red!50!black] at (6.2, 1.1) {Risk 2 · ``Done'' $\neq$ done};
+\node[box, bad]   (p2a) at (6.2, 0)    {Model claims completion};
+\node[box, mid]   (p2b) at (6.2, -1.4) {Missing evidence / unverified items};
+\node[box, bad]   (p2c) at (6.2, -2.8) {Gaps silently swallowed};
 \draw[chain] (p2a) -- (p2b);
-\draw[chain] (p2b) -- node[lab, right] {无证据链} (p2c);
+\draw[chain] (p2b) -- node[lab, right] {no evidence chain} (p2c);
 
 % ================= Panel 3 =================
-\node[panel, text=red!50!black] at (10.8, 1.1) {痛点 3 · 结果不可复查};
-\node[box, mid]   (p3a) at (10.8, 0)    {发现无证据绑定};
-\node[box, mid]   (p3b) at (10.8, -1.4) {零发现被当作通过};
-\node[box, bad]   (p3c) at (10.8, -2.8) {无法审计 / 不可复现};
+\node[panel, text=red!50!black] at (12.4, 1.1) {Risk 3 · Results cannot be re-checked};
+\node[box, mid]   (p3a) at (12.4, 0)    {Findings lack evidence binding};
+\node[box, mid]   (p3b) at (12.4, -1.4) {Zero findings treated as a pass};
+\node[box, bad]   (p3c) at (12.4, -2.8) {No audit trail / not reproducible};
 \draw[chain] (p3a) -- (p3b);
-\draw[chain] (p3b) -- node[lab, right] {无产物留痕} (p3c);
+\draw[chain] (p3b) -- node[lab, right] {no artifact trail} (p3c);
 
 % ================= Sego bar =================
-\node[box, good, minimum width=124mm, minimum height=10mm] (sego) at (5.4, -4.4)
-  {\textbf{Sego}：明确范围 $\rightarrow$ 受约束模型审查 $+$ 确定性证据门 $\rightarrow$ 结构化产物 $\rightarrow$ 人工决定（零发现 $\neq$ 通过）};
-\foreach \x in {0, 5.4, 10.8} \draw[sarr] (\x, -3.5) -- (\x, -3.9) -- (sego.north -| \x, -3.9);
+\node[box, good, minimum width=140mm, minimum height=10mm] (sego) at (6.2, -4.4)
+  {\textbf{Sego}: explicit scope $\rightarrow$ constrained model review $+$ deterministic evidence gate $\rightarrow$ structured artifacts $\rightarrow$ human decision (zero findings $\neq$ pass)};
+\foreach \x in {0, 6.2, 12.4} \draw[sarr] (\x, -3.5) -- (\x, -3.9) -- (sego.north -| \x, -3.9);
 
 \begin{scope}[on background layer]
   \node[draw=black!12, dashed, rounded corners=3pt, fit=(p1a)(p3c), inner sep=6pt] {};

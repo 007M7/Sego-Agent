@@ -32,12 +32,12 @@ Sego 不是另一个 AI 编码工具，也不是 IDE。它工作在 AI 编码工
 Sego 的回答：输入是明确范围的改动与验收预期，输出是结构化 findings + 逐条证据状态 + 持久化到 `.sego/reviews/` 的可复查产物。**零发现不等于验收通过。**
 
 <p align="center">
-  <img src="assets/figures/fig1-motivation.svg" width="820" alt="三条风险链：生成与审查同源 · 说完成≠完成 · 结果不可复查">
+  <img src="assets/figures/fig1-motivation.svg?v=2" width="820" alt="Three risk chains: co-generated review, claimed-done vs done, unreviewable results">
 </p>
 <p align="center"><sub><b>图 1</b>：AI 编码工作流中的三条风险链。Sego 针对的正是这三点。</sub></p>
 
 <p align="center">
-  <img src="assets/figures/fig2-pipeline.svg?v=2" width="900" alt="审查流水线：受约束模型审查 + 确定性证据门 + 结构化产物 + 人工决定">
+  <img src="assets/figures/fig2-pipeline.svg?v=3" width="900" alt="Review pipeline: constrained model review + deterministic evidence gate + structured artifacts + human decision">
 </p>
 <p align="center"><sub><b>图 2</b>：审查流水线总览。Evidence Gate 对每条候选 finding 做确定性校验：通过者成为 verified finding，越界 / 截断 / 未捕获者保留为未验证缺口——两条路径都写入产物，零发现不等于通过。</sub></p>
 
@@ -138,7 +138,7 @@ Sego 会审查你的暂存区改动，输出结构化的 findings（严重程度
 结果写入 `.sego/reviews/` 并渲染为终端摘要 / HTML Review Card（Green / Yellow / Red 置信度），聚合为 `AcceptanceRecord` 辅助验收决策。
 
 <p align="center">
-  <img src="assets/figures/fig3-artifact-lifecycle.svg" width="880" alt="审查产物生命周期：diff_hash 绑定、append-only 索引、四种状态分离、finding 处理状态机">
+  <img src="assets/figures/fig3-artifact-lifecycle.svg?v=2" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">
 </p>
 <p align="center"><sub><b>图 3</b>：审查产物生命周期。<code>diff_hash</code> 把产物绑定到被审代码状态；四种状态（执行 / 验证结论 / 问题处理 / 用户决定）严格分开；单条 finding 的修复必须关联后续复验。</sub></p>
 
@@ -282,7 +282,7 @@ Sego 是一个由 9 个 crate 组成的 Rust workspace，依赖流向严格分�
 ## 集成（可选）
 
 <p align="center">
-  <img src="assets/figures/fig5-integration.svg" width="820" alt="集成拓扑：AI 编码工具经 sidecar/skill 调用 Sego；治理平台经 VerificationArtifact 合同消费验证结果">
+  <img src="assets/figures/fig5-integration.svg?v=2" width="820" alt="Integration topology: AI coding tools call Sego via sidecar/skill; governance platforms consume results via the VerificationArtifact contract">
 </p>
 <p align="center"><sub><b>图 5</b>：集成拓扑。左：AI 编码工具经 sidecar / skill 包调用 Sego；右：治理平台经版本化合同消费验证结果——裁决权保留在集成方。</sub></p>
 
