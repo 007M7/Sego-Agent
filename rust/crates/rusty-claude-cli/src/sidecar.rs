@@ -13,7 +13,7 @@
 use std::io::{Read, Write};
 
 use runtime::code_review::{
-    build_review_prompt, persist_review_artifact, review_diff_hash, ReviewContext,
+    build_review_prompt, persist_review_artifact_with_identity, review_diff_hash, ReviewContext,
     ReviewInvocationIdentity, ReviewPromptOptions, ReviewReport, ReviewScope,
 };
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,23 @@ fn invocation_id_is_valid(id: &str) -> bool {
     !id.is_empty() && id.chars().count() <= MAX_INVOCATION_ID_LEN
 }
 
+/// Endpoint Sego will use for a provider, taken from the same accessors the model
+/// clients use.
+///
+/// Every provider Sego can route to now has an accessor (the OpenAI accessor closed
+/// PROV-M03), so this returns `Some` in practice. The `Option` is kept because the
+/// caller must still be able to record a *named* evidence gap rather than silently
+/// omitting the endpoint if a future provider arrives without one — omitting a field
+/// is indistinguishable from never having had the information.
+#[must_use]
+fn resolved_endpoint_for(kind: api::ProviderKind) -> Option<String> {
+    match kind {
+        api::ProviderKind::Anthropic => Some(api::read_base_url()),
+        api::ProviderKind::DeepSeek => Some(api::read_deepseek_base_url()),
+        api::ProviderKind::Xai => Some(api::read_xai_base_url()),
+        api::ProviderKind::OpenAi => Some(api::read_openai_base_url()),
+    }
+}
 
 /// Map a request-supplied provider name to a concrete provider kind.
 ///
@@ -273,10 +290,31 @@ fn execute_review(
         request.options.as_ref().and_then(|options| options.provider.as_deref()),
         request.options.as_ref().and_then(|options| options.model.as_deref()),
     )?;
-    // Envelope validation only in this state: the value is bounded by the published
-    // contract, so the implementation cannot accept what the contract calls invalid.
-    if let Some(id) = request.context.as_ref().and_then(|ctx| ctx.invocation_id.as_deref()) {
-        if !invocation_id_is_valid(id) {
+    // Objective step 2: report the route actually resolved so a caller can bind
+    // its own execution identity to the provider and model of this invocation.
+    // Derived from the model name by the same function the client uses — never
+    // echoed from the request, and not a provider-side attestation.
+    let resolved_provider = provider_name(provider).to_string();
+    let resolved_model = model.clone();
+    // S2 (EgoPulse ruling 2026-09-12, option (a)): report the endpoint Sego actually
+    // resolved. When the provider has no accessor the value is omitted AND the gap is
+    // named explicitly — rather than substituting a second derivation that could
+    // silently differ from the endpoint the client really used.
+    let resolved_endpoint = resolved_endpoint_for(provider);
+    let identity_evidence = runtime::code_review::IDENTITY_EVIDENCE_SELF_REPORTED.to_string();
+    let identity_evidence_gap = if resolved_endpoint.is_none() {
+        Some(runtime::code_review::IDENTITY_GAP_NO_ENDPOINT_ACCESSOR.to_string())
+    } else {
+        None
+    };
+    // S4/S6: the caller's own persistent invocation identity, carried opaquely.
+    // Sego never parses it, and never derives execution idempotency from it
+    // (`diff_hash` + scope is explicitly NOT an execution idempotency key).
+    // The published schema bounds it to 1..=128 characters; enforcing that here
+    // keeps the implementation from accepting what the contract calls invalid.
+    let invocation_id = match request.context.as_ref().and_then(|ctx| ctx.invocation_id.as_deref())
+    {
+        Some(id) if !invocation_id_is_valid(id) => {
             return Err(Box::new(SidecarFailure {
                 code: "invalid_request",
                 message: format!(
@@ -285,7 +323,9 @@ fn execute_review(
                 ),
             }));
         }
-    }
+        Some(id) => Some(id.to_string()),
+        None => None,
+    };
 
     if target.is_empty() {
         // Restored 2026-09-12 once the consuming side shipped its half: the mapper now
@@ -301,6 +341,12 @@ fn execute_review(
             artifact_path: None,
             findings: Some(vec![]),
             parse_status: Some("no_diff".to_string()),
+            resolved_provider: Some(resolved_provider),
+            resolved_model: Some(resolved_model),
+            resolved_endpoint,
+            identity_evidence: Some(identity_evidence),
+            identity_evidence_gap,
+            invocation_id,
             error: None,
         });
     }
@@ -315,7 +361,17 @@ fn execute_review(
     // artifacts get the same evidence_status annotations as the CLI path.
     let findings = runtime::code_review::evaluate_evidence_gate(report.findings, &context.target);
     let report = ReviewReport { findings, ..report };
-    let artifact = persist_review_artifact(&cwd, &context.target, &report)?;
+    let artifact = persist_review_artifact_with_identity(
+        &cwd,
+        &context.target,
+        &report,
+        &ReviewInvocationIdentity {
+            provider: Some(resolved_provider.clone()),
+            model: Some(resolved_model.clone()),
+            resolved_endpoint: resolved_endpoint.clone(),
+            invocation_id: invocation_id.clone(),
+        },
+    )?;
 
     Ok(SidecarReviewResponse {
         schema_version: SIDECAR_SCHEMA_VERSION,
@@ -325,6 +381,12 @@ fn execute_review(
         artifact_path: Some(artifact.json_path.to_string_lossy().to_string()),
         findings: Some(report.findings.clone()),
         parse_status: Some(report.parse_status.label().to_string()),
+        resolved_provider: Some(resolved_provider),
+        resolved_model: Some(resolved_model),
+        resolved_endpoint,
+        identity_evidence: Some(identity_evidence),
+        identity_evidence_gap,
+        invocation_id,
         error: None,
     })
 }
@@ -339,6 +401,12 @@ fn emit_error(code: &str, message: &str) {
         artifact_path: None,
         findings: None,
         parse_status: None,
+        resolved_provider: None,
+        resolved_model: None,
+        resolved_endpoint: None,
+        identity_evidence: None,
+        identity_evidence_gap: None,
+        invocation_id: None,
         error: Some(SidecarError { code: code.to_string(), message: message.to_string() }),
     };
     if let Ok(json) = serde_json::to_string(&response) {
@@ -406,6 +474,24 @@ pub struct SidecarReviewResponse {
     pub artifact_path: Option<String>,
     pub findings: Option<Vec<runtime::code_review::ReviewFinding>>,
     pub parse_status: Option<String>,
+    /// Provider Sego resolved for this invocation — its routing decision, not a
+    /// provider-side attestation. `None` when routing was never reached.
+    pub resolved_provider: Option<String>,
+    /// Model Sego sent the request for. Same caveat as `resolved_provider`.
+    pub resolved_model: Option<String>,
+    /// Endpoint Sego resolved for this invocation; null when the provider has no
+    /// base-URL accessor, in which case `identity_evidence_gap` names that gap.
+    pub resolved_endpoint: Option<String>,
+    /// Evidence strength for the identity above. Currently always
+    /// `self_reported_resolution`: Sego's own routing decision, confirmed against
+    /// the wire, and NOT a provider-side attestation.
+    pub identity_evidence: Option<String>,
+    /// Named dimension Sego cannot observe, so a consumer never has to infer an
+    /// evidence gap from a missing field.
+    pub identity_evidence_gap: Option<String>,
+    /// Caller-minted persistent invocation identity, echoed verbatim so an
+    /// execution can be bound to the artifact it produced. Opaque to Sego.
+    pub invocation_id: Option<String>,
     pub error: Option<SidecarError>,
 }
 
@@ -418,6 +504,26 @@ pub struct SidecarError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_routable_provider_now_reports_an_endpoint() {
+        // PROV-M03 closed: no provider Sego can route to lacks a base-URL accessor,
+        // so the named evidence gap can no longer be triggered by a routable
+        // provider. If a future provider arrives without an accessor, this test is
+        // where that regression shows up.
+        for kind in [
+            api::ProviderKind::Anthropic,
+            api::ProviderKind::DeepSeek,
+            api::ProviderKind::OpenAi,
+            api::ProviderKind::Xai,
+        ] {
+            let endpoint = resolved_endpoint_for(kind);
+            assert!(
+                endpoint.as_deref().is_some_and(|value| !value.is_empty()),
+                "no endpoint resolved for {kind:?}"
+            );
+        }
+    }
 
     #[test]
     fn invocation_id_bound_matches_the_published_contract() {
@@ -482,6 +588,12 @@ mod tests {
             artifact_path: Some("p".to_string()),
             findings: Some(vec![finding]),
             parse_status: Some("structured".to_string()),
+            resolved_provider: None,
+            resolved_model: None,
+            resolved_endpoint: None,
+            identity_evidence: None,
+            identity_evidence_gap: None,
+            invocation_id: None,
             error: None,
         };
         let serialized = serde_json::to_string(&response);
@@ -578,6 +690,34 @@ mod tests {
     }
 
     #[test]
+    fn response_serializes_success() {
+        let response = SidecarReviewResponse {
+            schema_version: 1,
+            status: "ok".to_string(),
+            review_id: Some("rev-001".to_string()),
+            diff_hash: Some("sha256:abc".to_string()),
+            artifact_path: Some(".sego/reviews/rev-001.json".to_string()),
+            findings: Some(vec![]),
+            parse_status: Some("structured".to_string()),
+            resolved_provider: Some("deepseek".to_string()),
+            resolved_model: Some("deepseek-chat".to_string()),
+            resolved_endpoint: Some("https://api.deepseek.com/v1".to_string()),
+            identity_evidence: Some("self_reported_resolution".to_string()),
+            identity_evidence_gap: None,
+            invocation_id: Some("inv-echo-1".to_string()),
+            error: None,
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        assert!(json.contains(r#""status":"ok""#));
+        assert!(json.contains(r#""review_id":"rev-001""#));
+        assert!(json.contains(r#""schema_version":1"#));
+        assert!(json.contains(r#""resolved_provider":"deepseek""#));
+        assert!(json.contains(r#""resolved_model":"deepseek-chat""#));
+        assert!(json.contains(r#""identity_evidence":"self_reported_resolution""#));
+        assert!(json.contains(r#""invocation_id":"inv-echo-1""#));
+    }
+
+    #[test]
     fn response_serializes_evidence_status_in_findings() {
         // R5: SidecarReviewResponse with findings carrying evidence_status
         // must serialize to JSON containing "evidence_status":"verified".
@@ -602,6 +742,12 @@ mod tests {
             artifact_path: Some(".sego/reviews/rev-evidence.json".to_string()),
             findings: Some(vec![finding]),
             parse_status: Some("structured".to_string()),
+            resolved_provider: None,
+            resolved_model: None,
+            resolved_endpoint: None,
+            identity_evidence: None,
+            identity_evidence_gap: None,
+            invocation_id: None,
             error: None,
         };
         let json = serde_json::to_string(&response).expect("serialize");
@@ -619,6 +765,12 @@ mod tests {
             artifact_path: None,
             findings: None,
             parse_status: None,
+            resolved_provider: None,
+            resolved_model: None,
+            resolved_endpoint: None,
+            identity_evidence: None,
+            identity_evidence_gap: None,
+            invocation_id: None,
             error: Some(SidecarError {
                 code: "invalid_request".to_string(),
                 message: "bad JSON".to_string(),
