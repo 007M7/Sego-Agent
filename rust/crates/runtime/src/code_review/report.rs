@@ -867,11 +867,66 @@ pub fn persist_review_artifact_with_identity(
     let markdown_path = reviews_dir.join(format!("{id}.md"));
     let index_path = reviews_dir.join("index.jsonl");
 
-    fs::write(&json_path, serde_json::to_string_pretty(&artifact)? + "\n")?;
-    fs::write(&markdown_path, render_review_markdown(&artifact, report))?;
+    // Artifact-identity conflict (EgoPulse ruling 2026-09-12, option (c)): the id is
+    // `review-<epoch-second>-<diff-prefix>`, so two reviews of the same diff finishing
+    // in the same second compute the same id and therefore the same path. Writing with
+    // `create_new` refuses to replace an existing artifact instead of silently
+    // destroying earlier evidence, and does so atomically — two processes racing for
+    // the same id cannot both believe they won. There is deliberately NO retry with a
+    // fresh id: that would turn a detected conflict into a silent identity change.
+    write_new_file(
+        &json_path,
+        &(serde_json::to_string_pretty(&artifact)? + "\n"),
+        &artifact,
+        workspace_root,
+    )?;
+    write_new_file(
+        &markdown_path,
+        &render_review_markdown(&artifact, report),
+        &artifact,
+        workspace_root,
+    )?;
     append_review_index(&index_path, &artifact, &json_path, &markdown_path)?;
 
     Ok(PersistedReviewArtifact { id, diff_hash, json_path, markdown_path, index_path })
+}
+
+/// Write a brand-new artifact file, refusing to replace an existing one.
+///
+/// The refusal is atomic (`create_new`), not a check followed by a write, so two
+/// concurrent reviews computing the same artifact id cannot both proceed. The error
+/// names the conflicting id together with the `(workspace, diff, scope)` identity so
+/// a caller can locate the existing artifact instead of guessing.
+fn write_new_file(
+    path: &Path,
+    contents: &str,
+    artifact: &ReviewArtifact,
+    workspace_root: &Path,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut file =
+        fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "artifact id conflict: id '{}' already exists at {} for workspace {} \
+                         (scope '{}', diff_hash '{}'). Refusing to overwrite an existing artifact; \
+                         Sego does not retry with a different id. Serialize reviews for the same \
+                         (workspace, diff) or move the existing artifact aside.",
+                        artifact.id,
+                        path.display(),
+                        workspace_root.display(),
+                        artifact.scope,
+                        artifact.diff_hash,
+                    ),
+                )
+            } else {
+                error
+            }
+        })?;
+    file.write_all(contents.as_bytes())
 }
 
 pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEntry>> {
@@ -1661,6 +1716,42 @@ mod tests {
         );
         let findings = evaluate_evidence_gate(report.findings, &target);
         assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::UnverifiedLine));
+    }
+
+    #[test]
+    fn a_second_persist_with_the_same_id_must_not_overwrite() {
+        // The id is `review-<epoch-second>-<diff-prefix>`, so within one second two
+        // persists of the same diff compute the same id. Whatever the timing, the
+        // invariant is: an existing artifact id can never be written twice.
+        let report = ReviewReport::from_model_output("{\"findings\": []}");
+        let root = temp_path("review-id-conflict");
+        let _ = std::fs::create_dir_all(&root);
+        let target = target_with_diff(
+            "diff --git a/src/lib.rs b/src/lib.rs
+",
+        );
+
+        let first = persist_review_artifact(&root, &target, &report).expect("first persist");
+        let first_json = std::fs::read_to_string(&first.json_path).expect("first json");
+
+        match persist_review_artifact(&root, &target, &report) {
+            Ok(second) => assert_ne!(
+                second.id, first.id,
+                "a second persist must never reuse an existing artifact id"
+            ),
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+                assert!(
+                    error.to_string().contains(&first.id),
+                    "the conflict error must name the conflicting id: {error}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&first.json_path).expect("first json"),
+                    first_json,
+                    "the earlier artifact must survive a detected conflict intact"
+                );
+            }
+        }
     }
 
     #[test]
