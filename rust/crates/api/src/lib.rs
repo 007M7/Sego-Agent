@@ -6,9 +6,9 @@ mod sse;
 mod types;
 
 pub use client::{
-    oauth_token_is_expired, read_base_url, read_deepseek_base_url, read_xai_base_url,
-    resolve_saved_oauth_token, resolve_startup_auth_source, MessageStream, OAuthTokenSet,
-    ProviderClient,
+    oauth_token_is_expired, read_base_url, read_deepseek_base_url, read_openai_base_url,
+    read_xai_base_url, resolve_saved_oauth_token, resolve_startup_auth_source, MessageStream,
+    OAuthTokenSet, ProviderClient,
 };
 pub use error::ApiError;
 pub use prompt_cache::{
@@ -18,7 +18,8 @@ pub use prompt_cache::{
 pub use providers::anthropic::{AnthropicClient, AnthropicClient as ApiClient, AuthSource};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind,
+    detect_provider_kind, max_tokens_for_model, metadata_for_model, resolve_model_alias,
+    ProviderKind, ProviderMetadata,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{
