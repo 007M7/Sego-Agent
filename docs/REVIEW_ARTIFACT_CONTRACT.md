@@ -128,7 +128,14 @@ Stable-additive means a field can be added or absent without breaking old artifa
 | `unverified_line` | The file existed, but the cited line was outside captured range. |
 | `unverified_dependency` | The finding depends on dependency/manifest evidence that was not captured. |
 | `scope_not_captured` | The finding refers to content outside the review scope. |
+| `content_not_captured` | The file was listed in scope, but its content was not captured. |
+| `content_truncated` | The file content was captured only partially. |
 | absent / null | Legacy artifact or no deterministic evidence status attached. |
+
+These seven values are exactly what `EvidenceStatus` serializes
+(`runtime/src/code_review/report.rs:17-32`). Earlier revisions of this contract listed only
+the first five; artifacts carrying `content_not_captured` or `content_truncated` therefore
+failed the published JSON Schema even though the implementation already emitted them.
 
 ### `highest_severity`
 
@@ -179,13 +186,20 @@ A Sego review artifact is a review proof, not a guarantee.
 - It does not certify that code is safe to ship.
 - It may contain model-driven findings that require human disposition.
 
-Recommended dispositions for each finding:
+Recommended dispositions for each finding (the accepted vocabulary):
 
 ```text
-confirmed
-false_positive
+open
+acknowledged
+fixed
 accepted_risk
-deferred
+false_positive
+ignored
 ```
+
+These are the values `ReviewFindingStatus::parse` accepts
+(`runtime/src/code_review/report.rs:697-711`). Earlier revisions of this contract listed
+`confirmed` and `deferred`, and neither is accepted: use `acknowledged` for a confirmed
+finding, and `acknowledged` plus an explicit reason for a deferred one.
 
 See `docs/AGENT_REVIEW_HANDOFF.md` for the recommended agent workflow.
