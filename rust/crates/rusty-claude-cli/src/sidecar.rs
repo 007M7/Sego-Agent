@@ -236,7 +236,15 @@ pub fn run_sidecar_review_pipeline() -> i32 {
         Err(error) => {
             let (code, message) = match error.downcast_ref::<SidecarFailure>() {
                 Some(failure) => (failure.code, failure.message.clone()),
-                None => ("review_failed", error.to_string()),
+                // Artifact-identity conflict: a readable code plus the runtime's named
+                // reason (conflicting id, workspace, scope, diff_hash). No retry is
+                // attempted here either — a retry would silently change the identity.
+                None => match error.downcast_ref::<std::io::Error>() {
+                    Some(io_error) if io_error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        ("artifact_id_conflict", io_error.to_string())
+                    }
+                    _ => ("review_failed", error.to_string()),
+                },
             };
             emit_error(code, &message);
             1
