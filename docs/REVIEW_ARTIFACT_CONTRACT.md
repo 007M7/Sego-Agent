@@ -4,6 +4,8 @@ This document describes the public, agent-readable review proof artifacts writte
 
 Sego is not a code generator. Sego is an independent review/proof engine that can be called after another AI coding agent generates or changes code. The review artifact is the handoff object that another agent can read and explain to a user.
 
+**Contract identity**: this contract is `sego.review.artifact/v1` (contract source: `schema/review-artifact.schema.json`); its Rust type is `SegoReviewArtifact` in `runtime/src/code_review/report.rs`. It is Sego's **verification-domain** artifact and is deliberately distinct from EgoPulse's `VerificationArtifact`, which is an **acceptance record** — the two are related by reference (`invocation_id`, review id, content hash, schema version) and are never merged into one object.
+
 ---
 
 ## 1. Artifact locations
