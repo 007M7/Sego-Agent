@@ -47,6 +47,19 @@ fn provider_client_routes_deepseek_models_through_deepseek_config() {
 }
 
 #[test]
+fn provider_client_routes_deepseek_v41_flash_through_deepseek_config() {
+    let _lock = env_lock();
+    let _deepseek_api_key = EnvVarGuard::set("DEEPSEEK_API_KEY", Some("deepseek-test-key"));
+    let _openai_api_key = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+    let _anthropic_api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", None);
+    let _anthropic_auth_token = EnvVarGuard::set("ANTHROPIC_AUTH_TOKEN", None);
+
+    let client = ProviderClient::from_model("deepseek-v4.1-flash")
+        .expect("DeepSeek V4.1 Flash should resolve through the DeepSeek provider");
+    assert_eq!(client.provider_kind(), ProviderKind::DeepSeek);
+}
+
+#[test]
 fn provider_client_reports_missing_deepseek_credentials_for_deepseek_models() {
     let _lock = env_lock();
     let _deepseek_api_key = EnvVarGuard::set("DEEPSEEK_API_KEY", None);

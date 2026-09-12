@@ -43,6 +43,15 @@ pub struct ProviderMetadata {
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     (
+        "deepseek-v4.1-flash",
+        ProviderMetadata {
+            provider: ProviderKind::DeepSeek,
+            auth_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+        },
+    ),
+    (
         "opus",
         ProviderMetadata {
             provider: ProviderKind::Anthropic,
@@ -142,7 +151,11 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi | ProviderKind::DeepSeek => trimmed,
+                ProviderKind::DeepSeek => match *alias {
+                    "deepseek-v4.1-flash" => "deepseek-flash",
+                    _ => trimmed,
+                },
+                ProviderKind::OpenAi => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -250,7 +263,13 @@ mod tests {
         assert_eq!(detect_provider_kind("grok"), ProviderKind::Xai);
         assert_eq!(detect_provider_kind("claude-sonnet-4-6"), ProviderKind::Anthropic);
         assert_eq!(detect_provider_kind("deepseek-v4-flash"), ProviderKind::DeepSeek);
+        assert_eq!(detect_provider_kind("deepseek-v4.1-flash"), ProviderKind::DeepSeek);
         assert_eq!(detect_provider_kind("deepseek-v4-pro"), ProviderKind::DeepSeek);
+    }
+
+    #[test]
+    fn resolves_deepseek_v41_flash_to_the_provider_model_name() {
+        assert_eq!(resolve_model_alias("deepseek-v4.1-flash"), "deepseek-flash");
     }
 
     #[test]
