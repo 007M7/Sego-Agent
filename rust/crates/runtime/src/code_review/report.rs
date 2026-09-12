@@ -637,6 +637,36 @@ struct ReviewArtifact {
     /// C21: review mode used to produce the artifact (for example, model_code_review).
     #[serde(default)]
     review_mode: String,
+    /// Governed plugin path only: the provider Sego resolved for the invocation
+    /// that produced this artifact. Absent when the writing path does not record
+    /// a route. Sego's routing decision, not a provider-side attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_provider: Option<String>,
+    /// Governed plugin path only: the model Sego sent the request for. Same caveat
+    /// as `resolved_provider`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_model: Option<String>,
+    /// Governed plugin path only: the endpoint Sego resolved for this invocation.
+    /// Absent when the provider has no base-URL accessor; `identity_evidence_gap`
+    /// then names that unobservable dimension explicitly instead of leaving the
+    /// reader to infer it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_endpoint: Option<String>,
+    /// Governed plugin path only: how strong this identity evidence is. Currently
+    /// always `IDENTITY_EVIDENCE_SELF_REPORTED` — Sego's own routing decision,
+    /// confirmed against the wire, but NOT a provider-side attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity_evidence: Option<String>,
+    /// Governed plugin path only: a named dimension Sego cannot observe. Present so
+    /// a consumer never has to infer an evidence gap from a missing field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity_evidence_gap: Option<String>,
+    /// Caller-minted invocation identity, echoed back by the governed path so an
+    /// execution can be tied to the artifact it produced. Opaque to Sego: it is
+    /// never parsed, and never used as an execution idempotency key. Absent when
+    /// the caller does not supply one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    invocation_id: Option<String>,
     scope: String,
     diff_hash: String,
     finding_count: usize,
@@ -730,10 +760,64 @@ struct ReviewReportWire {
     findings: Vec<ReviewFinding>,
 }
 
+/// Evidence strength for an invocation identity: Sego resolved the route itself
+/// (deterministically, from the model name) and confirmed it against the wire.
+/// It is **not** a provider-side attestation, and the only value Sego can produce
+/// today; a future `provider_attested` value would be a contract extension, not a
+/// silent addition.
+pub const IDENTITY_EVIDENCE_SELF_REPORTED: &str = "self_reported_resolution";
+
+/// Named evidence gap: the provider has no base-URL accessor yet, so the endpoint
+/// Sego used cannot be reported without guessing (see PROV-M03). Recorded
+/// explicitly rather than omitted.
+pub const IDENTITY_GAP_NO_ENDPOINT_ACCESSOR: &str = "no_endpoint_accessor_for_provider";
+
+/// Runtime identity of one invocation, recorded by the governed plugin path.
+///
+/// Distinct from `reviewer` / `engine_version` / `review_mode`, which identify the
+/// engine that wrote the artifact. These identify the route this invocation took:
+/// Sego's routing decision derived from the model name — not a provider-side
+/// attestation, and not proof of which model the provider actually executed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewInvocationIdentity {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// Endpoint Sego resolved for this invocation, or `None` when the provider has
+    /// no base-URL accessor and the value therefore cannot be reported without
+    /// guessing. A missing value is an explicitly recorded evidence gap
+    /// (see `IDENTITY_GAP_NO_ENDPOINT_ACCESSOR`), never a silently omitted field.
+    pub resolved_endpoint: Option<String>,
+    /// Caller-minted persistent identity for the invocation that produced this
+    /// artifact (for example an EgoPulse verification/checker execution id).
+    /// Opaque to Sego: it is never parsed or interpreted, and never used to derive
+    /// execution idempotency.
+    pub invocation_id: Option<String>,
+}
+
+/// Persist a review artifact without recording an invocation route.
+///
+/// Kept for existing callers (the CLI review paths and tests). The governed
+/// plugin path uses [`persist_review_artifact_with_identity`] instead.
 pub fn persist_review_artifact(
     workspace_root: &Path,
     target: &ReviewTarget,
     report: &ReviewReport,
+) -> std::io::Result<PersistedReviewArtifact> {
+    persist_review_artifact_with_identity(
+        workspace_root,
+        target,
+        report,
+        &ReviewInvocationIdentity::default(),
+    )
+}
+
+/// Persist a review artifact, recording the provider and model this invocation
+/// resolved.
+pub fn persist_review_artifact_with_identity(
+    workspace_root: &Path,
+    target: &ReviewTarget,
+    report: &ReviewReport,
+    identity: &ReviewInvocationIdentity,
 ) -> std::io::Result<PersistedReviewArtifact> {
     let reviews_dir = workspace_root.join(".sego").join("reviews");
     fs::create_dir_all(&reviews_dir)?;
@@ -749,6 +833,22 @@ pub fn persist_review_artifact(
         reviewer: "sego".to_string(),
         engine_version: env!("CARGO_PKG_VERSION").to_string(),
         review_mode: "model_code_review".to_string(),
+        resolved_provider: identity.provider.clone(),
+        resolved_model: identity.model.clone(),
+        resolved_endpoint: identity.resolved_endpoint.clone(),
+        identity_evidence: if identity.provider.is_some() || identity.model.is_some() {
+            Some(IDENTITY_EVIDENCE_SELF_REPORTED.to_string())
+        } else {
+            None
+        },
+        identity_evidence_gap: if identity.resolved_endpoint.is_none()
+            && (identity.provider.is_some() || identity.model.is_some())
+        {
+            Some(IDENTITY_GAP_NO_ENDPOINT_ACCESSOR.to_string())
+        } else {
+            None
+        },
+        invocation_id: identity.invocation_id.clone(),
         scope: target.scope.label().clone(),
         diff_hash: diff_hash.clone(),
         finding_count: report.findings.len(),
@@ -767,11 +867,66 @@ pub fn persist_review_artifact(
     let markdown_path = reviews_dir.join(format!("{id}.md"));
     let index_path = reviews_dir.join("index.jsonl");
 
-    fs::write(&json_path, serde_json::to_string_pretty(&artifact)? + "\n")?;
-    fs::write(&markdown_path, render_review_markdown(&artifact, report))?;
+    // Artifact-identity conflict (EgoPulse ruling 2026-09-12, option (c)): the id is
+    // `review-<epoch-second>-<diff-prefix>`, so two reviews of the same diff finishing
+    // in the same second compute the same id and therefore the same path. Writing with
+    // `create_new` refuses to replace an existing artifact instead of silently
+    // destroying earlier evidence, and does so atomically — two processes racing for
+    // the same id cannot both believe they won. There is deliberately NO retry with a
+    // fresh id: that would turn a detected conflict into a silent identity change.
+    write_new_file(
+        &json_path,
+        &(serde_json::to_string_pretty(&artifact)? + "\n"),
+        &artifact,
+        workspace_root,
+    )?;
+    write_new_file(
+        &markdown_path,
+        &render_review_markdown(&artifact, report),
+        &artifact,
+        workspace_root,
+    )?;
     append_review_index(&index_path, &artifact, &json_path, &markdown_path)?;
 
     Ok(PersistedReviewArtifact { id, diff_hash, json_path, markdown_path, index_path })
+}
+
+/// Write a brand-new artifact file, refusing to replace an existing one.
+///
+/// The refusal is atomic (`create_new`), not a check followed by a write, so two
+/// concurrent reviews computing the same artifact id cannot both proceed. The error
+/// names the conflicting id together with the `(workspace, diff, scope)` identity so
+/// a caller can locate the existing artifact instead of guessing.
+fn write_new_file(
+    path: &Path,
+    contents: &str,
+    artifact: &ReviewArtifact,
+    workspace_root: &Path,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut file =
+        fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "artifact id conflict: id '{}' already exists at {} for workspace {} \
+                         (scope '{}', diff_hash '{}'). Refusing to overwrite an existing artifact; \
+                         Sego does not retry with a different id. Serialize reviews for the same \
+                         (workspace, diff) or move the existing artifact aside.",
+                        artifact.id,
+                        path.display(),
+                        workspace_root.display(),
+                        artifact.scope,
+                        artifact.diff_hash,
+                    ),
+                )
+            } else {
+                error
+            }
+        })?;
+    file.write_all(contents.as_bytes())
 }
 
 pub fn load_review_index(workspace_root: &Path) -> io::Result<Vec<ReviewIndexEntry>> {
@@ -1180,9 +1335,11 @@ mod tests {
     use super::{
         build_evidence_coverage, evaluate_evidence_gate, latest_review_finding_statuses,
         load_review_finding_statuses, load_review_index, persist_review_artifact,
-        record_review_finding_status, review_diff_hash, EvidenceStatus, ReviewArtifact,
-        ReviewContentStatus, ReviewEvidenceScopeKind, ReviewFinding, ReviewFindingStatus,
-        ReviewFindingStatusEntry, ReviewIndexEntry, ReviewParseStatus, ReviewReport,
+        persist_review_artifact_with_identity, record_review_finding_status, review_diff_hash,
+        EvidenceStatus, ReviewArtifact, ReviewContentStatus, ReviewEvidenceScopeKind,
+        ReviewFinding, ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry,
+        ReviewInvocationIdentity, ReviewParseStatus, ReviewReport, IDENTITY_EVIDENCE_SELF_REPORTED,
+        IDENTITY_GAP_NO_ENDPOINT_ACCESSOR,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
 
@@ -1231,6 +1388,12 @@ mod tests {
             reviewer: "sego".to_string(),
             engine_version: "0.1.9-test".to_string(),
             review_mode: "model_code_review".to_string(),
+            resolved_provider: Some("anthropic".to_string()),
+            resolved_model: Some("claude-sonnet-4-6".to_string()),
+            resolved_endpoint: Some("https://api.anthropic.com".to_string()),
+            identity_evidence: Some(IDENTITY_EVIDENCE_SELF_REPORTED.to_string()),
+            identity_evidence_gap: None,
+            invocation_id: Some("inv-test-001".to_string()),
             scope: "staged".to_string(),
             diff_hash: "sha256:abc123".to_string(),
             finding_count: 1,
@@ -1305,6 +1468,12 @@ mod tests {
             reviewer: "sego".to_string(),
             engine_version: "0.1.9-test".to_string(),
             review_mode: "model_code_review".to_string(),
+            resolved_provider: None,
+            resolved_model: None,
+            resolved_endpoint: None,
+            identity_evidence: None,
+            identity_evidence_gap: None,
+            invocation_id: None,
             scope: "workspace".to_string(),
             diff_hash: "sha256:none".to_string(),
             finding_count: 0,
@@ -1547,6 +1716,129 @@ mod tests {
         );
         let findings = evaluate_evidence_gate(report.findings, &target);
         assert_eq!(findings[0].evidence_status, Some(EvidenceStatus::UnverifiedLine));
+    }
+
+    #[test]
+    fn a_second_persist_with_the_same_id_must_not_overwrite() {
+        // The id is `review-<epoch-second>-<diff-prefix>`, so within one second two
+        // persists of the same diff compute the same id. Whatever the timing, the
+        // invariant is: an existing artifact id can never be written twice.
+        let report = ReviewReport::from_model_output("{\"findings\": []}");
+        let root = temp_path("review-id-conflict");
+        let _ = std::fs::create_dir_all(&root);
+        let target = target_with_diff(
+            "diff --git a/src/lib.rs b/src/lib.rs
+",
+        );
+
+        let first = persist_review_artifact(&root, &target, &report).expect("first persist");
+        let first_json = std::fs::read_to_string(&first.json_path).expect("first json");
+
+        match persist_review_artifact(&root, &target, &report) {
+            Ok(second) => assert_ne!(
+                second.id, first.id,
+                "a second persist must never reuse an existing artifact id"
+            ),
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+                assert!(
+                    error.to_string().contains(&first.id),
+                    "the conflict error must name the conflicting id: {error}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&first.json_path).expect("first json"),
+                    first_json,
+                    "the earlier artifact must survive a detected conflict intact"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invocation_identity_is_recorded_only_when_supplied() {
+        // Contract guarantee downstream consumers rely on: the persisted artifact
+        // shape is unchanged unless the governed path supplies an invocation
+        // identity. Parsed structurally rather than by substring, so the result
+        // cannot depend on the serializer's whitespace.
+        let report = ReviewReport::from_model_output("{\"findings\": []}");
+        // One root per case on purpose: the artifact id is derived from the epoch
+        // second plus the diff prefix, so three persists of the same diff inside one
+        // second would collide — which is now a hard error by design.
+        let root_plain = temp_path("review-identity-plain");
+        let root_governed = temp_path("review-identity-governed");
+        let root_gapped = temp_path("review-identity-gapped");
+        for root in [&root_plain, &root_governed, &root_gapped] {
+            let _ = std::fs::create_dir_all(root);
+        }
+        let target = target_with_diff(
+            "diff --git a/src/lib.rs b/src/lib.rs
+",
+        );
+
+        let plain = persist_review_artifact(&root_plain, &target, &report).expect("persist plain");
+        let plain_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&plain.json_path).expect("plain json"))
+                .expect("plain artifact is JSON");
+        assert!(
+            plain_json.get("resolved_provider").is_none(),
+            "a path that does not record a route must omit resolved_provider, got {plain_json}"
+        );
+        assert!(plain_json.get("resolved_model").is_none());
+        assert!(plain_json.get("invocation_id").is_none());
+        // The new identity-evidence fields must not leak into non-governed artifacts
+        // either: an absent field is fine, a claimed one would be a lie.
+        assert!(plain_json.get("resolved_endpoint").is_none());
+        assert!(plain_json.get("identity_evidence").is_none());
+        assert!(plain_json.get("identity_evidence_gap").is_none());
+
+        let identity = ReviewInvocationIdentity {
+            provider: Some("anthropic".to_string()),
+            model: Some("claude-sonnet-4-6".to_string()),
+            resolved_endpoint: Some("https://api.anthropic.com".to_string()),
+            invocation_id: Some("inv-abc-123".to_string()),
+        };
+        let governed =
+            persist_review_artifact_with_identity(&root_governed, &target, &report, &identity)
+                .expect("persist governed");
+        let governed_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&governed.json_path).expect("governed json"),
+        )
+        .expect("governed artifact is JSON");
+        assert_eq!(
+            governed_json.get("resolved_provider").and_then(serde_json::Value::as_str),
+            Some("anthropic")
+        );
+        assert_eq!(
+            governed_json.get("resolved_model").and_then(serde_json::Value::as_str),
+            Some("claude-sonnet-4-6")
+        );
+        assert_eq!(
+            governed_json.get("invocation_id").and_then(serde_json::Value::as_str),
+            Some("inv-abc-123"),
+            "a caller-minted invocation id must be echoed into the artifact verbatim"
+        );
+
+        // A provider without a base-URL accessor: the endpoint is absent AND the gap
+        // is named, so a consumer never has to infer a missing observation from
+        // silence.
+        let gap_identity = ReviewInvocationIdentity {
+            provider: Some("openai".to_string()),
+            model: Some("gpt-4o".to_string()),
+            resolved_endpoint: None,
+            invocation_id: None,
+        };
+        let gapped =
+            persist_review_artifact_with_identity(&root_gapped, &target, &report, &gap_identity)
+                .expect("persist gapped");
+        let gapped_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&gapped.json_path).expect("gapped json"))
+                .expect("gapped artifact is JSON");
+        assert!(gapped_json.get("resolved_endpoint").is_none());
+        assert_eq!(
+            gapped_json.get("identity_evidence_gap").and_then(serde_json::Value::as_str),
+            Some(IDENTITY_GAP_NO_ENDPOINT_ACCESSOR),
+            "an unobservable endpoint must be named as a gap, not silently omitted"
+        );
     }
 
     #[test]

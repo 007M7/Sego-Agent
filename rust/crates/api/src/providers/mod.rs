@@ -148,6 +148,21 @@ pub fn resolve_model_alias(model: &str) -> String {
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
 }
 
+/// Whether a model name belongs to the `OpenAI` family.
+///
+/// Deliberately narrow: only shapes `OpenAI` actually publishes are accepted. A
+/// name that does not match falls through to `None`, which the governed plugin
+/// path turns into an explicit `unknown_model` failure rather than a silent
+/// route. This closes the gap where `gpt-*` had no branch at all and therefore
+/// fell through to environment-variable priority.
+fn is_openai_family(model: &str) -> bool {
+    model.starts_with("gpt-")
+        || model.starts_with("chatgpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+}
+
 #[must_use]
 pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     let canonical = resolve_model_alias(model);
@@ -173,6 +188,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "DEEPSEEK_API_KEY",
             base_url_env: "DEEPSEEK_BASE_URL",
             default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+        });
+    }
+    if is_openai_family(&canonical) {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
         });
     }
     None
@@ -210,7 +233,10 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind};
+    use super::{
+        detect_provider_kind, max_tokens_for_model, metadata_for_model, resolve_model_alias,
+        ProviderKind,
+    };
 
     #[test]
     fn resolves_grok_aliases() {
@@ -225,6 +251,28 @@ mod tests {
         assert_eq!(detect_provider_kind("claude-sonnet-4-6"), ProviderKind::Anthropic);
         assert_eq!(detect_provider_kind("deepseek-v4-flash"), ProviderKind::DeepSeek);
         assert_eq!(detect_provider_kind("deepseek-v4-pro"), ProviderKind::DeepSeek);
+    }
+
+    #[test]
+    fn detects_openai_family_models() {
+        assert_eq!(detect_provider_kind("gpt-4o"), ProviderKind::OpenAi);
+        assert_eq!(detect_provider_kind("gpt-5-turbo"), ProviderKind::OpenAi);
+        assert_eq!(detect_provider_kind("chatgpt-4o-latest"), ProviderKind::OpenAi);
+        assert_eq!(detect_provider_kind("o3-mini"), ProviderKind::OpenAi);
+        assert_eq!(detect_provider_kind("o4-mini"), ProviderKind::OpenAi);
+
+        let metadata = metadata_for_model("gpt-4o").expect("openai family should resolve");
+        assert_eq!(metadata.provider, ProviderKind::OpenAi);
+        assert_eq!(metadata.auth_env, "OPENAI_API_KEY");
+        assert_eq!(metadata.base_url_env, "OPENAI_BASE_URL");
+    }
+
+    #[test]
+    fn leaves_unrecognised_model_names_unknown() {
+        // No family branch: callers must fail explicitly instead of guessing.
+        assert!(metadata_for_model("mystery-model").is_none());
+        assert!(metadata_for_model("o").is_none());
+        assert!(metadata_for_model("gpt").is_none());
     }
 
     #[test]

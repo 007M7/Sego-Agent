@@ -104,20 +104,30 @@ When a user responds to a finding, keep the disposition explicit:
 
 ```text
 Finding: <finding id or title>
-Disposition: confirmed | false_positive | accepted_risk | deferred
+Disposition: open | acknowledged | fixed | accepted_risk | false_positive | ignored
 Reason: <short explanation>
 Next action: <fix now | add test | document risk | defer to ticket>
 Owner: <optional>
 ```
 
-Suggested meanings:
+Accepted values are exactly the ones `ReviewFindingStatus::parse` recognises
+(`runtime/src/code_review/report.rs:697-711`). The alias spellings `ack`, `resolved`,
+`accepted-risk`, `risk_accepted`, `accept-risk`, `false-positive`, `fp`, `ignore` are also
+accepted.
 
 | Disposition | Meaning |
 |---|---|
-| `confirmed` | The finding is valid and should be fixed or tested. |
+| `open` | Recorded; no decision yet. |
+| `acknowledged` | The finding is valid and should be fixed or tested. |
+| `fixed` | A fix was applied; pair it with a re-review of the same `diff_hash`. |
 | `false_positive` | The finding is not valid; record why. |
 | `accepted_risk` | The finding is valid, but the user intentionally accepts the risk. |
-| `deferred` | The finding is valid or unresolved, but action is moved to a later task. |
+| `ignored` | Dismissed without action; record why. |
+
+Two words recommended by earlier revisions of this guide are **not** accepted by the
+implementation: `confirmed` and `deferred`. Use `acknowledged` for `confirmed`. For
+`deferred`, also use `acknowledged` and state the deferral in `Reason` / `Next action` —
+the implementation has no dedicated deferral state.
 
 Do not silently ignore Sego findings. If the user decides not to fix one, record the reason.
 

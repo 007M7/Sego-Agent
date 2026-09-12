@@ -2,7 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/007M7/Sego-Agent/blob/main/schema/sidecar-request-response.schema.json",
   "title": "Sego Sidecar Request / Response",
-  "description": "Minimal stable envelope for sidecar <-> engine communication via stdin/stdout JSON. This is a placeholder for Cycle 9 C (sidecar skill PoC); fields will be refined during PoC. Aligned with Codex D-B-3: define minimal stable envelope now, elaborate later.",
+  "x-contract-id": "sego.sidecar.envelope",
+  "x-contract-revision": 1,
+  "x-contract-ratified": "2026-09-12",
+  "x-contract-note": "RATIFIED (cross-window technical ratification only). NOT Founder or user acceptance. NOT product-release approval. First recorded revision: revisions were not tracked before 2026-09-12, so each schema starts at revision 1; this marker lets a consumer pin and diff the contract source (contract changes land here, not only in the implementation).",
+  "description": "The chosen public contract for the governed sidecar path (envelope in via stdin, envelope out via stdout as JSON). Ratified by the consuming side on 2026-09-12 together with the sidecar envelope alignment; supersedes the earlier self-described 'PoC placeholder' wording. The 2026-09-12 rollout hold on `parse_status: \"no_diff\"` was lifted the same day, once the consuming mapper accepted that value and mapped it to Unverified + Missing coverage (see $defs.parse_status).",
   "oneOf": [
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/success_response" },
@@ -20,7 +24,13 @@
     },
     "parse_status": {
       "type": "string",
-      "enum": ["structured", "fallback_raw_text"]
+      "description": "Outcome of review-output parsing. The first three values come from ReviewParseStatus (runtime/src/code_review/report.rs:504-508). 'no_diff' is the sidecar envelope's own signal that the selected scope produced no reviewable diff, so no parsing was attempted. EMITTED as of 2026-09-12, after the consuming mapper began accepting it and mapping it to Unverified + Missing coverage. Read it as 'no work to review': not a checker failure, and emphatically not a pass.",
+      "enum": [
+        "structured",
+        "fallback_raw_text",
+        "parse_attempted_but_failed",
+        "no_diff"
+      ]
     },
     "finding": {
       "type": "object",
@@ -59,23 +69,32 @@
         },
         "options": {
           "type": ["object", "null"],
-          "description": "Optional review options (include_safety_lock, model, etc.). Refined in C.",
+          "description": "Optional review options. Unknown keys are rejected rather than accepted as no-ops: the implementation refuses any option it does not read. The previously documented include_safety_lock was never implemented and has been removed.",
           "properties": {
-            "include_safety_lock": { "type": "boolean", "default": true },
-            "model": { "type": ["string", "null"] }
+            "model": { "type": ["string", "null"] },
+            "provider": {
+              "type": ["string", "null"],
+              "description": "Requested provider for the governed plugin path. When supplied, 'model' is required and its provider family must match; when omitted, the family is derived from the model name. A name outside this enum fails with error code unknown_provider; an undeterminable model family fails with unknown_model instead of falling back to environment-variable priority; a contradicting pair fails with provider_model_conflict.",
+              "enum": ["anthropic", "claude", "deepseek", "openai", "xai", "grok", null]
+            }
           },
-          "additionalProperties": true
+          "additionalProperties": false
         },
         "context": {
           "type": ["object", "null"],
-          "description": "Optional context (user_intent, diff_hash). Refined in C.",
+          "description": "Optional request context. diff_hash is verified by the implementation; invocation_id is carried through opaquely for execution binding. The previously documented user_intent was never read by any code path and has been removed; unknown keys are rejected.",
           "properties": {
-            "user_intent": { "type": "string" },
-            "diff_hash": { "type": "string" }
+            "diff_hash": { "type": "string" },
+            "invocation_id": {
+              "type": ["string", "null"],
+              "maxLength": 128,
+              "description": "Caller-minted persistent invocation identity (for example an EgoPulse verification/checker execution id). Sego treats it as opaque: it does not parse or interpret it, and never derives execution idempotency from it. Echoed back in the response and persisted on the artifact."
+            }
           },
-          "additionalProperties": true
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "success_response": {
       "type": "object",
@@ -88,20 +107,52 @@
           "const": "ok"
         },
         "review_id": {
-          "type": "string",
-          "description": "Review artifact identifier."
+          "type": ["string", "null"],
+          "description": "Review artifact identifier. Null when the selected scope contained no reviewable diff, in which case nothing was persisted."
         },
         "diff_hash": {
-          "type": "string",
-          "description": "Hash of the reviewed diff."
+          "type": ["string", "null"],
+          "description": "Hash of the reviewed diff. Null when there was no reviewable diff."
         },
         "artifact_path": {
-          "type": "string",
-          "description": "Path to the persisted review artifact JSON."
+          "type": ["string", "null"],
+          "description": "Path to the persisted review artifact JSON. Null when there was no reviewable diff."
+        },
+        "parse_status": { "$ref": "#/$defs/parse_status" },
+        "resolved_provider": {
+          "type": ["string", "null"],
+          "description": "Provider Sego resolved for this invocation, derived deterministically from the model name by the same function the model client uses. This is Sego's routing decision, NOT a provider-side attestation, and it does not prove which model the provider executed. Null when routing was not reached (error envelopes and the no-diff shortcut)."
+        },
+        "resolved_model": {
+          "type": ["string", "null"],
+          "description": "Model Sego sent the request for. Same caveat as resolved_provider: it records the route taken, not what the remote provider actually executed."
+        },
+        "invocation_id": {
+          "type": ["string", "null"],
+          "description": "Caller-minted invocation identity, echoed verbatim from context.invocation_id. Null when the caller supplied none. This is the binding an execution can use to reach the artifact it produced; review_id is Sego's own artifact identity and is NOT an invocation id."
+        },
+        "resolved_endpoint": {
+          "type": ["string", "null"],
+          "description": "Endpoint Sego resolved for this invocation, taken from the same base-URL accessor the model client uses. Null when that provider has no accessor: the value is omitted rather than guessed, and identity_evidence_gap names the gap."
+        },
+        "identity_evidence": {
+          "type": ["string", "null"],
+          "description": "Strength of the identity evidence above. Currently the single value 'self_reported_resolution': Sego resolved the route itself and confirmed it against the wire, which is NOT a provider-side attestation. A future 'provider_attested' value would be a contract extension, deliberately not declared here while Sego cannot produce it.",
+          "enum": ["self_reported_resolution", null]
+        },
+        "identity_evidence_gap": {
+          "type": ["string", "null"],
+          "description": "A named dimension Sego cannot observe, so a consumer never infers an evidence gap from a missing field. Currently expected to be null: every routable provider has a base-URL accessor. A non-null value names a provider without one. The field is kept deliberately — the capability to express a gap matters more than the absence of one today, and removing it would be another contract-visible change.",
+          "enum": ["no_endpoint_accessor_for_provider", null]
+        },
+        "findings": {
+          "type": "array",
+          "description": "Flat findings list. This is the shape the current implementation emits.",
+          "items": { "$ref": "#/$defs/finding" }
         },
         "report": {
           "type": "object",
-          "description": "Inline review report (findings + raw_text + parse_status).",
+          "description": "Reserved nested form (findings + parse_status). The current implementation emits the flat top-level 'findings' + 'parse_status' instead; consumers must not require this object.",
           "properties": {
             "findings": {
               "type": "array",
@@ -110,10 +161,9 @@
             "parse_status": { "$ref": "#/$defs/parse_status" }
           }
         },
-        "findings": {
-          "type": "array",
-          "description": "Flat findings list (alternative to report).",
-          "items": { "$ref": "#/$defs/finding" }
+        "error": {
+          "type": "null",
+          "description": "Always null in a success envelope; present so both envelopes share one flat shape."
         },
         "invest_judgment": {
           "type": ["object", "null"],
@@ -138,6 +188,17 @@
           "type": "string",
           "const": "error"
         },
+        "review_id": { "type": "null", "description": "Always null in an error envelope." },
+        "diff_hash": { "type": "null", "description": "Always null in an error envelope." },
+        "artifact_path": { "type": "null", "description": "Always null in an error envelope." },
+        "findings": { "type": "null", "description": "Always null in an error envelope." },
+        "parse_status": { "type": "null", "description": "Always null in an error envelope." },
+        "resolved_provider": { "type": "null", "description": "Always null in an error envelope." },
+        "resolved_model": { "type": "null", "description": "Always null in an error envelope." },
+        "invocation_id": { "type": "null", "description": "Always null in an error envelope." },
+        "resolved_endpoint": { "type": "null", "description": "Always null in an error envelope." },
+        "identity_evidence": { "type": "null", "description": "Always null in an error envelope." },
+        "identity_evidence_gap": { "type": "null", "description": "Always null in an error envelope." },
         "error": {
           "type": "object",
           "properties": {

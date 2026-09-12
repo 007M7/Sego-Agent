@@ -500,11 +500,18 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> std::path::PathBuf {
+        // A monotonic counter is required, not just a timestamp: the system clock is
+        // coarse enough on some platforms that two tests calling this inside the same
+        // tick received the *same* path, shared one temp root, and then failed when one
+        // test's `remove_dir_all` deleted the directory another test was still using.
+        // That produced an intermittent, misleading failure in this suite.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("runtime-prompt-{nanos}"))
+        std::env::temp_dir().join(format!("runtime-prompt-{nanos}-{unique}"))
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -555,7 +562,9 @@ mod tests {
                 "nested instructions"
             ]
         );
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -572,7 +581,9 @@ mod tests {
             normalize_instruction_content(&context.instruction_files[0].content),
             "same rules"
         );
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -617,7 +628,9 @@ mod tests {
         assert!(status.contains("?? tracked.txt"));
         assert!(context.git_diff.is_none());
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -661,7 +674,9 @@ mod tests {
         assert!(diff.contains("Unstaged changes:"));
         assert!(diff.contains("tracked.txt"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -701,7 +716,9 @@ mod tests {
 
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -730,7 +747,9 @@ mod tests {
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -770,7 +789,9 @@ mod tests {
             render_instruction_files(&context.instruction_files).contains("instruction markdown")
         );
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never be able to manufacture a failure: a leftover temp dir is
+        // untidy, but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

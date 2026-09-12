@@ -1049,11 +1049,18 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> std::path::PathBuf {
+        // A monotonic counter is required, not just a timestamp: the system clock is
+        // coarse enough on some platforms that two tests calling this inside the same
+        // tick received the *same* path, shared one temp root, and then failed when one
+        // test's cleanup deleted the directory another test was still using. That
+        // produced intermittent, misleading failures in this suite.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("runtime-config-{nanos}"))
+        std::env::temp_dir().join(format!("runtime-config-{nanos}-{unique}"))
     }
 
     #[test]
@@ -1069,7 +1076,9 @@ mod tests {
         assert!(error.to_string().contains("top-level settings value must be a JSON object"));
 
         if root.exists() {
-            fs::remove_dir_all(root).expect("cleanup temp dir");
+            // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+            // but a panic here reads as a broken test rather than a broken cleanup.
+            let _ = fs::remove_dir_all(root);
         }
     }
 
@@ -1132,7 +1141,9 @@ mod tests {
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1165,7 +1176,9 @@ mod tests {
         assert_eq!(loaded.sandbox().filesystem_mode, Some(FilesystemIsolationMode::AllowList));
         assert_eq!(loaded.sandbox().allowed_mounts, vec!["logs", "tmp/cache"]);
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1245,7 +1258,9 @@ mod tests {
         assert_eq!(oauth.callback_port, Some(54_545));
         assert_eq!(oauth.scopes, vec!["org:read", "user:write"]);
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1278,7 +1293,9 @@ mod tests {
             other => panic!("expected http config, got {other:?}"),
         }
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1305,7 +1322,9 @@ mod tests {
         assert_eq!(loaded.plugins().enabled_plugins().get("tool-guard@builtin"), Some(&true));
         assert_eq!(loaded.plugins().enabled_plugins().get("sample-plugin@external"), Some(&false));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1340,7 +1359,9 @@ mod tests {
         assert_eq!(loaded.plugins().registry_path(), Some("plugin-cache/installed.json"));
         assert_eq!(loaded.plugins().bundled_root(), Some("./bundled-plugins"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1363,7 +1384,9 @@ mod tests {
         // then
         assert!(error.to_string().contains("mcpServers.broken: missing string field url"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1385,7 +1408,9 @@ mod tests {
         assert_eq!(loaded.permission_mode(), None);
         assert_eq!(loaded.plugins().enabled_plugins().len(), 0);
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1441,7 +1466,9 @@ mod tests {
         )));
         assert!(!rendered.contains("merged settings.hooks"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
+        // but a panic here reads as a broken test rather than a broken cleanup.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
