@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/007M7/Sego-Agent/blob/main/schema/review-artifact.schema.json",
   "title": "Sego Review Artifact",
+  "x-contract-id": "sego.review.artifact",
+  "x-contract-revision": 1,
+  "x-contract-ratified": "2026-09-12",
+  "x-contract-note": "RATIFIED (cross-window technical ratification only). NOT Founder or user acceptance. NOT product-release approval. First recorded revision: revisions were not tracked before 2026-09-12, so each schema starts at revision 1; this marker lets a consumer pin and diff the contract source (contract changes land here, not only in the implementation).",
   "description": "The persisted review artifact written to .sego/reviews/{id}.json. This is the canonical on-disk representation produced by Sego's code review workflow. Aligned with Rust struct ReviewArtifact in runtime/src/code_review/report.rs.",
   "type": "object",
   "required": [
@@ -74,6 +78,35 @@
       "type": "string",
       "description": "Raw model output text before parsing into findings."
     },
+    "evidence_coverage": {
+      "type": ["object", "null"],
+      "description": "What the review actually captured, per file. Current builds emit this field but it was previously undeclared here. Consumers deciding whether a 'zero findings' result is trustworthy must read it: an empty findings list with incomplete capture is not evidence that the change is clean. Aligned with ReviewEvidenceCoverage (runtime/src/code_review/report.rs:61-71).",
+      "properties": {
+        "scope_kind": { "type": "string", "enum": ["diff", "full_repo"] },
+        "file_tree_count": { "type": "integer", "minimum": 0 },
+        "observed_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "listed", "content_status"],
+            "properties": {
+              "path": { "type": "string" },
+              "listed": { "type": "boolean" },
+              "content_status": {
+                "type": "string",
+                "enum": ["not_captured", "full", "truncated", "skipped_large", "unreadable"]
+              },
+              "captured_line_count": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
+        },
+        "captured_file_count": { "type": "integer", "minimum": 0 },
+        "truncated_file_count": { "type": "integer", "minimum": 0 },
+        "not_captured_file_count": { "type": "integer", "minimum": 0 },
+        "skipped_large_file_count": { "type": "integer", "minimum": 0 },
+        "unreadable_file_count": { "type": "integer", "minimum": 0 }
+      }
+    },
     "reviewer": {
       "type": "string",
       "description": "Local trust metadata identifying the review engine that produced this artifact (for example, sego). Optional for older artifacts. This is not a cryptographic signature."
@@ -85,6 +118,32 @@
     "review_mode": {
       "type": "string",
       "description": "Review mode used to produce the artifact, for example model_code_review. Optional for older artifacts."
+    },
+    "resolved_provider": {
+      "type": ["string", "null"],
+      "description": "Governed plugin path only: the provider Sego resolved for the invocation that produced this artifact. Sego's routing decision derived from the model name, NOT a provider-side attestation, and not proof of which model the provider executed. Absent on artifacts written by paths that do not record a route."
+    },
+    "resolved_model": {
+      "type": ["string", "null"],
+      "description": "Governed plugin path only: the model Sego sent the request for. Same caveat as resolved_provider."
+    },
+    "invocation_id": {
+      "type": ["string", "null"],
+      "description": "Governed plugin path only: the caller-minted invocation identity this artifact was produced for, carried through opaquely. Absent when the caller supplied none. Not an execution idempotency key, and not a substitute for Sego's own review id."
+    },
+    "resolved_endpoint": {
+      "type": ["string", "null"],
+      "description": "Governed plugin path only: the endpoint Sego resolved for this invocation, from the same accessor the model client uses. Absent when the provider has no accessor; identity_evidence_gap then names that gap."
+    },
+    "identity_evidence": {
+      "type": ["string", "null"],
+      "description": "Governed plugin path only: strength of the identity evidence. Currently always 'self_reported_resolution' — Sego's own routing decision, confirmed against the wire, NOT a provider-side attestation.",
+      "enum": ["self_reported_resolution", null]
+    },
+    "identity_evidence_gap": {
+      "type": ["string", "null"],
+      "description": "A named dimension Sego cannot observe, so a consumer never infers an evidence gap from a missing field. Currently expected to be null: every routable provider has a base-URL accessor. A non-null value names a provider without one. The field is kept deliberately — the capability to express a gap matters more than the absence of one today, and removing it would be another contract-visible change.",
+      "enum": ["no_endpoint_accessor_for_provider", null]
     },
     "parse_error": {
       "type": "string",
@@ -196,13 +255,15 @@
     },
     "evidence_status": {
       "type": "string",
-      "description": "Evidence gate status attached by Sego when deterministic validation was possible.",
+      "description": "Evidence gate status attached by Sego when deterministic validation was possible. These are the seven values EvidenceStatus can serialize (runtime/src/code_review/report.rs:17-32); content_not_captured and content_truncated were missing here even though the implementation already emitted them, so artifacts carrying them failed this schema.",
       "enum": [
         "verified",
         "unverified_file",
         "unverified_line",
         "unverified_dependency",
-        "scope_not_captured"
+        "scope_not_captured",
+        "content_not_captured",
+        "content_truncated"
       ]
     }
   }

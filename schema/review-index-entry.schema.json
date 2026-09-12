@@ -2,7 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/007M7/Sego-Agent/blob/main/schema/review-index-entry.schema.json",
   "title": "Sego Review Index Entry",
-  "description": "Append-only index entry for .sego/reviews/index.jsonl. Each line is one ReviewIndexEntry. Aligned with Rust ReviewIndexEntry in runtime/src/code_review/report.rs. No schema_version (Codex D-B-2: index stays simple/stable).",
+  "x-contract-id": "sego.review.index-entry",
+  "x-contract-revision": 1,
+  "x-contract-ratified": "2026-09-12",
+  "x-contract-note": "RATIFIED (cross-window technical ratification only). NOT Founder or user acceptance. NOT product-release approval. First recorded revision: revisions were not tracked before 2026-09-12, so each schema starts at revision 1; this marker lets a consumer pin and diff the contract source (contract changes land here, not only in the implementation).",
+  "description": "Append-only index entry for .sego/reviews/index.jsonl. Each line is one ReviewIndexEntry. Aligned with Rust ReviewIndexEntry in runtime/src/code_review/report.rs. No schema_version (Codex D-B-2: index stays simple/stable). This file's root $ref targets review_index_entry, so finding_status entries validate through #/$defs/finding_status_entry.",
   "$ref": "#/$defs/review_index_entry",
   "$defs": {
     "severity": {
@@ -25,11 +29,13 @@
     },
     "finding_status": {
       "type": "string",
-      "description": "Lifecycle status of a finding (aligned with Rust ReviewFindingStatus).",
+      "description": "Lifecycle status of a finding (aligned with Rust ReviewFindingStatus). All six values the implementation serializes are listed; accepted_risk and false_positive were previously missing here even though they are emitted and are the two statuses that require an explanatory note.",
       "enum": [
         "open",
         "acknowledged",
         "fixed",
+        "accepted_risk",
+        "false_positive",
         "ignored"
       ]
     },
