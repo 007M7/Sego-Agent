@@ -1,3 +1,16 @@
+// NOT COMPILED — this file is NOT part of the `sego` binary.
+//
+// There is no `mod args;` declaration in `main.rs`, and this crate does not
+// depend on `clap` at all (see the `use clap::...` below), so this file cannot
+// even compile as part of the crate. The real CLI entry point is `src/main.rs`,
+// which uses a hand-rolled `parse_args` and the `CliAction` enum.
+//
+// It is kept on disk as a design sketch only. Do NOT treat this file as the CLI
+// surface or as evidence of what the CLI supports: an external reviewer has
+// already mis-described the CLI by reading it. Reviving the clap-based parser
+// would be a deliberate migration (add `mod args;`, add the `clap` dependency,
+// and route dispatch through it) — not an edit to this file alone.
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};

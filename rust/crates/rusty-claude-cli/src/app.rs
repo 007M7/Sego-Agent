@@ -1,3 +1,14 @@
+// NOT COMPILED — this file is NOT part of the `sego` binary.
+//
+// There is no `mod app;` declaration in `main.rs`, so nothing here is compiled or
+// reachable. It also imports `crate::args`, a module that does not exist, so it
+// could not compile even if it were declared. The real CLI entry point is
+// `src/main.rs` (hand-rolled `parse_args` + `CliAction`).
+//
+// It is kept on disk as a design sketch only. Do NOT treat this file as the CLI
+// surface: an external reviewer has already mis-described the CLI by reading
+// `args.rs` / `app.rs` instead of `main.rs`.
+
 use std::io::{self, Write};
 use std::path::PathBuf;
 
