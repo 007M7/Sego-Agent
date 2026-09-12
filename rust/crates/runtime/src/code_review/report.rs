@@ -623,7 +623,7 @@ pub struct PersistedReviewArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct ReviewArtifact {
+struct SegoReviewArtifact {
     schema_version: u32,
     id: String,
     created_at_epoch_seconds: u64,
@@ -826,7 +826,7 @@ pub fn persist_review_artifact_with_identity(
     let created_at_epoch_seconds = current_epoch_seconds();
     let id = format!("review-{created_at_epoch_seconds}-{}", short_hash(&diff_hash));
 
-    let artifact = ReviewArtifact {
+    let artifact = SegoReviewArtifact {
         schema_version: 1,
         id: id.clone(),
         created_at_epoch_seconds,
@@ -900,7 +900,7 @@ pub fn persist_review_artifact_with_identity(
 fn write_new_file(
     path: &Path,
     contents: &str,
-    artifact: &ReviewArtifact,
+    artifact: &SegoReviewArtifact,
     workspace_root: &Path,
 ) -> std::io::Result<()> {
     use std::io::Write as _;
@@ -1047,7 +1047,7 @@ pub fn review_diff_hash(target: &ReviewTarget) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> String {
+fn render_review_markdown(artifact: &SegoReviewArtifact, report: &ReviewReport) -> String {
     let mut output = String::new();
     output.push_str("# Sego Review Report\n\n");
     let _ = writeln!(output, "- ID: `{}`", artifact.id);
@@ -1163,7 +1163,7 @@ fn render_review_markdown(artifact: &ReviewArtifact, report: &ReviewReport) -> S
 
 fn append_review_index(
     index_path: &Path,
-    artifact: &ReviewArtifact,
+    artifact: &SegoReviewArtifact,
     json_path: &Path,
     markdown_path: &Path,
 ) -> std::io::Result<()> {
@@ -1336,9 +1336,9 @@ mod tests {
         build_evidence_coverage, evaluate_evidence_gate, latest_review_finding_statuses,
         load_review_finding_statuses, load_review_index, persist_review_artifact,
         persist_review_artifact_with_identity, record_review_finding_status, review_diff_hash,
-        EvidenceStatus, ReviewArtifact, ReviewContentStatus, ReviewEvidenceScopeKind,
-        ReviewFinding, ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry,
-        ReviewInvocationIdentity, ReviewParseStatus, ReviewReport, IDENTITY_EVIDENCE_SELF_REPORTED,
+        EvidenceStatus, ReviewContentStatus, ReviewEvidenceScopeKind, ReviewFinding,
+        ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry, ReviewInvocationIdentity,
+        ReviewParseStatus, ReviewReport, SegoReviewArtifact, IDENTITY_EVIDENCE_SELF_REPORTED,
         IDENTITY_GAP_NO_ENDPOINT_ACCESSOR,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
@@ -1379,9 +1379,9 @@ mod tests {
 
     #[test]
     fn review_artifact_round_trips_through_json() {
-        // Golden fixture: construct a ReviewArtifact with a finding, serialize,
+        // Golden fixture: construct a SegoReviewArtifact with a finding, serialize,
         // deserialize, and verify every field survives the round-trip.
-        let artifact = ReviewArtifact {
+        let artifact = SegoReviewArtifact {
             schema_version: 1,
             id: "rev-test-001".to_string(),
             created_at_epoch_seconds: 1_719_849_600,
@@ -1420,7 +1420,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&artifact).expect("serialize artifact");
-        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
+        let parsed: SegoReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
 
         // Field-by-field round-trip verification.
         assert_eq!(parsed.schema_version, 1);
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[test]
     fn review_artifact_with_no_findings_round_trips() {
-        let artifact = ReviewArtifact {
+        let artifact = SegoReviewArtifact {
             schema_version: 1,
             id: "rev-test-002".to_string(),
             created_at_epoch_seconds: 1_719_849_600,
@@ -1488,7 +1488,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&artifact).expect("serialize");
-        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize");
+        let parsed: SegoReviewArtifact = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(parsed.finding_count, 0);
         assert!(parsed.findings.is_empty());
@@ -1955,7 +1955,8 @@ mod tests {
             }],
             "raw_text": ""
         }"#;
-        let parsed: ReviewArtifact = serde_json::from_str(json).expect("deserialize old artifact");
+        let parsed: SegoReviewArtifact =
+            serde_json::from_str(json).expect("deserialize old artifact");
         assert_eq!(parsed.findings.len(), 1);
         assert!(parsed.findings[0].evidence_status.is_none());
         assert!(parsed.evidence_coverage.is_none());
@@ -2310,7 +2311,7 @@ mod tests {
         let report = ReviewReport::from_model_output("No findings.");
         let artifact = persist_review_artifact(&root, &target, &report).expect("persist");
         let json = std::fs::read_to_string(&artifact.json_path).expect("read json");
-        let parsed: ReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
+        let parsed: SegoReviewArtifact = serde_json::from_str(&json).expect("deserialize artifact");
 
         assert!(parsed.evidence_coverage.is_some());
         assert!(json.contains("evidence_coverage"));
