@@ -14,7 +14,7 @@ case "$OS" in
     *) RELEASE_BINARY="sego" ;;
 esac
 
-echo "?? Sego Agent Installer"
+echo "🦞 Sego Agent Installer"
 echo ""
 
 mkdir -p "$INSTALL_DIR"

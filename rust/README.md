@@ -218,18 +218,18 @@ See [`USAGE.md`](USAGE.md) for examples covering interactive use, JSON automatio
 
 ```
 rust/
-??? Cargo.toml              # Workspace root
-??? Cargo.lock
-??? crates/
-    ??? api/                # Anthropic API client + SSE streaming
-    ??? commands/           # Shared slash-command registry
-    ??? compat-harness/     # TS manifest extraction harness
-    ??? mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
-    ??? plugins/            # Plugin registry and hook wiring primitives
-    ??? runtime/            # Session, config, permissions, MCP, prompts
-    ??? rusty-claude-cli/   # Main CLI binary (`sego`)
-    ??? telemetry/          # Session tracing and usage telemetry types
-    ??? tools/              # Built-in tool implementations
+├── Cargo.toml              # Workspace root
+├── Cargo.lock
+└── crates/
+    ├── api/                # Anthropic API client + SSE streaming
+    ├── commands/           # Shared slash-command registry
+    ├── compat-harness/     # TS manifest extraction harness
+    ├── mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+    ├── plugins/            # Plugin registry and hook wiring primitives
+    ├── runtime/            # Session, config, permissions, MCP, prompts
+    ├── rusty-claude-cli/   # Main CLI binary (`sego`)
+    ├── telemetry/          # Session tracing and usage telemetry types
+    └── tools/              # Built-in tool implementations
 ```
 
 ### Crate Responsibilities

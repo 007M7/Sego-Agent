@@ -386,9 +386,9 @@ See [SKILL.md](SKILL.md) for the full response schema. Key fields:
 
 If the Sego binary is not found, the script outputs a structured error JSON to stderr and exits with code 1 — it does not crash silently.
 
-## ?? AI ?????Sidecar skill PoC?
+## 接入 AI 编码工具（Sidecar skill PoC）
 
-### ???? skill
+### 一键安装 skill
 
 ```bash
 # Mac / Linux
@@ -400,21 +400,21 @@ powershell -File skills\sego-review\install.ps1
 
 调用任何兼容 SKILL.md 协议的 AI 编码工具，让它发现并调用该 skill。
 
-### ?? sidecar ??
+### 手动 sidecar 调用
 
 ```bash
 echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' | sego sidecar review
 ```
 
-- stdout ??? JSON?findings + artifact_path?
-- stderr ??????
-- exit code?0 ???1 ??
+- stdout 返回纯 JSON（findings + artifact_path）
+- stderr 留给诊断日志
+- exit code：0 成功，1 错误
 
-### ?????PoC?
+### 已知限制（PoC）
 
-- ??? `review` action?verify/export ?????
-- Cursor ?? `.cursorrules` ?????????
-- ???????early integration??????? IDE ????
+- 仅支持 `review` action（verify/export 后续扩展）
+- Cursor 通过 `.cursorrules` 适配，不是原生扩展
+- 这是早期集成（early integration），不承诺完整 IDE 插件生态
 
 
 ## Windows Stability (v0.1.7)
