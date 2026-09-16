@@ -232,7 +232,13 @@ mod tests {
 
     #[test]
     fn allow_mode_permits_everything() {
-        let enforcer = make_enforcer(PermissionMode::Allow);
+        // `Allow` means "no per-tool prompting", not "authorize tools the
+        // registry has never heard of": requirements must still be declared.
+        let policy = PermissionPolicy::new(PermissionMode::Allow)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("edit_file", PermissionMode::WorkspaceWrite);
+        let enforcer = PermissionEnforcer::new(policy);
         assert!(enforcer.is_allowed("bash", ""));
         assert!(enforcer.is_allowed("write_file", ""));
         assert!(enforcer.is_allowed("edit_file", ""));
@@ -241,6 +247,8 @@ mod tests {
             EnforcementResult::Allowed
         );
         assert_eq!(enforcer.check_bash("rm -rf /"), EnforcementResult::Allowed);
+        // An undeclared tool is denied even in the most permissive mode.
+        assert!(!enforcer.is_allowed("not_a_registered_tool", ""));
     }
 
     #[test]
