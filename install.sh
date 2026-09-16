@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sego Agent ? Linux/macOS one-liner installer
+# Sego Agent — Linux/macOS one-liner installer
 # Run: curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
 
 set -e

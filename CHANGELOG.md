@@ -2,6 +2,8 @@
 
 All notable changes to the Sego Agent project will be documented in this file.
 
+Dates in this file use the maintainer's local timezone (UTC+08:00). A release whose heading reads one date may therefore appear under the previous date on GitHub, which timestamps a release in UTC — `v0.1.9` is `2026-08-24 01:18 +08:00`, i.e. `2026-08-23 17:18Z`. Both refer to the same moment.
+
 ## [Unreleased]
 
 ### Added

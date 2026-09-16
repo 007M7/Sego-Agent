@@ -8,7 +8,18 @@ For what is already shipped today, see the [CHANGELOG](CHANGELOG.md) and the [la
 
 ---
 
-## Recently Shipped (v0.1.8)
+## Recently Shipped (v0.1.9)
+
+The `v0.1.9` release focused on review proof surfaces, task-level acceptance, and safer defaults:
+
+- **Sego Review Card MVP** — `sego review card`, `sego review card latest`, and `sego review card <review-id>` render a local review JSON artifact into an escaped, offline HTML card, update `latest-card.html`, and print a compact Green/Yellow/Red summary. The card is a review proof, not release approval or security certification.
+- **Task acceptance record** — a locale-neutral `AcceptanceRecord` aggregates node, task-end, and full-review events, remediation trace, unresolved findings, and evidence links; Chinese/English task-box and compact HTML display adapters localize Sego-owned copy while preserving original artifact evidence.
+- **Machine-readable latest summary** — `sego review show latest --json` and `/review show latest --json` print a stable summary of the latest review proof; the no-review case returns a stable JSON shape or clear guidance.
+- **Agent-callable review proof** — the public review artifact contract, agent handoff workflow, and integration templates are documented so AI coding agents can call Sego after generating code and explain the resulting proof to users.
+- **Reviewer identity metadata** — new review artifacts include local trust metadata (`reviewer`, `engine_version`, `review_mode`). These are attribution/debug metadata, not cryptographic signatures or provenance attestations.
+- **Safer default** — a plain `sego` launch now starts read-only; write and command access require an explicit `--permission-mode`, `RUSTY_CLAUDE_PERMISSION_MODE`, or project config. This behaviour change shipped in v0.1.9 but was missing from the original release notes.
+
+## Previously Shipped (v0.1.8)
 
 The `v0.1.8` release focused on review reliability, diagnosability, and task-file safety:
 

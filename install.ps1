@@ -1,4 +1,4 @@
-# Sego Agent ? Windows one-liner installer (PowerShell)
+# Sego Agent — Windows one-liner installer (PowerShell)
 # Run: irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"

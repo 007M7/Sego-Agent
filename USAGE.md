@@ -26,7 +26,7 @@ The installer downloads the latest `sego.exe`, installs it to `~/sego`, adds it 
 ### Windows direct download
 
 - From [GitHub Releases](https://github.com/007M7/Sego-Agent/releases/latest): download `sego-windows.zip`, unzip it, and double-click `Sego.cmd`.
-- From GitHub **Code ? Download ZIP**: unzip the source package and double-click `start-sego-windows.cmd`. It bootstraps the latest release binary, creates the desktop shortcut, and starts Sego.
+- From GitHub **Code → Download ZIP**: unzip the source package and double-click `start-sego-windows.cmd`. It bootstraps the latest release binary, creates the desktop shortcut, and starts Sego.
 
 GitHub source ZIP files do not contain compiled binaries. Use `sego-windows.zip` for offline double-click usage.
 
@@ -119,9 +119,9 @@ Supported permission modes:
 
 Model aliases currently supported by the CLI:
 
-- `opus` ? `claude-opus-4-7`
-- `sonnet` ? `claude-sonnet-4-6`
-- `haiku` ? `claude-haiku-4-5`
+- `opus` → `claude-opus-4-7`
+- `sonnet` → `claude-sonnet-4-6`
+- `haiku` → `claude-haiku-4-5`
 
 ## Authentication
 
@@ -217,7 +217,7 @@ Use `workflow-review` and `learn` to analyze your AI coding workflows.
 ### What gets recorded automatically
 
 Every `sego` session records:
-- Lane Events: started ? ready ? running ? green/red ? finished
+- Lane Events: started → ready → running → green/red → finished
 - Failure classification (11 types) and recovery attempts
 - Green Contract level achieved
 - Efficiency scoring
@@ -322,11 +322,11 @@ echo '{"schema_version":1,"action":"review","cwd":"/project","scope":"staged"}' 
 - **PoC status**: only the `review` action is supported. stdout is reserved for pure JSON; diagnostics go to stderr.
 # sego-review skill
 
-AI coding engineering trust review ? a Sego sidecar skill package.
+AI coding engineering trust review — a Sego sidecar skill package.
 
 ## What it does
 
-After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, etc.), invoke this skill to get a structured review from Sego. Sego returns findings with severity, file, line, evidence, risk, and suggestion ? then persists a review artifact to `.sego/reviews/`.
+After you generate or modify code with any AI tool (Claude Code, Codex, Cursor, etc.), invoke this skill to get a structured review from Sego. Sego returns findings with severity, file, line, evidence, risk, and suggestion — then persists a review artifact to `.sego/reviews/`.
 
 ## Install
 
@@ -384,7 +384,7 @@ See [SKILL.md](SKILL.md) for the full response schema. Key fields:
 
 ## Graceful degradation
 
-If the Sego binary is not found, the script outputs a structured error JSON to stderr and exits with code 1 ? it does not crash silently.
+If the Sego binary is not found, the script outputs a structured error JSON to stderr and exits with code 1 — it does not crash silently.
 
 ## ?? AI ?????Sidecar skill PoC?
 
