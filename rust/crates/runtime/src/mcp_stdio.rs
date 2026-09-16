@@ -1377,10 +1377,10 @@ mod tests {
 
     use super::{
         allowed_inherited_env_key, apply_env, spawn_mcp_stdio_process,
-        unsupported_server_failed_server, JsonRpcId, JsonRpcRequest,
-        JsonRpcResponse, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
-        McpInitializeServerInfo, McpListToolsResult, McpReadResourceParams, McpReadResourceResult,
-        McpServerManager, McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
+        unsupported_server_failed_server, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+        McpInitializeClientInfo, McpInitializeParams, McpInitializeResult, McpInitializeServerInfo,
+        McpListToolsResult, McpReadResourceParams, McpReadResourceResult, McpServerManager,
+        McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
     };
     use crate::McpLifecyclePhase;
 
@@ -2759,7 +2759,9 @@ mod tests {
         let text = String::from_utf8_lossy(&output.stdout);
         let child_names: Vec<String> = text
             .lines()
-            .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim().to_ascii_uppercase()))
+            .filter_map(|line| {
+                line.split_once('=').map(|(name, _)| name.trim().to_ascii_uppercase())
+            })
             .filter(|name| !name.is_empty())
             .collect();
 

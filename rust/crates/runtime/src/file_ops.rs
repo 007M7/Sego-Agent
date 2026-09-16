@@ -731,7 +731,10 @@ mod tests {
         let traversal = format!("..{}escape.txt", std::path::MAIN_SEPARATOR);
         let error = write_file(&traversal, "nope").expect_err("../ traversal must be refused");
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-        assert!(!std::env::temp_dir().join("escape.txt").exists(), "traversal must not create a file");
+        assert!(
+            !std::env::temp_dir().join("escape.txt").exists(),
+            "traversal must not create a file"
+        );
 
         // A symlink inside the workspace pointing outside does not launder a
         // write: the parent is canonicalised before the boundary check.

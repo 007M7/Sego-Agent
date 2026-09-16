@@ -1,5 +1,10 @@
 name: Rust CI
 
+# Path filters are deliberately broad. An earlier filter matched only
+# `.github/workflows/rust-ci.yml` and `rust/**`, so a change to `schema/`,
+# the installers or the release workflow itself merged without running any
+# gate. Anything that can change what the binary does, what it promises in a
+# published contract, or how it is installed belongs in this list.
 on:
   push:
     branches:
@@ -7,14 +12,32 @@ on:
       - 'gaebal/**'
       - 'omx-issue-*'
     paths:
-      - .github/workflows/rust-ci.yml
+      - .github/workflows/**
       - rust/**
+      - schema/**
+      - skills/**
+      - packaging/**
+      - install.ps1
+      - install.sh
+      - start-sego-windows.cmd
+      - AGENTS.md
+      - CONTRIBUTING.md
+      - CHANGELOG.md
   pull_request:
     branches:
       - main
     paths:
-      - .github/workflows/rust-ci.yml
+      - .github/workflows/**
       - rust/**
+      - schema/**
+      - skills/**
+      - packaging/**
+      - install.ps1
+      - install.sh
+      - start-sego-windows.cmd
+      - AGENTS.md
+      - CONTRIBUTING.md
+      - CHANGELOG.md
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +50,12 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  # The toolchain is pinned rather than floating on `stable`: a release is
+  # built by whatever `stable` resolves to that day. Bump this deliberately.
+  RUST_TOOLCHAIN: '1.98.0'
+
+permissions:
+  contents: read
 
 jobs:
   fmt:
@@ -36,6 +65,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
@@ -44,17 +74,20 @@ jobs:
         run: cargo fmt --all --check
 
   clippy:
-    name: cargo clippy
+    name: cargo clippy (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
-      - name: Lint workspace (advisory)
+      - name: Lint workspace
+        # Advisory until the pre-existing pedantic-warning baseline is cleared;
+        # see AGENTS.md. Do not add new warnings.
         run: cargo clippy --workspace --all-targets
     continue-on-error: true
 
@@ -64,6 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
@@ -72,3 +107,58 @@ jobs:
           python-version: '3.13'
       - name: Run all tests
         run: cargo test --workspace
+
+  test-platforms:
+    name: cargo test (${{ matrix.os }})
+    # Sego ships Windows, Linux and macOS binaries, and parts of the code are
+    # platform-specific (sandboxing, PowerShell, path handling). A single
+    # Ubuntu runner cannot see a Windows-only regression.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Run all tests
+        run: cargo test --workspace
+
+  contracts:
+    name: published contract metadata
+    runs-on: ubuntu-latest
+    # Runs from the repository root, not `rust/`.
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Validate JSON Schemas and their contract metadata
+        # The schemas are the published contract. A schema that stops parsing,
+        # or loses its contract id/revision, breaks every consumer silently.
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+
+          required = ("x-contract-id", "x-contract-revision", "x-contract-ratified")
+          schema_dir = pathlib.Path("schema")
+          schemas = sorted(schema_dir.glob("*.schema.json"))
+          if not schemas:
+              sys.exit("no schemas found under schema/")
+          for path in schemas:
+              document = json.loads(path.read_text(encoding="utf-8"))
+              missing = [key for key in required if key not in document]
+              if missing:
+                  sys.exit(f"{path}: missing contract metadata {missing}")
+              if not isinstance(document.get("x-contract-revision"), int):
+                  sys.exit(f"{path}: x-contract-revision must be an integer")
+              print(f"{path}: {document['x-contract-id']} rev {document['x-contract-revision']}")
+          PY

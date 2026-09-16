@@ -553,10 +553,7 @@ mod tests {
             classify_bash_command("mv /etc/hosts .sego/x"),
             BashCommandRisk::SegaMetadataWrite
         );
-        assert_ne!(
-            classify_bash_command("cp .sego/a /tmp/b"),
-            BashCommandRisk::SegaMetadataWrite
-        );
+        assert_ne!(classify_bash_command("cp .sego/a /tmp/b"), BashCommandRisk::SegaMetadataWrite);
         // Reading metadata is not writing it (it is covered by read-only rules).
         assert_ne!(
             classify_bash_command("cat .sego/index.jsonl"),

@@ -1,20 +1,50 @@
 name: Release
 
+# A tag push builds and publishes. Nothing else ran first, so a tag could ship
+# a binary that does not pass the test suite. `verify` now gates every build
+# job: the release cannot be created unless fmt and the workspace test suite
+# pass on the tagged commit.
 on:
   push:
     tags:
       - 'v*'
 
+env:
+  # Pinned so a release is not built by whatever `stable` resolves to that day.
+  RUST_TOOLCHAIN: '1.98.0'
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  verify:
+    name: Verify tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Check formatting
+        run: cargo fmt --all --check
+        working-directory: rust
+      - name: Run all tests
+        run: cargo test --workspace
+        working-directory: rust
+
   build-windows:
     name: Build Windows binary
+    needs: [verify]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
@@ -42,10 +72,13 @@ jobs:
 
   build-linux:
     name: Build Linux binary
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
@@ -60,10 +93,13 @@ jobs:
 
   build-macos:
     name: Build macOS binary
+    needs: [verify]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
@@ -80,6 +116,9 @@ jobs:
     name: Create Release
     needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
+    # Only this job needs to write.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v5
         with:
@@ -131,32 +170,14 @@ jobs:
             artifacts/sego-macos
             artifacts/checksums.txt
           name: Sego Agent ${{ github.ref_name }}
+          # The body is version-agnostic on purpose. It previously hardcoded the
+          # v0.1.9 release notes while the heading used the tag, so the next
+          # release would have announced v0.1.9's features under a new version.
+          # Point at the changelog instead of restating features here.
           body: |
             ## Sego Agent ${{ github.ref_name }}
 
-            ### 中文
-
-            Sego v0.1.9 将本地代码审查进一步收敛为可被人和 Agent 共同消费的受治理审查证明。
-
-            新增稳定的 `sego review show latest --json` / `/review show latest --json` 接口、Agent handoff 文档与集成模板，使调用方能够读取最新审查证明，而不必解析面向人的终端文本。ReviewArtifact 现在携带 `reviewer`、`engine_version`、`review_mode` 等本地身份元数据，并扩展了 parse/evidence 状态 schema。
-
-            本版本还加入离线 Review Card、任务级 AcceptanceRecord、全范围审查 preflight、安全路径范围、evidence coverage、finding disposition、provider cache 可观测性和工作流事件恢复改进。默认权限由完全访问收紧为 `ReadOnly`，需要写权限时必须显式授予。
-
-            Windows 插件生命周期与 hook 路径现在使用显式、同步的平台执行器，不再依赖文件关联；不支持的脚本、缺失解释器和非零退出都会按失败关闭。
-
-            边界保持不变：reviewer 元数据不是密码学签名或远程证明；Review Card、AcceptanceRecord 和 ReviewArtifact 是审查证据，不是发布批准、安全认证或 Founder verdict。模型驱动审查也不是穷尽式静态分析，高风险发布仍需要测试、CI 与人工裁决。
-
-            ### English
-
-            Sego v0.1.9 advances local code review into a governed proof surface that can be consumed by both humans and coding agents.
-
-            The new stable `sego review show latest --json` and `/review show latest --json` interfaces, agent handoff guidance, and integration templates let callers consume the latest review proof without scraping human-oriented terminal output. ReviewArtifact now carries local `reviewer`, `engine_version`, and `review_mode` metadata, together with expanded parse and evidence status schemas.
-
-            This release also adds offline Review Cards, task-level AcceptanceRecord aggregation, full-scope review preflight, safe path scoping, evidence coverage, finding disposition, provider-cache observability, and workflow-event recovery improvements. The default permission is tightened from full access to `ReadOnly`; write authority must be granted explicitly.
-
-            Windows plugin lifecycle and hook paths now use explicit synchronous platform runners instead of file associations; unsupported scripts, missing interpreters, and non-zero exits fail closed.
-
-            The trust boundary remains explicit: reviewer metadata is not a cryptographic signature or remote attestation. Review Cards, AcceptanceRecords, and ReviewArtifacts are review evidence, not release approval, security certification, or a Founder verdict. Model-driven review is not exhaustive static analysis, so high-risk releases still require tests, CI, and human judgment.
+            What changed in this release: see [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
 
             ### Download
             - **Windows:** `sego-windows.zip` for double-click use, or `sego.exe` for terminal use
@@ -164,15 +185,30 @@ jobs:
             - **macOS:** `sego-macos`
             - **Checksums:** `checksums.txt` contains SHA-256 hashes for all release binaries
 
+            ### Verify the download
+            Compare the hash of the file you downloaded against `checksums.txt` before running it:
+
+            ```bash
+            # macOS / Linux
+            sha256sum sego-macos        # or: shasum -a 256 sego-macos
+            ```
+
+            ```powershell
+            # Windows
+            Get-FileHash .\sego.exe -Algorithm SHA256
+            ```
+
+            Verify before use: an unsigned binary that has not been checked is only as trustworthy as the channel it came from.
+
             ### Quick Start
             ```powershell
             # Windows installer: downloads the latest binary and creates a desktop shortcut
-            irm https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.ps1 | iex
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
             ```
 
             ```bash
             # macOS / Linux installer
-            curl -fsSL https://raw.githubusercontent.com/007M7/Sego-Agent/main/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
             ```
 
             ### Model configuration
@@ -187,8 +223,11 @@ jobs:
 
             ### Build from source
             ```bash
-            git clone https://github.com/007M7/Sego-Agent.git
+            git clone https://github.com/${{ github.repository }}.git
             cd Sego-Agent/rust && cargo build --release
             ```
+
+            ### Trust boundary
+            Reviewer metadata is not a cryptographic signature or remote attestation. Review Cards, AcceptanceRecords, and ReviewArtifacts are review evidence, not release approval, security certification, or a Founder verdict. Model-driven review is not exhaustive static analysis, so high-risk releases still require tests, CI, and human judgment.
           draft: false
           prerelease: false
