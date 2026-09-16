@@ -2841,10 +2841,6 @@ fn blocked_fetch_ipv4(address: std::net::Ipv4Addr, allow_loopback: bool) -> Opti
     }
 }
 
-fn normalize_fetch_url(url: &str) -> Result<String, String> {
-    normalize_fetch_url_with(url, false)
-}
-
 fn normalize_fetch_url_with(url: &str, allow_loopback: bool) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -5212,7 +5208,7 @@ mod tests {
     use super::{
         agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
         execute_agent_with_spawn, execute_tool, execute_web_fetch_with, final_assistant_text,
-        mvp_tool_specs, normalize_fetch_url, normalize_fetch_url_with, permission_mode_from_plugin,
+        mvp_tool_specs, normalize_fetch_url_with, permission_mode_from_plugin,
         persist_agent_terminal_state, push_output_block, run_task_packet, AgentInput, AgentJob,
         GlobalToolRegistry, LaneEventName, LaneFailureClass, SubagentToolExecutor, WebFetchInput,
         UNTRUSTED_FETCH_NOTICE, UNTRUSTED_FETCH_TRUST,
@@ -5227,6 +5223,27 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Restores the working directory when it leaves scope.
+    ///
+    /// The file operations treat the working directory as the workspace root,
+    /// so a test that fails before restoring it would otherwise leak the change
+    /// into every later test in this binary.
+    struct CwdGuard {
+        previous: PathBuf,
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
+
+    fn enter_workspace(workspace: &Path) -> CwdGuard {
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(workspace).expect("enter workspace");
+        CwdGuard { previous }
     }
 
     fn temp_path(name: &str) -> PathBuf {
@@ -5681,7 +5698,7 @@ mod tests {
             "http://[fd00::1]/x",
             "http://100.64.0.1/x",
         ] {
-            let error = normalize_fetch_url(blocked).expect_err(&format!("{blocked} must be blocked"));
+            let error = normalize_fetch_url_with(blocked, false).expect_err(&format!("{blocked} must be blocked"));
             assert!(
                 !error.is_empty(),
                 "{blocked} must produce a reason"
@@ -5694,12 +5711,12 @@ mod tests {
         );
         // Public hosts may not be downgraded: plain http is upgraded to https.
         assert_eq!(
-            normalize_fetch_url("http://example.com/x").expect("public host"),
+            normalize_fetch_url_with("http://example.com/x", false).expect("public host"),
             "https://example.com/x"
         );
         // Schemes other than http(s) are refused before any request.
-        assert!(normalize_fetch_url("ftp://example.com/x").is_err());
-        assert!(normalize_fetch_url("file:///etc/passwd").is_err());
+        assert!(normalize_fetch_url_with("ftp://example.com/x", false).is_err());
+        assert!(normalize_fetch_url_with("file:///etc/passwd", false).is_err());
     }
 
     #[test]
@@ -5945,7 +5962,7 @@ mod tests {
 
     #[test]
     fn skill_loads_local_skill_prompt() {
-        let _guard = env_lock().lock().expect("env lock should acquire");
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = temp_path("skills-home");
         let skill_dir = home.join(".agents").join("skills").join("help");
         fs::create_dir_all(&skill_dir).expect("skill dir should exist");
@@ -6314,8 +6331,13 @@ mod tests {
     #[test]
     fn subagent_runtime_executes_tool_loop_with_isolated_session() {
         let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let path = temp_path("subagent-input.txt");
+        let root = temp_path("subagent-workspace");
+        std::fs::create_dir_all(&root).expect("create workspace");
+        let path = root.join("subagent-input.txt");
         std::fs::write(&path, "hello from child").expect("write input file");
+        // The delegated read goes through the confined file tools, so the
+        // workspace root has to be the directory that holds the file.
+        let _cwd = enter_workspace(&root);
 
         let mut runtime = ConversationRuntime::new(
             Session::new(),
@@ -7308,10 +7330,15 @@ printf 'pwsh:%s' "$1"
         let file = root.join("readable.txt");
         fs::write(&file, "content\n").expect("write test file");
 
+        // read_file is confined to the workspace root, which is the working
+        // directory, so the read has to happen from inside the workspace.
+        let cwd = enter_workspace(&root);
+
         let registry = read_only_registry();
-        let result = registry.execute("read_file", &json!({ "path": file.display().to_string() }));
+        let result = registry.execute("read_file", &json!({ "path": "readable.txt" }));
         assert!(result.is_ok(), "read_file should be allowed: {result:?}");
 
+        drop(cwd);
         let _ = fs::remove_dir_all(root);
     }
 
