@@ -1270,7 +1270,66 @@ pub fn spawn_mcp_stdio_process(bootstrap: &McpClientBootstrap) -> io::Result<Mcp
     }
 }
 
+/// Environment variables a managed stdio child may inherit from Sego.
+///
+/// Everything else is dropped, so a malicious or compromised MCP server cannot
+/// read this process's provider credentials (`DEEPSEEK_API_KEY`,
+/// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) or any other secret that happens
+/// to be exported. Variables declared in the server's own configuration are
+/// applied afterwards and take precedence.
+///
+/// The list is deliberately limited to what a child needs in order to start
+/// and locate its own runtime: process/OS essentials, temp and home
+/// directories, locale, and shell identity. `NODE_OPTIONS` is excluded on
+/// purpose - it injects code into any Node child.
+const INHERITED_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "OS",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+];
+
+/// Is this environment variable name allowed to be inherited by a child?
+///
+/// Comparison is case-insensitive because Windows variable names are.
+#[must_use]
+fn allowed_inherited_env_key(key: &str) -> bool {
+    INHERITED_ENV_ALLOWLIST.iter().any(|allowed| allowed.eq_ignore_ascii_case(key))
+}
+
 fn apply_env(command: &mut Command, env: &BTreeMap<String, String>) {
+    // Start from an empty environment rather than the parent's.
+    command.env_clear();
+    // `vars_os` instead of `vars`: the latter panics on a non-Unicode entry.
+    for (key, value) in std::env::vars_os() {
+        let Some(key_text) = key.to_str() else {
+            continue;
+        };
+        if allowed_inherited_env_key(key_text) {
+            command.env(key, value);
+        }
+    }
+    // Server-declared variables win over inherited ones.
     for (key, value) in env {
         command.env(key, value);
     }
@@ -1306,6 +1365,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
+    use tokio::process::Command;
     use tokio::runtime::Builder;
 
     use crate::config::{
@@ -1316,7 +1376,8 @@ mod tests {
     use crate::mcp_client::McpClientBootstrap;
 
     use super::{
-        spawn_mcp_stdio_process, unsupported_server_failed_server, JsonRpcId, JsonRpcRequest,
+        allowed_inherited_env_key, apply_env, spawn_mcp_stdio_process,
+        unsupported_server_failed_server, JsonRpcId, JsonRpcRequest,
         JsonRpcResponse, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
         McpInitializeServerInfo, McpListToolsResult, McpReadResourceParams, McpReadResourceResult,
         McpServerManager, McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
@@ -2631,5 +2692,92 @@ mod tests {
 
             cleanup_script(&script_path);
         });
+    }
+
+    #[test]
+    fn inherited_env_allowlist_excludes_credentials() {
+        // Process/OS essentials must pass through or a child cannot start.
+        for allowed in ["PATH", "SystemRoot", "windir", "TEMP", "HOME", "USERPROFILE", "COMSPEC"] {
+            assert!(allowed_inherited_env_key(allowed), "{allowed} should be inheritable");
+        }
+        // Windows variable names are case-insensitive.
+        assert!(allowed_inherited_env_key("path"));
+        assert!(allowed_inherited_env_key("SYSTEMROOT"));
+
+        // Provider credentials and anything else must not.
+        for blocked in [
+            "DEEPSEEK_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "XAI_API_KEY",
+            "MOONSHOT_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "NODE_OPTIONS",
+            "RUSTY_CLAUDE_PERMISSION_MODE",
+            "SEGO_REVIEW_TRUST",
+        ] {
+            assert!(!allowed_inherited_env_key(blocked), "{blocked} must not be inheritable");
+        }
+    }
+
+    /// A child process that prints its own environment, for the check below.
+    fn env_probe_command() -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("cmd");
+            command.args(["/c", "set"]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new("env")
+        }
+    }
+
+    #[test]
+    fn spawned_child_sees_only_allowlisted_variables_plus_its_own_config() {
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
+
+        // Names this process exports that the allowlist does not cover. These
+        // are what a credential-leaking child would expose.
+        let parent_only: Vec<String> = std::env::vars_os()
+            .filter_map(|(key, _)| key.to_str().map(str::to_owned))
+            .filter(|key| !allowed_inherited_env_key(key))
+            .collect();
+        assert!(
+            !parent_only.is_empty(),
+            "no non-allowlisted variable exists in this environment, so the filter is untested"
+        );
+
+        let mut command = env_probe_command();
+        let configured = BTreeMap::from([("SEGO_TEST_CONFIGURED".to_string(), "yes".to_string())]);
+        apply_env(&mut command, &configured);
+
+        let output = runtime.block_on(command.output()).expect("env probe should run");
+        let text = String::from_utf8_lossy(&output.stdout);
+        let child_names: Vec<String> = text
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim().to_ascii_uppercase()))
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(!child_names.is_empty(), "the probe produced no variables: {text}");
+
+        // The real property: nothing outside the allowlist survives.
+        for name in &parent_only {
+            assert!(
+                !child_names.contains(&name.to_ascii_uppercase()),
+                "child inherited a variable outside the allowlist: {name}"
+            );
+        }
+        // Variables declared by the server config are still delivered.
+        assert!(
+            child_names.contains(&"SEGO_TEST_CONFIGURED".to_string()),
+            "config-declared variables must reach the child: {text}"
+        );
+        // PATH survives, or a real child could not start.
+        assert!(child_names.contains(&"PATH".to_string()), "PATH must be inherited: {text}");
     }
 }
