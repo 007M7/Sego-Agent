@@ -146,9 +146,37 @@ fn is_within_workspace(path: &str, workspace_root: &str) -> bool {
 }
 
 /// Conservative heuristic: is this bash command read-only?
+///
+/// The allowlist names only commands that read. Verb-shaped exceptions are
+/// handled explicitly:
+/// - `find` and `awk` read, but `-exec` / `-delete` / `system(` turn them into
+///   execution or deletion;
+/// - `cargo`, `git` and `gh` are read-only only in their read-only subcommand
+///   form, since `cargo run` executes the artefact and `git push` mutates a
+///   remote;
+/// - interpreters (`python`, `node`, `ruby`, `rustc`) are not read-only at all:
+///   running a script or compiling a file *is* code execution, so they are not
+///   listed. They were previously allowed here.
+/// - `tee` and `xargs` write and execute respectively, and were also previously
+///   listed.
 fn is_read_only_command(command: &str) -> bool {
     let first_token =
         command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
+    let lowered = command.to_ascii_lowercase();
+
+    if matches!(first_token, "find" | "awk") {
+        return !lowered.contains("-exec")
+            && !lowered.contains("-delete")
+            && !lowered.contains("-ok ")
+            && !lowered.contains("system(")
+            && !lowered.contains("print >")
+            && !command.contains(" > ")
+            && !command.contains(" >> ");
+    }
+
+    if matches!(first_token, "cargo" | "git" | "gh") {
+        return is_read_only_subcommand(first_token, command);
+    }
 
     matches!(
         first_token,
@@ -187,8 +215,6 @@ fn is_read_only_command(command: &str) -> bool {
             | "tr"
             | "cut"
             | "paste"
-            | "tee"
-            | "xargs"
             | "test"
             | "true"
             | "false"
@@ -207,18 +233,125 @@ fn is_read_only_command(command: &str) -> bool {
             | "tree"
             | "jq"
             | "yq"
-            | "python3"
-            | "python"
-            | "node"
-            | "ruby"
-            | "cargo"
-            | "rustc"
-            | "git"
-            | "gh"
     ) && !command.contains("-i ")
         && !command.contains("--in-place")
         && !command.contains(" > ")
         && !command.contains(" >> ")
+}
+
+/// Is a multi-purpose build or VCS command in a read-only subcommand form?
+///
+/// The action is matched anywhere in the argument list rather than by position:
+/// these tools accept flags that take a separate value (`git -C /repo diff`),
+/// so "the first token that is not flag-shaped" is not the action. A command is
+/// read-only only when a known read-only action appears *and* no known mutating
+/// action does.
+fn is_read_only_subcommand(tool: &str, command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    let tokens: Vec<String> =
+        command.split_whitespace().skip(1).map(|part| part.to_ascii_lowercase()).collect();
+    let has_any = |verbs: &[&str]| tokens.iter().any(|token| verbs.contains(&token.as_str()));
+
+    match tool {
+        "cargo" => {
+            const READ_ONLY: &[&str] =
+                &["test", "build", "check", "clippy", "fmt", "verify", "metadata", "tree"];
+            const MUTATING: &[&str] = &[
+                "run",
+                "install",
+                "uninstall",
+                "publish",
+                "add",
+                "remove",
+                "rm",
+                "update",
+                "clean",
+                "new",
+                "init",
+                "login",
+                "logout",
+                "owner",
+                "yank",
+            ];
+            has_any(READ_ONLY) && !has_any(MUTATING)
+        }
+        "git" => {
+            const READ_ONLY: &[&str] = &[
+                "status",
+                "diff",
+                "log",
+                "show",
+                "blame",
+                "ls-files",
+                "ls-tree",
+                "rev-parse",
+                "describe",
+                "shortlog",
+                "branch",
+                "remote",
+                "config",
+            ];
+            const MUTATING: &[&str] = &[
+                "push",
+                "commit",
+                "merge",
+                "rebase",
+                "reset",
+                "checkout",
+                "switch",
+                "restore",
+                "revert",
+                "cherry-pick",
+                "clean",
+                "apply",
+                "am",
+                "tag",
+                "stash",
+                "submodule",
+                "gc",
+                "prune",
+                "fetch",
+                "pull",
+                "init",
+                "clone",
+                "worktree",
+            ];
+            if has_any(MUTATING) {
+                return false;
+            }
+            // `git branch` lists, unless asked to delete; `git config` reads,
+            // unless asked to write.
+            if lowered.contains(" --delete")
+                || lowered.contains(" -d ")
+                || lowered.contains(" --set-")
+                || lowered.contains(" --unset")
+            {
+                return false;
+            }
+            has_any(READ_ONLY)
+        }
+        "gh" => {
+            // `gh` names a resource group before the action (`gh pr list`), so
+            // match the action anywhere in the argument list - but treat any
+            // mutating verb, or an explicit HTTP method, as a refusal. Without
+            // the method check `gh api -X DELETE ...` would read as read-only
+            // because `api` is in the allowed set.
+            const MUTATING: &[&str] = &[
+                "delete", "merge", "close", "create", "edit", "push", "comment", "review",
+                "reopen", "transfer", "ready", "lock", "unlock",
+            ];
+            const READ_ONLY: &[&str] =
+                &["status", "view", "list", "search", "api", "diff", "checks", "browse"];
+            if has_any(MUTATING) {
+                return false;
+            }
+            if lowered.contains(" -x ") || lowered.contains(" --method ") {
+                return false;
+            }
+            has_any(READ_ONLY)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +458,49 @@ mod tests {
         assert!(!is_read_only_command("rm file.txt"));
         assert!(!is_read_only_command("echo test > file.txt"));
         assert!(!is_read_only_command("sed -i 's/a/b/' file"));
+    }
+
+    #[test]
+    fn read_only_heuristic_excludes_code_execution_and_writes() {
+        // Running a script or compiling a file is code execution, not reading,
+        // so interpreters are not read-only however they are invoked.
+        for command in [
+            "python -c 'import os'",
+            "python3 script.py",
+            "python -i",
+            "node -e 'require(\"child_process\")'",
+            "node server.js",
+            "ruby -e 'system(\"id\")'",
+            "rustc build.rs",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `tee` writes and `xargs` executes.
+        assert!(!is_read_only_command("tee /etc/hosts"));
+        assert!(!is_read_only_command("xargs rm"));
+        // `find` and `awk` read, unless a flag turns them into something else.
+        assert!(is_read_only_command("find . -name '*.rs'"));
+        assert!(!is_read_only_command("find . -exec rm {} ;"));
+        assert!(!is_read_only_command("find . -delete"));
+        assert!(!is_read_only_command("awk 'BEGIN { system(\"id\") }'"));
+    }
+
+    #[test]
+    fn read_only_heuristic_gates_multipurpose_tools_by_subcommand() {
+        // Read-only forms stay allowed.
+        assert!(is_read_only_command("cargo test"));
+        assert!(is_read_only_command("cargo build --release"));
+        assert!(is_read_only_command("git status"));
+        assert!(is_read_only_command("git -C /repo diff"));
+        assert!(is_read_only_command("gh pr list"));
+        // Mutating or executing forms do not, even though the tool is allowed.
+        assert!(!is_read_only_command("cargo run"));
+        assert!(!is_read_only_command("cargo install ripgrep"));
+        assert!(!is_read_only_command("git push origin main"));
+        assert!(!is_read_only_command("git commit -m x"));
+        assert!(!is_read_only_command("git branch -D feat/old"));
+        assert!(!is_read_only_command("git config --set-env x"));
+        assert!(!is_read_only_command("gh api -X DELETE /repos/x"));
     }
 
     #[test]
