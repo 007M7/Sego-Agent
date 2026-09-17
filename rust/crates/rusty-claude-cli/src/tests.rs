@@ -44,6 +44,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tools::GlobalToolRegistry;
@@ -100,11 +101,17 @@ fn registry_with_plugin_tool() -> GlobalToolRegistry {
 }
 
 fn temp_dir() -> PathBuf {
+    // A clock reading is not a value: two tests can read the same nanosecond and
+    // then share one temp root, which is how a cleanup in one test deleted a
+    // directory another test was still using. The counter is what makes the name
+    // unique per call, which is what this function promises.
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("time should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("rusty-claude-cli-{nanos}"))
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("rusty-claude-cli-{nanos}-{sequence}"))
 }
 
 struct EnvRestore {
@@ -143,6 +150,36 @@ impl Drop for EnvRestore {
                 Some(value) => std::env::set_var(var, value),
                 None => std::env::remove_var(var),
             }
+        }
+    }
+}
+
+/// Set one environment variable and put it back on drop.
+///
+/// `EnvRestore` covers the variables it is told to isolate; this covers the ones
+/// a test injects itself. Without it a test that fails midway leaves its dummy
+/// credential behind, and the next test then passes or fails depending on the
+/// order the harness happened to pick - which is a false signal in both
+/// directions. Any test that sets a variable another test reads must hold
+/// `env_lock`, or the lock is held on one side only and is not isolation.
+struct EnvVarGuard {
+    name: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var(name).ok();
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
         }
     }
 }
@@ -1557,8 +1594,8 @@ fn startup_banner_mentions_workflow_completions() {
     let env_root = temp_dir();
     let _env = EnvRestore::isolate(&env_root);
     // Inject dummy credentials so LiveCli can construct without real Anthropic key
-    std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-banner-test");
-    std::env::set_var("ANTHROPIC_AUTH_TOKEN", "test-dummy-token-for-banner-test");
+    let _api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", "test-dummy-key-for-banner-test");
+    let _auth_token = EnvVarGuard::set("ANTHROPIC_AUTH_TOKEN", "test-dummy-token-for-banner-test");
     let root = temp_dir();
     fs::create_dir_all(&root).expect("root dir");
 
@@ -2927,10 +2964,14 @@ fn build_runtime_plugin_state_surfaces_unsupported_mcp_servers_structurally() {
 
 #[test]
 fn build_runtime_runs_plugin_lifecycle_init_and_shutdown() {
+    // This test injects DEEPSEEK_API_KEY and other tests read it (rebuilding the
+    // runtime for a DeepSeek model needs it), so the mutex is what stops the two
+    // from racing. The guard is what stops a failure here from leaking the key.
+    let _env_guard = env_lock();
     let config_home = temp_dir();
     // Inject a dummy API key so runtime construction succeeds without real credentials.
     // This test only exercises plugin lifecycle (init/shutdown), never calls the API.
-    std::env::set_var("DEEPSEEK_API_KEY", "test-dummy-key-for-plugin-lifecycle");
+    let _deepseek_key = EnvVarGuard::set("DEEPSEEK_API_KEY", "test-dummy-key-for-plugin-lifecycle");
     let workspace = temp_dir();
     let source_root = temp_dir();
     fs::create_dir_all(&config_home).expect("config home");
@@ -2977,5 +3018,322 @@ fn build_runtime_runs_plugin_lifecycle_init_and_shutdown() {
     let _ = fs::remove_dir_all(config_home);
     let _ = fs::remove_dir_all(workspace);
     let _ = fs::remove_dir_all(source_root);
-    std::env::remove_var("DEEPSEEK_API_KEY");
+    // `_deepseek_key` restores the variable on drop, including if this test fails.
+}
+
+// ---------------------------------------------------------------------------
+// §1.23 class B/C: the return-value contract of `LiveCli`'s state-changing
+// methods, and of the 189-line REPL command dispatcher.
+//
+// The `bool` is not "did it work" - it is "the session changed, so persist it".
+// `run_repl` writes the session file exactly when `handle_repl_command` returns
+// true. So the contract has two failure directions and both matter: a change
+// reported as `false` is lost when the user exits, and a read-only command
+// reported as `true` costs a pointless write. These tests fix both directions
+// without asserting on stdout, which is class E's job, not this one's.
+// ---------------------------------------------------------------------------
+
+const LIVE_CLI_TEST_API_KEY: &str = "test-dummy-key-for-live-cli-tests";
+const LIVE_CLI_TEST_AUTH_TOKEN: &str = "test-dummy-token-for-live-cli-tests";
+const LIVE_CLI_TEST_DEEPSEEK_KEY: &str = "test-dummy-deepseek-key-for-live-cli-tests";
+
+/// Run `body` against a `LiveCli` built inside an isolated workspace.
+///
+/// This is the class-B recipe §1.23 names: `env_lock` keeps other tests out of
+/// the process-global environment, `EnvRestore::isolate` redirects HOME and the
+/// config home into a temp root, and `with_current_dir` supplies the working
+/// directory that `LiveCli::new` writes its session file under.
+///
+/// All three keys are injected here rather than borrowed from whatever the rest
+/// of the suite happened to leave set: switching the model rebuilds the runtime
+/// for that model's provider, so a test that changes to a DeepSeek model needs a
+/// DeepSeek key, and taking that from a neighbour's leak made this file's
+/// outcome depend on thread scheduling. Nothing here reaches the network.
+fn with_live_cli<T>(body: impl FnOnce(&mut LiveCli, &Path) -> T) -> T {
+    let _env_guard = env_lock();
+    let env_root = temp_dir();
+    let _env = EnvRestore::isolate(&env_root);
+    let _api_key = EnvVarGuard::set("ANTHROPIC_API_KEY", LIVE_CLI_TEST_API_KEY);
+    let _auth_token = EnvVarGuard::set("ANTHROPIC_AUTH_TOKEN", LIVE_CLI_TEST_AUTH_TOKEN);
+    let _deepseek_key = EnvVarGuard::set("DEEPSEEK_API_KEY", LIVE_CLI_TEST_DEEPSEEK_KEY);
+
+    let root = temp_dir();
+    fs::create_dir_all(&root).expect("workspace root");
+    let result = with_current_dir(&root, || {
+        let mut cli = LiveCli::new(
+            "claude-sonnet-4-6".to_string(),
+            true,
+            None,
+            PermissionMode::DangerFullAccess,
+        )
+        .expect("cli should initialize");
+        body(&mut cli, &root)
+    });
+    // Cleanup may fail while a handle is still closing; that must not manufacture
+    // a failure in a test that already passed.
+    let _ = fs::remove_dir_all(&root);
+    result
+}
+
+#[test]
+fn live_cli_writes_its_session_file_before_the_first_command() {
+    with_live_cli(|cli, _root| {
+        let path = cli.session_path().to_path_buf();
+        assert!(
+            path.is_file(),
+            "the session file must exist after construction, because that is the file \
+             `persist_session` - and therefore every `true` from the dispatcher - writes: {}",
+            path.display()
+        );
+    });
+}
+
+#[test]
+fn set_model_reports_a_change_only_when_the_resolved_model_differs() {
+    with_live_cli(|cli, _root| {
+        assert_eq!(cli.model_name(), "claude-sonnet-4-6");
+
+        assert!(
+            !cli.set_model(None).expect("a model query must not fail"),
+            "asking for the model is a query, not a change"
+        );
+        assert_eq!(cli.model_name(), "claude-sonnet-4-6");
+
+        assert!(
+            !cli.set_model(Some("sonnet".to_string())).expect("an alias must resolve"),
+            "`sonnet` resolves to the model already in use, so nothing changed"
+        );
+
+        assert!(
+            cli.set_model(Some("deepseek-v4.1-flash".to_string()))
+                .expect("switching must not fail"),
+            "a real switch must be reported, otherwise the new model is never persisted"
+        );
+        assert_eq!(
+            cli.model_name(),
+            "deepseek-flash",
+            "the resolved name is stored, not the alias the user typed"
+        );
+    });
+}
+
+#[test]
+fn set_permissions_reports_a_change_and_names_every_valid_mode_when_rejecting() {
+    with_live_cli(|cli, _root| {
+        assert!(
+            !cli.set_permissions(None).expect("a permissions query must not fail"),
+            "asking for the permission mode is a query, not a change"
+        );
+
+        let error = cli
+            .set_permissions(Some("yolo".to_string()))
+            .expect_err("an unknown mode must be rejected rather than ignored");
+        let message = error.to_string();
+        for mode in ["read-only", "workspace-write", "danger-full-access"] {
+            assert!(
+                message.contains(mode),
+                "the rejection must name `{mode}` so the user can recover: {message}"
+            );
+        }
+
+        assert!(
+            cli.set_permissions(Some("read-only".to_string())).expect("a valid mode must not fail"),
+            "leaving danger-full-access for read-only is a change and must be persisted"
+        );
+        assert!(
+            !cli.set_permissions(Some("read-only".to_string()))
+                .expect("re-selecting must not fail"),
+            "re-selecting the mode already in force is not a change"
+        );
+    });
+}
+
+#[test]
+fn clear_session_requires_confirmation_and_only_then_switches_identity() {
+    with_live_cli(|cli, _root| {
+        let before_id = cli.session_id().to_string();
+        let before_path = cli.session_path().to_path_buf();
+
+        assert!(
+            !cli.clear_session(false).expect("refusing must not fail"),
+            "without --confirm nothing may change"
+        );
+        assert_eq!(cli.session_id(), before_id, "an unconfirmed clear must not switch sessions");
+
+        assert!(
+            cli.clear_session(true).expect("a confirmed clear must not fail"),
+            "a confirmed clear is a change and must be persisted"
+        );
+        assert_ne!(cli.session_id(), before_id, "a confirmed clear must move to a new session id");
+        assert!(
+            before_path.is_file(),
+            "the previous session file must survive, because the report tells the user to \
+             /resume it: {}",
+            before_path.display()
+        );
+    });
+}
+
+#[test]
+fn resume_session_without_a_reference_is_a_no_op_and_a_bad_reference_fails() {
+    with_live_cli(|cli, _root| {
+        let before = cli.session_id().to_string();
+
+        assert!(
+            !cli.resume_session(None).expect("usage must not fail"),
+            "a bare /resume only prints usage"
+        );
+        assert_eq!(cli.session_id(), before);
+
+        let error = cli
+            .resume_session(Some("definitely-not-a-session".to_string()))
+            .expect_err("an unknown session must fail rather than silently keep the current one");
+        assert!(!error.to_string().is_empty(), "the failure must say something");
+    });
+}
+
+#[test]
+fn switching_to_the_current_workspace_is_not_a_change() {
+    with_live_cli(|cli, _root| {
+        assert!(
+            !cli.switch_workspace(".").expect("the current directory must resolve"),
+            "re-selecting the current workspace must not tear the session down and replace it"
+        );
+    });
+}
+
+#[test]
+fn handle_plugins_command_reports_without_claiming_a_change() {
+    with_live_cli(|cli, _root| {
+        assert!(
+            !cli.handle_plugins_command(None, None).expect("listing plugins must not fail"),
+            "reading the plugin list does not change the session"
+        );
+    });
+}
+
+#[test]
+fn read_only_repl_commands_never_ask_for_a_persist() {
+    let read_only = [
+        SlashCommand::Help,
+        SlashCommand::Dir,
+        SlashCommand::Sandbox,
+        SlashCommand::Cost,
+        SlashCommand::Version,
+        SlashCommand::Memory,
+        SlashCommand::Config { section: None },
+        SlashCommand::Unknown("definitely-not-a-command".to_string()),
+    ];
+    with_live_cli(|cli, _root| {
+        for command in read_only {
+            let label = format!("{command:?}");
+            let reported = cli
+                .handle_repl_command(command)
+                .unwrap_or_else(|error| panic!("{label} must not fail: {error}"));
+            assert!(
+                !reported,
+                "{label} changes nothing, so it must not ask for the session to be written"
+            );
+        }
+    });
+}
+
+#[test]
+fn not_implemented_commands_report_and_never_ask_for_a_persist() {
+    // The family that prints "Command registered but not yet implemented."
+    // Reporting a change here would be worse than the message: it would look
+    // like the command had done something worth keeping.
+    let unimplemented = [
+        SlashCommand::Login,
+        SlashCommand::Logout,
+        SlashCommand::Vim,
+        SlashCommand::Upgrade,
+        SlashCommand::Stats,
+        SlashCommand::Share,
+        SlashCommand::Feedback,
+        SlashCommand::Files,
+        SlashCommand::Fast,
+        SlashCommand::Exit,
+        SlashCommand::Summary,
+        SlashCommand::Desktop,
+    ];
+    with_live_cli(|cli, _root| {
+        for command in unimplemented {
+            let label = format!("{command:?}");
+            let reported = cli
+                .handle_repl_command(command)
+                .unwrap_or_else(|error| panic!("{label} must not fail: {error}"));
+            assert!(!reported, "{label} is not implemented, so it must not ask for a persist");
+        }
+    });
+}
+
+#[test]
+fn the_dispatcher_propagates_the_state_changing_answers() {
+    // Most arms of the dispatcher return `false` themselves, so the risk this
+    // test covers is an arm that calls a method which *did* change state and
+    // then drops that fact - the change would never be written.
+    with_live_cli(|cli, _root| {
+        assert!(
+            !cli.handle_repl_command(SlashCommand::Model { model: None })
+                .expect("a model query must not fail"),
+            "a model query changes nothing"
+        );
+
+        assert!(
+            cli.handle_repl_command(SlashCommand::Model {
+                model: Some("deepseek-v4.1-flash".to_string()),
+            })
+            .expect("switching the model must not fail"),
+            "the dispatcher must pass on the fact that the model changed"
+        );
+        assert_eq!(cli.model_name(), "deepseek-flash");
+
+        assert!(
+            cli.handle_repl_command(SlashCommand::Permissions {
+                mode: Some("read-only".to_string())
+            })
+            .expect("switching permissions must not fail"),
+            "the dispatcher must pass on the fact that the permission mode changed"
+        );
+
+        assert!(
+            !cli.handle_repl_command(SlashCommand::Clear { confirm: false })
+                .expect("an unconfirmed clear must not fail"),
+            "an unconfirmed clear changes nothing"
+        );
+
+        assert!(
+            cli.handle_repl_command(SlashCommand::Clear { confirm: true })
+                .expect("a confirmed clear must not fail"),
+            "the dispatcher must pass on the fact that the session was replaced"
+        );
+    });
+}
+
+#[test]
+fn switching_to_a_different_workspace_reports_the_change_and_moves() {
+    // The companion to the test above: it is not enough for a re-selection to be
+    // a no-op, a real switch must still happen. Without this pair, "always
+    // return false" would satisfy the other test.
+    with_live_cli(|cli, root| {
+        let other = root.join("other-workspace");
+        fs::create_dir_all(&other).expect("other workspace");
+        let expected = other.canonicalize().expect("the sibling must resolve");
+
+        assert!(
+            cli.switch_workspace(&other.display().to_string())
+                .expect("a real switch must not fail"),
+            "moving to a different directory is a change and must be persisted"
+        );
+        let actual = std::env::current_dir()
+            .expect("cwd must load")
+            .canonicalize()
+            .expect("cwd must resolve");
+        assert_eq!(actual, expected, "the process must actually be in the new workspace");
+        assert!(
+            cli.session_path().is_file(),
+            "the new workspace gets its own session file, written before the move completes"
+        );
+    });
 }
