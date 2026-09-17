@@ -1253,91 +1253,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_team_create(input: TeamCreateInput) -> Result<String, String> {
-    let task_ids: Vec<String> = input
-        .tasks
-        .iter()
-        .filter_map(|t| t.get("task_id").and_then(|v| v.as_str()).map(str::to_owned))
-        .collect();
-    let team = global_team_registry().create(&input.name, task_ids);
-    // Register team assignment on each task
-    for task_id in &team.task_ids {
-        let _ = global_task_registry().assign_team(task_id, &team.team_id);
-    }
-    to_pretty_json(json!({
-        "team_id": team.team_id,
-        "name": team.name,
-        "task_count": team.task_ids.len(),
-        "task_ids": team.task_ids,
-        "status": team.status,
-        "created_at": team.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_team_delete(input: TeamDeleteInput) -> Result<String, String> {
-    match global_team_registry().delete(&input.team_id) {
-        Ok(team) => to_pretty_json(json!({
-            "team_id": team.team_id,
-            "name": team.name,
-            "status": team.status,
-            "message": "Team deleted"
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_cron_create(input: CronCreateInput) -> Result<String, String> {
-    let entry =
-        global_cron_registry().create(&input.schedule, &input.prompt, input.description.as_deref());
-    to_pretty_json(json!({
-        "cron_id": entry.cron_id,
-        "schedule": entry.schedule,
-        "prompt": entry.prompt,
-        "description": entry.description,
-        "enabled": entry.enabled,
-        "created_at": entry.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_cron_delete(input: CronDeleteInput) -> Result<String, String> {
-    match global_cron_registry().delete(&input.cron_id) {
-        Ok(entry) => to_pretty_json(json!({
-            "cron_id": entry.cron_id,
-            "schedule": entry.schedule,
-            "status": "deleted",
-            "message": "Cron entry removed"
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-fn run_cron_list(_input: Value) -> Result<String, String> {
-    let entries: Vec<_> = global_cron_registry()
-        .list(false)
-        .into_iter()
-        .map(|e| {
-            json!({
-                "cron_id": e.cron_id,
-                "schedule": e.schedule,
-                "prompt": e.prompt,
-                "description": e.description,
-                "enabled": e.enabled,
-                "run_count": e.run_count,
-                "last_run_at": e.last_run_at,
-                "created_at": e.created_at
-            })
-        })
-        .collect();
-    to_pretty_json(json!({
-        "crons": entries,
-        "count": entries.len()
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_lsp(input: LspInput) -> Result<String, String> {
     let registry = global_lsp_registry();
     let action = &input.action;
@@ -2063,30 +1978,6 @@ struct AskUserQuestionInput {
 
 const fn default_auto_recover_prompt_misdelivery() -> bool {
     true
-}
-
-#[derive(Debug, Deserialize)]
-struct TeamCreateInput {
-    name: String,
-    tasks: Vec<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeamDeleteInput {
-    team_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CronCreateInput {
-    schedule: String,
-    prompt: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CronDeleteInput {
-    cron_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4734,10 +4625,15 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 pub mod lane_completion;
 mod registries;
 mod tasks;
+mod team_cron;
 mod workers;
 use tasks::{
     run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
     run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
+};
+use team_cron::{
+    run_cron_create, run_cron_delete, run_cron_list, run_team_create, run_team_delete,
+    CronCreateInput, CronDeleteInput, TeamCreateInput, TeamDeleteInput,
 };
 use workers::{
     run_worker_await_ready, run_worker_create, run_worker_get, run_worker_observe,
@@ -4745,10 +4641,9 @@ use workers::{
     WorkerCreateInput, WorkerIdInput, WorkerObserveInput, WorkerSendPromptInput,
 };
 mod web_fetch;
-use registries::{
-    global_cron_registry, global_lsp_registry, global_mcp_registry, global_task_registry,
-    global_team_registry,
-};
+// Only the registries this file still reaches for; each domain imports its own
+// from `crate::registries`.
+use registries::{global_lsp_registry, global_mcp_registry};
 
 use web_fetch::{run_web_fetch, WebFetchInput};
 // The rest of the WebFetch surface is exercised directly by the tests, which
