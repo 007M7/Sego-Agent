@@ -191,22 +191,6 @@ const UPDATE_CHECKSUMS_ASSET: &str = "checksums.txt";
 /// Explicit opt-out from verifying a downloaded update. Named so it can be
 /// documented and so an accidental set is visible in the warning it prints.
 const UPDATE_ALLOW_UNVERIFIED_ENV: &str = "SEGO_UPDATE_ALLOW_UNVERIFIED";
-const CLI_OPTION_SUGGESTIONS: &[&str] = &[
-    "--help",
-    "-h",
-    "--version",
-    "-V",
-    "--model",
-    "--output-format",
-    "--permission-mode",
-    "--dangerously-skip-permissions",
-    "--allowedTools",
-    "--allowed-tools",
-    "--resume",
-    "--print",
-    "-p",
-];
-
 type AllowedToolSet = BTreeSet<String>;
 
 const TURN_CANCELLED_MESSAGE: &str = "conversation turn cancelled by user";
@@ -893,36 +877,6 @@ fn parse_positive_usize(value: &str, flag_name: &str) -> Result<usize, String> {
     Ok(parsed)
 }
 
-fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
-    if matches!(
-        command_name,
-        "dump-manifests"
-            | "bootstrap-plan"
-            | "agents"
-            | "mcp"
-            | "skills"
-            | "system-prompt"
-            | "update"
-            | "login"
-            | "logout"
-            | "init"
-            | "prompt"
-    ) {
-        return None;
-    }
-    let slash_command = slash_command_specs().iter().find(|spec| spec.name == command_name)?;
-    let guidance = if slash_command.resume_supported {
-        format!(
-            "`claw {command_name}` is a slash command. Use `claw --resume SESSION.jsonl /{command_name}` or start `sego` and run `/{command_name}`."
-        )
-    } else {
-        format!(
-            "`claw {command_name}` is a slash command. Start `claw` and run `/{command_name}` inside the REPL."
-        )
-    };
-    Some(guidance)
-}
-
 fn join_optional_args(args: &[String]) -> Option<String> {
     let joined = args.join(" ");
     let trimmed = joined.trim();
@@ -1003,39 +957,6 @@ fn parse_code_review_slash_action(
     })
 }
 
-fn format_unknown_option(option: &str) -> String {
-    let mut message = format!("unknown option: {option}");
-    if let Some(suggestion) = suggest_closest_term(option, CLI_OPTION_SUGGESTIONS) {
-        message.push_str("\nDid you mean ");
-        message.push_str(suggestion);
-        message.push('?');
-    }
-    message.push_str("\nRun `sego --help` for usage.");
-    message
-}
-
-fn format_unknown_direct_slash_command(name: &str) -> String {
-    let mut message = format!("unknown slash command outside the REPL: /{name}");
-    if let Some(suggestions) = render_suggestion_line("Did you mean", &suggest_slash_commands(name))
-    {
-        message.push('\n');
-        message.push_str(&suggestions);
-    }
-    message.push_str("\nRun `sego --help` for CLI usage, or start `sego` and use /help.");
-    message
-}
-
-fn format_unknown_slash_command(name: &str) -> String {
-    let mut message = format!("Unknown slash command: /{name}");
-    if let Some(suggestions) = render_suggestion_line("Did you mean", &suggest_slash_commands(name))
-    {
-        message.push('\n');
-        message.push_str(&suggestions);
-    }
-    message.push_str("\n  Help             /help lists available slash commands");
-    message
-}
-
 fn resolve_cli_cwd(value: &str) -> Result<PathBuf, String> {
     let trimmed = value.trim().trim_matches('"');
     if trimmed.is_empty() {
@@ -1064,78 +985,6 @@ fn apply_requested_cwd(cwd: Option<&PathBuf>) -> Result<(), String> {
             .map_err(|error| format!("failed to switch --cwd to {}: {error}", cwd.display()))?;
     }
     Ok(())
-}
-
-fn render_suggestion_line(label: &str, suggestions: &[String]) -> Option<String> {
-    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", ")))
-}
-
-fn suggest_slash_commands(input: &str) -> Vec<String> {
-    let mut candidates = slash_command_specs()
-        .iter()
-        .flat_map(|spec| {
-            std::iter::once(spec.name)
-                .chain(spec.aliases.iter().copied())
-                .map(|name| format!("/{name}"))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.dedup();
-    let candidate_refs = candidates.iter().map(String::as_str).collect::<Vec<_>>();
-    ranked_suggestions(input.trim_start_matches('/'), &candidate_refs)
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-fn suggest_closest_term<'a>(input: &str, candidates: &'a [&'a str]) -> Option<&'a str> {
-    ranked_suggestions(input, candidates).into_iter().next()
-}
-
-fn ranked_suggestions<'a>(input: &str, candidates: &'a [&'a str]) -> Vec<&'a str> {
-    let normalized_input = input.trim_start_matches('/').to_ascii_lowercase();
-    let mut ranked = candidates
-        .iter()
-        .filter_map(|candidate| {
-            let normalized_candidate = candidate.trim_start_matches('/').to_ascii_lowercase();
-            let distance = levenshtein_distance(&normalized_input, &normalized_candidate);
-            let prefix_bonus = usize::from(
-                !(normalized_candidate.starts_with(&normalized_input)
-                    || normalized_input.starts_with(&normalized_candidate)),
-            );
-            let score = distance + prefix_bonus;
-            (score <= 4).then_some((score, *candidate))
-        })
-        .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| left.cmp(right).then_with(|| left.1.cmp(right.1)));
-    ranked.into_iter().map(|(_, candidate)| candidate).take(3).collect()
-}
-
-fn levenshtein_distance(left: &str, right: &str) -> usize {
-    if left.is_empty() {
-        return right.chars().count();
-    }
-    if right.is_empty() {
-        return left.chars().count();
-    }
-
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut current = vec![0; right_chars.len() + 1];
-
-    for (left_index, left_char) in left.chars().enumerate() {
-        current[0] = left_index + 1;
-        for (right_index, right_char) in right_chars.iter().enumerate() {
-            let substitution_cost = usize::from(left_char != *right_char);
-            current[right_index + 1] = (previous[right_index + 1] + 1)
-                .min(current[right_index] + 1)
-                .min(previous[right_index] + substitution_cost);
-        }
-        previous.clone_from(&current);
-    }
-
-    previous[right_chars.len()]
 }
 
 fn resolve_model_alias(model: &str) -> String {
@@ -1296,17 +1145,6 @@ fn parse_resume_args(args: &[String]) -> Result<CliAction, String> {
 fn resume_command_can_absorb_token(current_command: &str, token: &str) -> bool {
     matches!(SlashCommand::parse(current_command), Ok(Some(SlashCommand::Export { path: None })))
         && !looks_like_slash_command_token(token)
-}
-
-fn looks_like_slash_command_token(token: &str) -> bool {
-    let trimmed = token.trim_start();
-    let Some(name) = trimmed.strip_prefix('/').and_then(|value| {
-        value.split_whitespace().next().map(str::trim).filter(|value| !value.is_empty())
-    }) else {
-        return false;
-    };
-
-    slash_command_specs().iter().any(|spec| spec.name == name || spec.aliases.contains(&name))
 }
 
 fn dump_manifests() {
@@ -8800,3 +8638,12 @@ fn write_mcp_server_fixture(script_path: &Path) {
 
 #[cfg(test)]
 mod sandbox_report_tests;
+
+mod cli_suggestions;
+
+pub(crate) use cli_suggestions::{
+    bare_slash_command_guidance, format_unknown_direct_slash_command, format_unknown_option,
+    format_unknown_slash_command, levenshtein_distance, looks_like_slash_command_token,
+    ranked_suggestions, render_suggestion_line, suggest_closest_term, suggest_slash_commands,
+    CLI_OPTION_SUGGESTIONS,
+};
