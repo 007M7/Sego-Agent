@@ -6620,6 +6620,7 @@ mod tests {
 
     #[test]
     fn bash_tool_reports_success_exit_failure_timeout_and_background() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let success = execute_tool("bash", &json!({ "command": shell_stdout_command("hello") }))
             .expect("bash should succeed");
         let success_output: serde_json::Value = serde_json::from_str(&success).expect("json");
@@ -6688,6 +6689,7 @@ mod tests {
 
     #[test]
     fn bash_allows_simple_echo_without_file_authoring() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let output = execute_tool("bash", &json!({ "command": shell_stdout_command("hello") }))
             .expect("simple echo should still execute");
         let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
@@ -6700,6 +6702,7 @@ mod tests {
 
     #[test]
     fn bash_blocks_copy_con_interactive_command() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cases = ["copy con SEGO_WRITE_TEST.md", "copy con file.txt", "COPY CON something"];
         for cmd in cases {
             let output = execute_tool("bash", &json!({ "command": cmd }))
@@ -6722,6 +6725,7 @@ mod tests {
 
     #[test]
     fn bash_blocks_cmd_wrapped_copy_con() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let output =
             execute_tool("bash", &json!({ "command": "cmd /c copy con SEGO_WRITE_TEST.md" }))
                 .expect("bash guard should return structured output");
@@ -6734,6 +6738,7 @@ mod tests {
 
     #[test]
     fn bash_blocks_bare_python_powershell_cmd() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cases = [
             "python",
             "python3",
@@ -6760,6 +6765,7 @@ mod tests {
 
     #[test]
     fn bash_allows_non_interactive_shell_commands() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cases = [
             ("git status", "SafeReadonly"),
             ("echo hello", "SafeReadonly"),
@@ -6774,8 +6780,13 @@ mod tests {
             ("echo copy con something", "SafeReadonly"),
         ];
         for (cmd, _expected) in cases {
-            let output =
-                execute_tool("bash", &json!({ "command": cmd })).expect("bash should execute");
+            // Name the command in the failure. This test once failed on the
+            // ubuntu runner with a bare "No such file or directory (os error 2)"
+            // and no indication of which of the ten commands produced it, which
+            // made the cause unattributable after the fact.
+            let output = execute_tool("bash", &json!({ "command": cmd })).unwrap_or_else(|error| {
+                panic!("bash should execute `{cmd}`: {error} (PATH={:?})", std::env::var("PATH"))
+            });
             let output_json: serde_json::Value = serde_json::from_str(&output).expect("json");
             assert_ne!(
                 output_json["returnCodeInterpretation"], "preflight_blocked:interactive_command",
@@ -7015,6 +7026,7 @@ mod tests {
 
     #[test]
     fn sleep_waits_and_reports_duration() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let started = std::time::Instant::now();
         let result =
             execute_tool("Sleep", &json!({"duration_ms": 20})).expect("Sleep should succeed");
@@ -7027,6 +7039,7 @@ mod tests {
 
     #[test]
     fn given_excessive_duration_when_sleep_then_rejects_with_error() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = execute_tool("Sleep", &json!({"duration_ms": 999_999_999_u64}));
         let error = result.expect_err("excessive sleep should fail");
         assert!(error.contains("exceeds maximum allowed sleep"));
@@ -7034,6 +7047,7 @@ mod tests {
 
     #[test]
     fn given_zero_duration_when_sleep_then_succeeds() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result =
             execute_tool("Sleep", &json!({"duration_ms": 0})).expect("0ms sleep should succeed");
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
@@ -7268,6 +7282,7 @@ mod tests {
 
     #[test]
     fn repl_executes_python_code() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // A host without a usable Python cannot construct this test's fixture,
         // and the failure would look like a broken REPL rather than a missing
         // interpreter. This was observed on a Windows runner where resolution
@@ -7307,6 +7322,7 @@ mod tests {
 
     #[test]
     fn given_empty_code_when_repl_then_rejects_with_error() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = execute_tool("REPL", &json!({"language": "python", "code": "   "}));
 
         let error = result.expect_err("empty REPL code should fail");
@@ -7315,6 +7331,7 @@ mod tests {
 
     #[test]
     fn given_unsupported_language_when_repl_then_rejects_with_error() {
+        let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = execute_tool("REPL", &json!({"language": "ruby", "code": "puts 1"}));
 
         let error = result.expect_err("unsupported REPL language should fail");
