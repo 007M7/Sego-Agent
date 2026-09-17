@@ -7268,6 +7268,17 @@ mod tests {
 
     #[test]
     fn repl_executes_python_code() {
+        // A host without a usable Python cannot construct this test's fixture,
+        // and the failure would look like a broken REPL rather than a missing
+        // interpreter. This was observed on a Windows runner where resolution
+        // found only the Store alias stub. Say so instead of reporting a
+        // product defect.
+        if !python_is_usable() {
+            eprintln!(
+                "skipping repl_executes_python_code: no usable Python interpreter on this host"
+            );
+            return;
+        }
         let result = execute_tool(
             "REPL",
             &json!({"language": "python", "code": "print(1 + 1)", "timeout_ms": 500}),
@@ -7277,6 +7288,21 @@ mod tests {
         assert_eq!(output["language"], "python");
         assert_eq!(output["exitCode"], 0);
         assert!(output["stdout"].as_str().expect("stdout").contains('2'));
+    }
+
+    /// True when some Python candidate actually runs, not merely resolves.
+    fn python_is_usable() -> bool {
+        let candidates: &[&str] =
+            if cfg!(windows) { &["python", "py", "python3"] } else { &["python3", "python"] };
+        candidates.iter().any(|candidate| {
+            std::process::Command::new(candidate)
+                .args(["-c", "print(1)"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
     }
 
     #[test]

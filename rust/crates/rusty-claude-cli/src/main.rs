@@ -9307,6 +9307,23 @@ mod tests {
         })
     }
 
+    /// True when the interpreter this host would use actually runs.
+    ///
+    /// Resolving a name is not the same as having a working interpreter: on
+    /// macOS `/usr/bin/python3` can be a shim that refuses to run, and on
+    /// Windows the name may resolve only to the Store alias stub. Tests whose
+    /// fixture is a Python script cannot tell that apart from the product
+    /// failing to discover an MCP server, so they check first.
+    fn python_is_usable() -> bool {
+        std::process::Command::new(python_command())
+            .args(["-c", "print(1)"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     #[test]
     fn identifies_turn_cancelled_errors_without_usage_hint() {
         assert!(is_turn_cancelled_message(TURN_CANCELLED_MESSAGE));
@@ -11967,6 +11984,18 @@ UU conflicted.rs",
 
     #[test]
     fn build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers() {
+        // The MCP fixture is a Python script, so this test needs a working
+        // interpreter to exist at all. Without the check, a host that only has
+        // a non-running python shim reports "mcp tools should be allow-listable"
+        // - a product defect - when the real situation is a missing fixture.
+        if !python_is_usable() {
+            eprintln!(
+                "skipping build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers: \
+                 `{}` is not a working interpreter on this host",
+                python_command()
+            );
+            return;
+        }
         let config_home = temp_dir();
         let workspace = temp_dir();
         fs::create_dir_all(&config_home).expect("config home");
