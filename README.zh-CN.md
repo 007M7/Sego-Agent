@@ -120,7 +120,7 @@ Sego 是一个由 9 个 crate 组成的 Rust workspace，依赖流向严格分�
 逐条校验 finding 引用的位置是否真实存在于被审改动中；通过的 finding 获得稳定的 `stable_finding_id` 用于跨版本追踪。
 
 **⑤ 产物持久化与展示**
-结果写入 `.sego/reviews/` 并渲染为终端摘要 / HTML Review Card（Green / Yellow / Red 置信度），聚合为 `AcceptanceRecord` 辅助验收决策。
+结果写入 `.sego/reviews/` 并渲染为终端摘要 / HTML Review Card（Green / Yellow / Red 置信度），聚合为 `AcceptanceRecord` 辅助验收决策。卡片颜色是**展示分级而非状态**：`Green` 表示产物可解析且未记录未决风险，**不**表示代码无问题或已被接受。[合同](docs/REVIEW_ARTIFACT_CONTRACT.md)。
 
 <p align="center">
   <img src="assets/figures/fig4-artifact-lifecycle.svg" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">

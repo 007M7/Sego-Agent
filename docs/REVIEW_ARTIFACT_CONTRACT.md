@@ -153,6 +153,25 @@ These identify the local review engine and mode that produced the artifact. They
 
 They are **not** a cryptographic signature, provenance attestation, or certification. Future releases may add signing/provenance separately.
 
+### Review Card confidence (`Green` / `Yellow` / `Red`)
+
+The Review Card is a **presentation** of an artifact — not a field on it, and not a
+verdict. Its colour is derived mechanically (`rusty-claude-cli/src/review_card.rs`):
+
+- `Red` when `parse_status` is anything other than `structured`: the review did
+  not produce findings Sego could read, so there is nothing to grade;
+- `Yellow` when unresolved risks remain;
+- `Green` otherwise.
+
+`Green` therefore means "this artifact parsed and no unresolved risk was recorded
+in it". It does not mean "the code has no problems", and it is not acceptance,
+approval, or a pass. A consumer that treats `Green` as a merge gate has replaced
+its own review with a colour, which is the opposite of what the artifact is for.
+
+The machine-readable equivalent of the card is the artifact's `parse_status`,
+`highest_severity`, `evidence_coverage` and each finding's `evidence_status`.
+Read those; do not read the colour as a status.
+
 ---
 
 ## 6. How an agent should explain a Sego proof
@@ -187,6 +206,7 @@ A Sego review artifact is a review proof, not a guarantee.
 - It does not replace tests, CI, static analysis, or compliance processes.
 - It does not certify that code is safe to ship.
 - It may contain model-driven findings that require human disposition.
+- A Review Card colour is a presentation grade; `Green` is not acceptance, and not a pass.
 
 Recommended dispositions for each finding (the accepted vocabulary):
 
