@@ -16,7 +16,6 @@ use runtime::{
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
-    worker_boot::WorkerReadySnapshot,
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
     BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
@@ -1254,59 +1253,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_worker_create(input: WorkerCreateInput) -> Result<String, String> {
-    let worker = global_worker_registry().create(
-        &input.cwd,
-        &input.trusted_roots,
-        input.auto_recover_prompt_misdelivery,
-    );
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_get(input: WorkerIdInput) -> Result<String, String> {
-    global_worker_registry()
-        .get(&input.worker_id)
-        .map_or_else(|| Err(format!("worker not found: {}", input.worker_id)), to_pretty_json)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_observe(input: WorkerObserveInput) -> Result<String, String> {
-    let worker = global_worker_registry().observe(&input.worker_id, &input.screen_text)?;
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_resolve_trust(input: WorkerIdInput) -> Result<String, String> {
-    let worker = global_worker_registry().resolve_trust(&input.worker_id)?;
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_await_ready(input: WorkerIdInput) -> Result<String, String> {
-    let snapshot: WorkerReadySnapshot = global_worker_registry().await_ready(&input.worker_id)?;
-    to_pretty_json(snapshot)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_send_prompt(input: WorkerSendPromptInput) -> Result<String, String> {
-    let worker = global_worker_registry().send_prompt(&input.worker_id, input.prompt.as_deref())?;
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_restart(input: WorkerIdInput) -> Result<String, String> {
-    let worker = global_worker_registry().restart(&input.worker_id)?;
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_worker_terminate(input: WorkerIdInput) -> Result<String, String> {
-    let worker = global_worker_registry().terminate(&input.worker_id)?;
-    to_pretty_json(worker)
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_team_create(input: TeamCreateInput) -> Result<String, String> {
     let task_ids: Vec<String> = input
         .tasks
@@ -2113,33 +2059,6 @@ struct AskUserQuestionInput {
     question: String,
     #[serde(default)]
     options: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkerCreateInput {
-    cwd: String,
-    #[serde(default)]
-    trusted_roots: Vec<String>,
-    #[serde(default = "default_auto_recover_prompt_misdelivery")]
-    auto_recover_prompt_misdelivery: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkerIdInput {
-    worker_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkerObserveInput {
-    worker_id: String,
-    screen_text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkerSendPromptInput {
-    worker_id: String,
-    #[serde(default)]
-    prompt: Option<String>,
 }
 
 const fn default_auto_recover_prompt_misdelivery() -> bool {
@@ -4815,14 +4734,20 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 pub mod lane_completion;
 mod registries;
 mod tasks;
+mod workers;
 use tasks::{
     run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
     run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
 };
+use workers::{
+    run_worker_await_ready, run_worker_create, run_worker_get, run_worker_observe,
+    run_worker_resolve_trust, run_worker_restart, run_worker_send_prompt, run_worker_terminate,
+    WorkerCreateInput, WorkerIdInput, WorkerObserveInput, WorkerSendPromptInput,
+};
 mod web_fetch;
 use registries::{
     global_cron_registry, global_lsp_registry, global_mcp_registry, global_task_registry,
-    global_team_registry, global_worker_registry,
+    global_team_registry,
 };
 
 use web_fetch::{run_web_fetch, WebFetchInput};
