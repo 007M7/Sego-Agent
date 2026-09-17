@@ -11383,7 +11383,9 @@ UU conflicted.rs",
         assert!(!report.contains("+++ b/ignored.txt"));
         assert!(!report.contains("+++ b/.omx/state.json"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Same reason as the test below: a Windows handle race on a temporary
+        // directory must not be reported as a product failure.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -11410,7 +11412,12 @@ UU conflicted.rs",
         assert!(message.contains("Unstaged changes:"));
         assert!(message.contains("tracked.txt"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must tolerate failure. This test leaves no handle of its own,
+        // but it runs `git` in `root`, and on Windows a just-exited child or a
+        // scanner can still hold the directory, which turns a passing test into
+        // `ERROR_SHARING_VIOLATION` under parallel load. The assertions above
+        // are the test; deleting the directory is not.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

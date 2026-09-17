@@ -4568,25 +4568,43 @@ fn execute_repl(input: ReplInput) -> Result<ReplOutput, String> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
+    // Own process group on Unix so a timeout can reclaim the whole tree, not
+    // just the interpreter (DEV-SEC-16). No-op on Windows.
+    runtime::process_tree::prepare_process_group(&mut process);
+
     let output = if let Some(timeout_ms) = input.timeout_ms {
         let mut child = process.spawn().map_err(|error| error.to_string())?;
+        // Recovery ledger (DEV-CON-08): recorded only while a task is active.
+        runtime::process_tree::record_spawn(child.id(), "repl", "repl execution");
         loop {
             if child.try_wait().map_err(|error| error.to_string())?.is_some() {
+                runtime::process_tree::record_exit(child.id());
                 break child.wait_with_output().map_err(|error| error.to_string())?;
             }
             if started.elapsed() >= Duration::from_millis(timeout_ms) {
+                // Tree first: the interpreter may have spawned helpers that
+                // would outlive the direct kill.
+                let pid = child.id();
+                let receipt = runtime::process_tree::kill_process_tree(pid).failure_receipt(pid);
                 child.kill().map_err(|error| error.to_string())?;
                 child.wait_with_output().map_err(|error| error.to_string())?;
-                return Err(format!("REPL execution exceeded timeout of {timeout_ms} ms"));
+                runtime::process_tree::record_exit(pid);
+                return Err(match receipt {
+                    Some(receipt) => {
+                        format!("REPL execution exceeded timeout of {timeout_ms} ms; {receipt}")
+                    }
+                    None => format!("REPL execution exceeded timeout of {timeout_ms} ms"),
+                });
             }
             std::thread::sleep(Duration::from_millis(10));
         }
     } else {
-        process
-            .spawn()
-            .map_err(|error| error.to_string())?
-            .wait_with_output()
-            .map_err(|error| error.to_string())?
+        let child = process.spawn().map_err(|error| error.to_string())?;
+        let pid = child.id();
+        runtime::process_tree::record_spawn(pid, "repl", "repl execution");
+        let output = child.wait_with_output().map_err(|error| error.to_string())?;
+        runtime::process_tree::record_exit(pid);
+        output
     };
 
     Ok(ReplOutput {
@@ -5053,13 +5071,20 @@ fn execute_shell_command(
     let mut process = std::process::Command::new(shell);
     process.arg("-NoProfile").arg("-NonInteractive").arg("-Command").arg(command);
     process.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    // Own process group on Unix so a timeout can reclaim spawned helpers too
+    // (DEV-SEC-16). No-op on Windows.
+    runtime::process_tree::prepare_process_group(&mut process);
 
     if let Some(timeout_ms) = timeout {
         let mut child = process.spawn()?;
+        let spawned_pid = child.id();
+        // Recovery ledger (DEV-CON-08): recorded only while a task is active.
+        runtime::process_tree::record_spawn(spawned_pid, shell, "shell command");
         let started = Instant::now();
         loop {
             if let Some(status) = child.try_wait()? {
                 let output = child.wait_with_output()?;
+                runtime::process_tree::record_exit(spawned_pid);
                 return Ok(runtime::BashCommandOutput {
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -5082,10 +5107,15 @@ fn execute_shell_command(
                 });
             }
             if started.elapsed() >= Duration::from_millis(timeout_ms) {
+                // Tree first, then the direct child (DEV-SEC-16): killing only
+                // the shell leaves its helpers running with open handles.
+                let pid = child.id();
+                let receipt = runtime::process_tree::kill_process_tree(pid).failure_receipt(pid);
                 let _ = child.kill();
                 let output = child.wait_with_output()?;
+                runtime::process_tree::record_exit(spawned_pid);
                 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                let stderr = if stderr.trim().is_empty() {
+                let mut stderr = if stderr.trim().is_empty() {
                     format!("Command exceeded timeout of {timeout_ms} ms")
                 } else {
                     format!(
@@ -5094,6 +5124,9 @@ Command exceeded timeout of {timeout_ms} ms",
                         stderr.trim_end()
                     )
                 };
+                if let Some(receipt) = receipt {
+                    stderr = format!("{stderr}\n{receipt}");
+                }
                 return Ok(runtime::BashCommandOutput {
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     stderr,
@@ -5116,7 +5149,14 @@ Command exceeded timeout of {timeout_ms} ms",
         }
     }
 
-    let output = process.output()?;
+    // Spawned rather than `process.output()` so the pid can be recorded: the
+    // two are the same call underneath, and a run with no timeout still has to
+    // appear in the ledger while it runs.
+    let child = process.spawn()?;
+    let spawned_pid = child.id();
+    runtime::process_tree::record_spawn(spawned_pid, shell, "shell command");
+    let output = child.wait_with_output()?;
+    runtime::process_tree::record_exit(spawned_pid);
     Ok(runtime::BashCommandOutput {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),

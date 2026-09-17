@@ -165,14 +165,31 @@ const REQUIRED_CASES: &[(&str, &[&str])] = &[
             "the_dependency_audit_policy_is_present_and_not_hollowed_out",
         ],
     ),
+    (
+        // The mechanism half: tree-kill tolerates an already-exited target,
+        // pid 0 is never signalled, a live tree reports Reclaimed, a refused
+        // signal reports a receipt instead of being swallowed, and a killed
+        // group leaves no surviving grandchild - on Unix and on Windows, which
+        // is where the implementation differs. The ledger half (DEV-CON-08) is
+        // covered by the recording case: it records while a task is active and
+        // stays silent when none is.
+        "DEV-SEC-16 a timeout or cancel reclaims the spawned process tree",
+        &[
+            "killing_an_already_exited_pid_is_not_an_error",
+            "pid_zero_is_never_signalled",
+            "killing_a_live_tree_is_reported_as_reclaimed",
+            "a_refused_kill_produces_a_receipt_naming_the_pid",
+            "only_a_failure_produces_a_receipt",
+            "a_timeout_reclaims_the_grandchild_by_its_own_pid",
+            "a_timeout_reclaims_the_grandchild_on_windows_too",
+            "the_ledger_records_a_spawn_only_while_a_task_is_active",
+        ],
+    ),
 ];
 
 /// Items whose negative case cannot exist yet, with the reason. Kept separate so
 /// an absent case is recorded rather than quietly passing.
-const PENDING_CASES: &[(&str, &str)] = &[(
-    "DEV-SEC-16",
-    "process-tree reclamation is in flight in another window (the case belongs with that change)",
-)];
+const PENDING_CASES: &[(&str, &str)] = &[];
 
 #[test]
 fn every_fixed_security_item_still_carries_its_negative_case() {
@@ -199,11 +216,19 @@ fn every_fixed_security_item_still_carries_its_negative_case() {
 
 #[test]
 fn pending_security_items_are_recorded_rather_than_assumed() {
-    // A guard on the guard: if someone removes the pending list while the items
-    // are still open, the omission should be deliberate.
+    // A guard on the guard. DEV-SEC-16 was the last item without a case, so the
+    // pending list is now expected to be empty. The assertion points the other
+    // way from before on purpose: a non-empty list is no longer normal, and an
+    // entry added back must carry a reason, so "deferred" can never quietly
+    // become "forgotten".
     assert!(
-        !PENDING_CASES.is_empty(),
-        "either the remaining security items gained their cases, or this list was emptied by mistake"
+        PENDING_CASES.is_empty(),
+        "every security item now has its negative case; re-adding a pending entry requires clearing it again:\n  {}",
+        PENDING_CASES
+            .iter()
+            .map(|(item, _)| (*item).to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
     for (item, reason) in PENDING_CASES {
         assert!(!reason.is_empty(), "{item} must record why its case is missing");

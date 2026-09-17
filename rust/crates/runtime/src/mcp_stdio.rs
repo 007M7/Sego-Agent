@@ -1048,8 +1048,22 @@ impl McpStdioProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         apply_env(&mut command, &transport.env);
+        // Own process group on Unix so terminate()/shutdown() can reach the
+        // whole tree, not just the server binary (DEV-SEC-16). No-op on Windows,
+        // where taskkill /T walks the tree without spawn-time setup.
+        crate::process_tree::prepare_process_group(command.as_std_mut());
 
         let mut child = command.spawn()?;
+        // Recovery ledger (DEV-CON-08): recorded only while a task is active.
+        // An MCP server outlives the call that started it, so it is exactly the
+        // kind of process a crash leaves behind.
+        if let Some(pid) = child.id() {
+            crate::process_tree::record_spawn(
+                pid,
+                command.as_std().get_program().to_string_lossy().as_ref(),
+                "mcp server",
+            );
+        }
         let stdin = child
             .stdin
             .take()
@@ -1232,8 +1246,31 @@ impl McpStdioProcess {
         self.request(id, "resources/read", Some(params)).await
     }
 
+    /// Reclaim the whole process tree, returning an operator-facing receipt
+    /// when reclamation could not be confirmed.
+    fn reclaim_tree(&mut self) -> Option<String> {
+        let pid = self.child.id()?;
+        let outcome = crate::process_tree::kill_process_tree(pid);
+        // The server is stopped either way, so its ledger entry is closed here
+        // rather than being left looking alive to a later crash reconciliation.
+        crate::process_tree::record_exit(pid);
+        outcome.failure_receipt(pid)
+    }
+
     pub async fn terminate(&mut self) -> io::Result<()> {
-        self.child.kill().await
+        // Kill the tree, not just the server binary: an MCP server that
+        // spawned helpers would leave them orphaned (DEV-SEC-16).
+        let receipt = self.reclaim_tree();
+        let killed = self.child.kill().await;
+        // The direct kill is reported first, because it decides whether the
+        // server itself is gone. A tree that could not be reclaimed is then
+        // reported instead of swallowed: descendants may still be running, and
+        // that is exactly what an operator needs to know.
+        match (killed, receipt) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Some(receipt)) => Err(io::Error::other(receipt)),
+            (Ok(()), None) => Ok(()),
+        }
     }
 
     pub async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
@@ -1245,7 +1282,9 @@ impl McpStdioProcess {
     }
 
     async fn shutdown(&mut self) -> io::Result<()> {
+        let mut receipt = None;
         if self.child.try_wait()?.is_none() {
+            receipt = self.reclaim_tree();
             match self.child.kill().await {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
@@ -1253,7 +1292,10 @@ impl McpStdioProcess {
             }
         }
         let _ = self.child.wait().await?;
-        Ok(())
+        match receipt {
+            Some(receipt) => Err(io::Error::other(receipt)),
+            None => Ok(()),
+        }
     }
 }
 
