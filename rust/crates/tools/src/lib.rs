@@ -1253,157 +1253,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_list_mcp_resources(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.list_resources(server) {
-        Ok(resources) => {
-            let items: Vec<_> = resources
-                .iter()
-                .map(|r| {
-                    json!({
-                        "uri": r.uri,
-                        "name": r.name,
-                        "description": r.description,
-                        "mime_type": r.mime_type,
-                    })
-                })
-                .collect();
-            to_pretty_json(json!({
-                "server": server,
-                "resources": items,
-                "count": items.len()
-            }))
-        }
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "resources": [],
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_read_mcp_resource(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let uri = input.uri.as_deref().unwrap_or("");
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.read_resource(server, uri) {
-        Ok(resource) => to_pretty_json(json!({
-            "server": server,
-            "uri": resource.uri,
-            "name": resource.name,
-            "description": resource.description,
-            "mime_type": resource.mime_type
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "uri": uri,
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_mcp_auth(input: McpAuthInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    match registry.get_server(&input.server) {
-        Some(state) => to_pretty_json(json!({
-            "server": input.server,
-            "status": state.status,
-            "server_info": state.server_info,
-            "tool_count": state.tools.len(),
-            "resource_count": state.resources.len()
-        })),
-        None => to_pretty_json(json!({
-            "server": input.server,
-            "status": "disconnected",
-            "message": "Server not registered. Use MCP tool to connect first."
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
-    let method = input.method.unwrap_or_else(|| "GET".to_string());
-    let client = Client::new();
-
-    let mut request = match method.to_uppercase().as_str() {
-        "GET" => client.get(&input.url),
-        "POST" => client.post(&input.url),
-        "PUT" => client.put(&input.url),
-        "DELETE" => client.delete(&input.url),
-        "PATCH" => client.patch(&input.url),
-        "HEAD" => client.head(&input.url),
-        other => return Err(format!("unsupported HTTP method: {other}")),
-    };
-
-    // Apply custom headers
-    if let Some(ref headers) = input.headers {
-        if let Some(obj) = headers.as_object() {
-            for (key, value) in obj {
-                if let Some(val) = value.as_str() {
-                    request = request.header(key.as_str(), val);
-                }
-            }
-        }
-    }
-
-    // Apply body
-    if let Some(ref body) = input.body {
-        request = request.body(body.clone());
-    }
-
-    // Execute with a 30-second timeout
-    let request = request.timeout(Duration::from_secs(30));
-
-    match request.send() {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().unwrap_or_default();
-            let truncated_body = if body.len() > 8192 {
-                format!("{}\n\n[response truncated — {} bytes total]", &body[..8192], body.len())
-            } else {
-                body
-            };
-            to_pretty_json(json!({
-                "url": input.url,
-                "method": method,
-                "status_code": status,
-                "body": truncated_body,
-                "success": (200..300).contains(&status)
-            }))
-        }
-        Err(e) => to_pretty_json(json!({
-            "url": input.url,
-            "method": method,
-            "error": e.to_string(),
-            "success": false
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_mcp_tool(input: McpToolInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let args = input.arguments.unwrap_or(serde_json::json!({}));
-    match registry.call_tool(&input.server, &input.tool, &args) {
-        Ok(result) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "result": result,
-            "status": "success"
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "error": e,
-            "status": "error"
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_testing_permission(input: TestingPermissionInput) -> Result<String, String> {
     to_pretty_json(json!({
         "action": input.action,
@@ -1959,38 +1808,6 @@ struct AskUserQuestionInput {
 
 const fn default_auto_recover_prompt_misdelivery() -> bool {
     true
-}
-
-#[derive(Debug, Deserialize)]
-struct McpResourceInput {
-    #[serde(default)]
-    server: Option<String>,
-    #[serde(default)]
-    uri: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpAuthInput {
-    server: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteTriggerInput {
-    url: String,
-    #[serde(default)]
-    method: Option<String>,
-    #[serde(default)]
-    headers: Option<Value>,
-    #[serde(default)]
-    body: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpToolInput {
-    server: String,
-    tool: String,
-    #[serde(default)]
-    arguments: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4592,11 +4409,16 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 
 pub mod lane_completion;
 mod lsp;
+mod mcp;
 mod registries;
 mod tasks;
 mod team_cron;
 mod workers;
 use lsp::{run_lsp, LspInput};
+use mcp::{
+    run_list_mcp_resources, run_mcp_auth, run_mcp_tool, run_read_mcp_resource, run_remote_trigger,
+    McpAuthInput, McpResourceInput, McpToolInput, RemoteTriggerInput,
+};
 use tasks::{
     run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
     run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
@@ -4613,7 +4435,6 @@ use workers::{
 mod web_fetch;
 // Only the registries this file still reaches for; each domain imports its own
 // from `crate::registries`.
-use registries::global_mcp_registry;
 
 use web_fetch::{run_web_fetch, WebFetchInput};
 // The rest of the WebFetch surface is exercised directly by the tests, which
