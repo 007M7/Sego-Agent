@@ -64,7 +64,68 @@ pub struct SandboxStatus {
     pub allowed_mounts: Vec<String>,
     pub in_container: bool,
     pub container_markers: Vec<String>,
+    /// What isolation this build provides, stated even when nothing was asked
+    /// for. See [`PlatformIsolation`].
+    pub platform_isolation: PlatformIsolation,
     pub fallback_reason: Option<String>,
+}
+
+/// Process isolation this build can provide, independent of any request.
+///
+/// The limitation used to be visible only through `fallback_reason`, which is
+/// populated only when a caller asks for isolation, so a reader of the status
+/// could conclude the platform isolates by default. Sego ships Windows, Linux
+/// and macOS binaries while only Linux has an implementation; the
+/// AppContainer/AppArmor material elsewhere in the repository is governance
+/// evidence, not a runtime capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformIsolation {
+    /// Linux namespaces via `unshare`.
+    NamespaceIsolation,
+    /// No equivalent implementation on this platform: the process runs
+    /// unsandboxed however it is requested.
+    Unavailable,
+}
+
+impl Default for PlatformIsolation {
+    /// Absence of isolation, not a guess at its presence: a default that
+    /// claimed `NamespaceIsolation` would overstate what an unconfigured build
+    /// is doing.
+    fn default() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl PlatformIsolation {
+    #[must_use]
+    pub fn from_namespace_support(namespace_supported: bool) -> Self {
+        if namespace_supported {
+            Self::NamespaceIsolation
+        } else {
+            Self::Unavailable
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NamespaceIsolation => "namespace_isolation",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Human statement of the capability, so callers do not have to infer it.
+    #[must_use]
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::NamespaceIsolation => "process isolation available: Linux namespaces via unshare",
+            Self::Unavailable => {
+                "no process isolation on this platform: Linux namespaces via unshare are the only \
+                 implementation, so Windows and macOS run unsandboxed"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +259,7 @@ pub fn resolve_sandbox_status_for_request(request: &SandboxRequest, cwd: &Path) 
         allowed_mounts,
         in_container: container.in_container,
         container_markers: container.markers,
+        platform_isolation: PlatformIsolation::from_namespace_support(namespace_supported),
         fallback_reason: (!fallback_reasons.is_empty()).then(|| fallback_reasons.join("; ")),
     }
 }
@@ -290,10 +352,64 @@ fn unshare_user_namespace_works() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_linux_sandbox_command, detect_container_environment_from, FilesystemIsolationMode,
-        SandboxConfig, SandboxDetectionInputs,
+        build_linux_sandbox_command, detect_container_environment_from, resolve_sandbox_status,
+        FilesystemIsolationMode, PlatformIsolation, SandboxConfig, SandboxDetectionInputs,
     };
     use std::path::Path;
+
+    #[test]
+    fn platform_isolation_is_declared_even_when_nothing_is_requested() {
+        // The status has to state the platform capability by itself: a caller
+        // that asks for no isolation must still be able to tell whether this
+        // build could have provided it. Previously the gap appeared only in
+        // `fallback_reason`, and only when isolation was requested.
+        let status = resolve_sandbox_status(&SandboxConfig::default(), Path::new("."));
+
+        assert_eq!(
+            status.platform_isolation,
+            PlatformIsolation::from_namespace_support(status.namespace_supported),
+            "the declaration must agree with the per-request capability flag"
+        );
+        assert!(
+            !status.platform_isolation.note().is_empty(),
+            "the capability must carry a human statement"
+        );
+        assert_eq!(
+            status.platform_isolation.as_str(),
+            if status.namespace_supported { "namespace_isolation" } else { "unavailable" }
+        );
+
+        // The default config asks for namespace restrictions, so a fallback
+        // reason is expected there. Turning the sandbox off is the case this
+        // declaration exists for: nothing is requested, `fallback_reason` stays
+        // empty, and the platform capability still has to be readable.
+        let disabled = SandboxConfig { enabled: Some(false), ..SandboxConfig::default() };
+        let quiet = resolve_sandbox_status(&disabled, Path::new("."));
+        assert!(quiet.fallback_reason.is_none(), "nothing was requested");
+        assert_eq!(
+            quiet.platform_isolation, status.platform_isolation,
+            "the declaration must not depend on whether isolation was requested"
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(quiet.platform_isolation, PlatformIsolation::Unavailable);
+            assert!(
+                quiet.platform_isolation.note().contains("no process isolation"),
+                "a platform without an implementation must say so"
+            );
+        }
+    }
+
+    #[test]
+    fn isolation_default_does_not_overclaim() {
+        assert_eq!(PlatformIsolation::default(), PlatformIsolation::Unavailable);
+        assert!(PlatformIsolation::Unavailable.note().contains("unsandboxed"));
+        assert_eq!(
+            PlatformIsolation::from_namespace_support(true),
+            PlatformIsolation::NamespaceIsolation
+        );
+    }
 
     #[test]
     fn detects_container_markers_from_multiple_sources() {
