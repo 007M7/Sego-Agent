@@ -20,12 +20,30 @@ targets = [
 ]
 
 [advisories]
-# Waivers live here, one entry per line, each with an id and a reason. The list
-# is empty on purpose: nothing has been reviewed and waived yet, and an entry
-# added without a reason defeats the point of the check. When a first real run
-# reports something that cannot be fixed now, add it as:
-#   { id = "RUSTSEC-0000-0000", reason = "<why accepted, and until when>" }
-ignore = []
+# Waivers live here, one entry per line, each with an id and a reason.
+ignore = [
+    # Unmaintained, not vulnerable. Upstream ceased development permanently after
+    # a harassment incident and considers 1.3.3 complete; there is no known
+    # advisory against it. It also cannot be removed from here: bincode arrives
+    # through syntect, which uses it for its precompiled syntax dumps, and that
+    # dependency is not ours to change.
+    #
+    # Accepted on the same basis as any other waiver: a written decision, not a
+    # default. Revisit if syntect drops it, or if an advisory is published
+    # against 1.3.3 rather than merely calling the crate unmaintained.
+    { id = "RUSTSEC-2025-0141", reason = "unmaintained, not vulnerable; transitive via syntect, not reachable from our code" },
+    # Same shape, same source: the maintainer is unreachable and rustsec says
+    # "No safe upgrade is available". yaml-rust arrives through syntect, which
+    # parses its own bundled YAML syntax definitions with it - not data we or a
+    # user supplies.
+    #
+    # Both entries point at one fact worth acting on: syntect 5.3.0 is the
+    # latest release and is the sole source of every unmaintained advisory here.
+    # Replacing it is a product decision (it draws the syntax highlighting),
+    # not a dependency bump, and it is recorded as such rather than hidden by
+    # the waiver.
+    { id = "RUSTSEC-2024-0320", reason = "unmaintained, no safe upgrade; transitive via syntect over its own bundled syntax files" },
+]
 
 [licenses]
 # Derived from the actual dependency set (Cargo.lock plus the `license` field of
@@ -56,6 +74,17 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The rule above is about unbounded *registry* version selection: `version = "*"`
+# accepts whatever the index offers, which is a supply-chain decision nobody
+# made. It does not apply to path dependencies - `runtime = { path = "../runtime" }`
+# resolves to a directory in this repository, so there is no registry, no
+# version selection and no third party. Every workspace member is `publish = false`
+# anyway, so a version requirement on an in-repo dependency would document
+# nothing and add a bump-time chore across twenty declarations.
+#
+# So the exemption is scoped to exactly that case. A wildcard on a crates.io
+# dependency is still denied.
+allow-wildcard-paths = true
 
 [sources]
 # Every dependency must come from crates.io. A `git` or arbitrary-registry
