@@ -641,33 +641,6 @@ fn resolve_plugin_target(
     }
 }
 
-impl SkillInstallSource {
-    fn prompt_path(&self) -> &Path {
-        match self {
-            Self::Directory { prompt_path, .. } => prompt_path,
-            Self::MarkdownFile { path } => path,
-        }
-    }
-
-    fn fallback_name(&self) -> Option<String> {
-        match self {
-            Self::Directory { root, .. } => {
-                root.file_name().map(|name| name.to_string_lossy().to_string())
-            }
-            Self::MarkdownFile { path } => {
-                path.file_stem().map(|name| name.to_string_lossy().to_string())
-            }
-        }
-    }
-
-    fn report_path(&self) -> &Path {
-        match self {
-            Self::Directory { root, .. } => root,
-            Self::MarkdownFile { path } => path,
-        }
-    }
-}
-
 #[must_use]
 pub fn handle_slash_command(
     input: &str,
@@ -800,7 +773,7 @@ mod definitions;
 
 pub(crate) use definitions::{
     discover_definition_roots, discover_skill_roots, install_skill, load_agents_from_roots,
-    load_skills_from_roots, SkillInstallSource,
+    load_skills_from_roots,
 };
 
 // Only the tests reach these; the library calls the rest of the layer

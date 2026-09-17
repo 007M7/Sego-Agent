@@ -489,3 +489,30 @@ pub(crate) fn unquote_frontmatter_value(value: &str) -> String {
         .trim()
         .to_string()
 }
+
+impl SkillInstallSource {
+    fn prompt_path(&self) -> &Path {
+        match self {
+            Self::Directory { prompt_path, .. } => prompt_path,
+            Self::MarkdownFile { path } => path,
+        }
+    }
+
+    fn fallback_name(&self) -> Option<String> {
+        match self {
+            Self::Directory { root, .. } => {
+                root.file_name().map(|name| name.to_string_lossy().to_string())
+            }
+            Self::MarkdownFile { path } => {
+                path.file_stem().map(|name| name.to_string_lossy().to_string())
+            }
+        }
+    }
+
+    fn report_path(&self) -> &Path {
+        match self {
+            Self::Directory { root, .. } => root,
+            Self::MarkdownFile { path } => path,
+        }
+    }
+}
