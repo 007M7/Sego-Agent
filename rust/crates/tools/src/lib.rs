@@ -1254,118 +1254,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_task_create(input: TaskCreateInput) -> Result<String, String> {
-    let registry = global_task_registry();
-    let task = registry.create(&input.prompt, input.description.as_deref());
-    to_pretty_json(json!({
-        "task_id": task.task_id,
-        "status": task.status,
-        "prompt": task.prompt,
-        "description": task.description,
-        "task_packet": task.task_packet,
-        "created_at": task.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_task_packet(input: TaskPacket) -> Result<String, String> {
-    let registry = global_task_registry();
-    let task = registry.create_from_packet(input).map_err(|error| error.to_string())?;
-
-    to_pretty_json(json!({
-        "task_id": task.task_id,
-        "status": task.status,
-        "prompt": task.prompt,
-        "description": task.description,
-        "task_packet": task.task_packet,
-        "created_at": task.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_task_get(input: TaskIdInput) -> Result<String, String> {
-    let registry = global_task_registry();
-    match registry.get(&input.task_id) {
-        Some(task) => to_pretty_json(json!({
-            "task_id": task.task_id,
-            "status": task.status,
-            "prompt": task.prompt,
-            "description": task.description,
-            "task_packet": task.task_packet,
-            "created_at": task.created_at,
-            "updated_at": task.updated_at,
-            "messages": task.messages,
-            "team_id": task.team_id
-        })),
-        None => Err(format!("task not found: {}", input.task_id)),
-    }
-}
-
-fn run_task_list(_input: Value) -> Result<String, String> {
-    let registry = global_task_registry();
-    let tasks: Vec<_> = registry
-        .list(None)
-        .into_iter()
-        .map(|t| {
-            json!({
-                "task_id": t.task_id,
-                "status": t.status,
-                "prompt": t.prompt,
-                "description": t.description,
-                "task_packet": t.task_packet,
-                "created_at": t.created_at,
-                "updated_at": t.updated_at,
-                "team_id": t.team_id
-            })
-        })
-        .collect();
-    to_pretty_json(json!({
-        "tasks": tasks,
-        "count": tasks.len()
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_task_stop(input: TaskIdInput) -> Result<String, String> {
-    let registry = global_task_registry();
-    match registry.stop(&input.task_id) {
-        Ok(task) => to_pretty_json(json!({
-            "task_id": task.task_id,
-            "status": task.status,
-            "message": "Task stopped"
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_task_update(input: TaskUpdateInput) -> Result<String, String> {
-    let registry = global_task_registry();
-    match registry.update(&input.task_id, &input.message) {
-        Ok(task) => to_pretty_json(json!({
-            "task_id": task.task_id,
-            "status": task.status,
-            "message_count": task.messages.len(),
-            "last_message": input.message
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_task_output(input: TaskIdInput) -> Result<String, String> {
-    let registry = global_task_registry();
-    match registry.output(&input.task_id) {
-        Ok(output) => to_pretty_json(json!({
-            "task_id": input.task_id,
-            "output": output,
-            "has_output": !output.is_empty()
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_worker_create(input: WorkerCreateInput) -> Result<String, String> {
     let worker = global_worker_registry().create(
         &input.cwd,
@@ -2225,24 +2113,6 @@ struct AskUserQuestionInput {
     question: String,
     #[serde(default)]
     options: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskCreateInput {
-    prompt: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskIdInput {
-    task_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskUpdateInput {
-    task_id: String,
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4944,6 +4814,11 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 
 pub mod lane_completion;
 mod registries;
+mod tasks;
+use tasks::{
+    run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
+    run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
+};
 mod web_fetch;
 use registries::{
     global_cron_registry, global_lsp_registry, global_mcp_registry, global_task_registry,
