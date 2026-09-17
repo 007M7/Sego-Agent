@@ -225,3 +225,47 @@ These are the values `ReviewFindingStatus::parse` accepts
 finding, and `acknowledged` plus an explicit reason for a deferred one.
 
 See `docs/AGENT_REVIEW_HANDOFF.md` for the recommended agent workflow.
+
+---
+
+## 8. What each contract declares, and what it does not
+
+Consumers were left to infer which of these properties a Sego contract actually
+provides, and the honest answer differs per contract. The table below is the
+current state, not a target: an entry marked **absent** means the contract does
+not carry it, and a consumer must not assume it does. This is the consumer-facing
+form of the completeness list in `SEGO-BASELINE-ARCHITECTURE.md` §11.3.
+
+| Property | `sego.review.artifact/v1` (rev 2) | `sego.sidecar.envelope` (rev 1) | `sego.review.index-entry` (rev 1) |
+|---|---|---|---|
+| Version | declared (`schema_version`, `x-contract-revision`) | declared | declared |
+| Stable id | declared (`id`) | **absent** — a response has no request id to correlate on | declared (`id`) |
+| Provenance | declared (`git_status`, `diff_hash`, engine metadata) | partial (`cwd`, `scope`, `context.diff_hash`) | declared (`json_path`, `markdown_path`) |
+| Idempotency | **not an idempotency key.** A repeat is refused with `artifact_id_conflict`, not deduplicated: same-second repeats for the same diff collide by design | **absent** — retrying a request is a new review, not a replay | **absent** |
+| Permission | enforced in implementation (sidecar forces ReadOnly), **not declared in the schema** | partially: the envelope is machine-only, but the schema states no permission | **absent** |
+| Audit | partial (`invocation_id` when the caller supplies it) | partial (`context.invocation_id` echoed) | **absent** — the index deliberately stays minimal (decision D-5) and carries no invocation id |
+| Expiry | **absent** — artifacts do not expire; they are deleted by the operator or not at all | n/a (request/response) | **absent** |
+| Failure semantics | partial (`parse_status`, `parse_error`, `parse_repair`) | **partial, and weaker than it looks**: `status: "error"` and `error.{code,message}` exist, but `code` is an open string with **no enumeration** and only `message` is required — so the implemented codes (`unknown_model`, `provider_model_conflict`, `invalid_request`, `unsupported_schema_version`, `artifact_id_conflict`, `review_failed`) are **implementation-only and may be absent from the payload**. `no_diff` *is* declared, but as a `parse_status` value rather than an error code | **absent** |
+| Recovery | **absent** — nothing in the contract describes resuming an interrupted review | **absent** | **absent** |
+| Compatibility | partial (`x-contract-revision` exists; no migration mechanism and no converter) | partial (same) | partial (same) |
+| Deprecation window | **absent** — no revision has been retired and no window is defined | **absent** | **absent** |
+
+Two consequences a consumer should act on rather than discover:
+
+1. **Do not use an artifact as an idempotency key.** `diff_hash` plus scope
+   identifies *what* was reviewed, not *an execution of* reviewing it; the same
+   input reviewed twice produces two artifacts (or one refused collision) and two
+   index lines. Bind executions with the caller's own `context.invocation_id`.
+2. **Branch on `status`, not on `error.code`.** The code is not enumerated in
+   the contract, so a consumer that switches on it is depending on implementation
+   strings; `message` is the only required field. `no_diff` is not an error: it is
+   a declared `parse_status` value meaning "this scope had nothing to review", and
+   it is explicitly not a pass.
+3. **A missing field is not a false one.** `invocation_id`, `resolved_provider`,
+   `resolved_model`, `resolved_endpoint` and `identity_evidence_gap` are omitted
+   when absent; the response uses `null` for some of them. Treat omitted and
+   `null` as the same "not reported" and do not substitute a request-side value.
+
+Filling the **absent** entries is a contract change: it needs a revision bump
+here and a coordinated update on the consuming side, not a field added quietly in
+the implementation.
