@@ -2797,7 +2797,13 @@ mod tests {
         let configured = BTreeMap::from([("SEGO_TEST_CONFIGURED".to_string(), "yes".to_string())]);
         apply_env(&mut command, &configured);
 
-        let output = runtime.block_on(command.output()).expect("env probe should run");
+        // The future is created *inside* `block_on`. Building it outside and
+        // passing it in compiles and passes on Windows, but on Unix tokio's
+        // process spawn needs the runtime context when the future is created
+        // and panics with "there is no reactor running" - which is why every
+        // other spawn test in this file is shaped this way.
+        let output =
+            runtime.block_on(async { command.output().await }).expect("env probe should run");
         let text = String::from_utf8_lossy(&output.stdout);
         let child_names: Vec<String> = text
             .lines()

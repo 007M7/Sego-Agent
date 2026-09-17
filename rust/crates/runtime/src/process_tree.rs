@@ -299,20 +299,26 @@ mod tests {
     /// grandchild's pid, which only a tree kill can reach.
     #[cfg(unix)]
     fn spawn_grandchild() -> (std::process::Child, u32) {
-        use std::io::Read as _;
+        use std::io::BufRead as _;
 
         let mut command = Command::new("sh");
         command
-            .args(["-c", "sleep 30 & echo $!"])
+            // The grandchild's own stdio is redirected away from our pipe.
+            // Inheriting it would keep the pipe open after `sh` exits, so
+            // reading the shell's output would block until the sleep finished -
+            // which is both slow and defeats the test, since by then there is
+            // nothing left to reclaim. (The Windows case had the same bug in
+            // PowerShell form; that one is fixed by reading a single line.)
+            .args(["-c", "sleep 30 >/dev/null 2>&1 & echo $!"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
         prepare_process_group(&mut command);
         let mut child = command.spawn().expect("spawn tree");
-        let mut stdout = child.stdout.take().expect("stdout is piped");
-        let mut buffer = String::new();
-        stdout.read_to_string(&mut buffer).expect("read grandchild pid");
-        let grandchild: u32 = buffer.trim().parse().expect("a pid");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let mut line = String::new();
+        std::io::BufReader::new(stdout).read_line(&mut line).expect("read grandchild pid");
+        let grandchild: u32 = line.trim().parse().expect("a pid");
         (child, grandchild)
     }
 

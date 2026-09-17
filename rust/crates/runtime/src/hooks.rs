@@ -808,15 +808,21 @@ mod tests {
 
     #[test]
     fn hook_process_does_not_inherit_the_parent_environment() {
-        // Variables this process exports that the allowlist does not cover.
-        let parent_only: Vec<String> = std::env::vars_os()
-            .filter_map(|(key, _)| key.to_str().map(str::to_owned))
-            .filter(|key| !allowed_inherited_env_key(key))
-            .collect();
+        // The probe names one variable that exists only in this process and is
+        // not on the allowlist, instead of enumerating whatever the ambient
+        // environment happens to hold. Enumerating looked stricter but was not
+        // testable on Unix: the hook runs through a shell, and a shell exports
+        // `PWD` (and `SHLVL`, `_`) on its own, so the child reports names this
+        // process never passed it. The assertion could not tell "we leaked it"
+        // apart from "the shell created it", and failed on the Linux runner for
+        // exactly that reason. A unique name has one possible source.
+        let _guard = crate::test_env_lock();
+        const CANARY: &str = "SEGO_TEST_PARENT_ONLY_CANARY";
         assert!(
-            !parent_only.is_empty(),
-            "no non-allowlisted variable exists in this environment, so the filter is untested"
+            !allowed_inherited_env_key(CANARY),
+            "{CANARY} must not be on the allowlist, or this test proves nothing"
         );
+        std::env::set_var(CANARY, "must-not-reach-the-child");
 
         let probe = if cfg!(windows) { "set" } else { "env" };
         let mut command = shell_command(probe);
@@ -830,15 +836,13 @@ mod tests {
             }
             CommandExecution::Cancelled => panic!("probe was reported as cancelled"),
         };
+        std::env::remove_var(CANARY);
 
         assert!(!stdout.is_empty(), "probe produced no output, so it cannot have run: {stdout}");
-        for name in &parent_only {
-            let needle = format!("{}=", name.to_ascii_uppercase());
-            assert!(
-                !stdout.to_ascii_uppercase().contains(&needle),
-                "hook process inherited a variable outside the allowlist: {name}"
-            );
-        }
+        assert!(
+            !stdout.to_ascii_uppercase().contains(CANARY),
+            "the child inherited a variable outside the allowlist: {stdout}"
+        );
         // PATH has to survive or a hook cannot find its own interpreter.
         assert!(stdout.to_ascii_uppercase().contains("PATH="), "PATH must be inherited: {stdout}");
     }
