@@ -273,7 +273,8 @@ mod tests {
 
     #[test]
     fn killing_a_live_tree_is_reported_as_reclaimed() {
-        let mut child = Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+        let mut command = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
+        command
             .args(if cfg!(windows) {
                 vec!["/C", "ping -n 30 127.0.0.1 > nul"]
             } else {
@@ -281,9 +282,13 @@ mod tests {
             })
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn long-lived child");
+            .stderr(std::process::Stdio::null());
+        // On Unix the kill addresses a process *group*, so the group has to
+        // exist. Without this the group id we signal is not a group at all and
+        // the refusal is reported as `AlreadyGone` - which is exactly what the
+        // macOS runner caught when this line was missing.
+        prepare_process_group(&mut command);
+        let mut child = command.spawn().expect("spawn long-lived child");
         let pid = child.id();
 
         let outcome = kill_process_tree(pid);
@@ -295,31 +300,72 @@ mod tests {
         );
     }
 
-    /// Spawn `sh -c 'sleep 30 & echo $!'` into its own group and return the
-    /// grandchild's pid, which only a tree kill can reach.
+    /// Spawn a two-level tree and return it with the descendant's pid.
+    ///
+    /// The descendant runs in the *foreground* of the inner shell. An earlier
+    /// version backgrounded it (`sleep 30 &`) and read the pid from the outer
+    /// shell's stdout; that failed on the Linux runner, where the descendant
+    /// outlived the group kill. Background jobs are a shell-controlled detail -
+    /// a shell may place them in a group of their own, and then a group kill
+    /// legitimately cannot reach them - so the test no longer depends on it.
+    /// A foreground child stays in the shell's group by definition, which is
+    /// the premise the mechanism rests on, and [`assert_same_group`] checks
+    /// that premise rather than assuming it.
     #[cfg(unix)]
     fn spawn_grandchild() -> (std::process::Child, u32) {
-        use std::io::BufRead as _;
+        let pidfile = std::env::temp_dir().join(format!(
+            "process-tree-pid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time after epoch")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
 
         let mut command = Command::new("sh");
         command
-            // The grandchild's own stdio is redirected away from our pipe.
-            // Inheriting it would keep the pipe open after `sh` exits, so
-            // reading the shell's output would block until the sleep finished -
-            // which is both slow and defeats the test, since by then there is
-            // nothing left to reclaim. (The Windows case had the same bug in
-            // PowerShell form; that one is fixed by reading a single line.)
-            .args(["-c", "sleep 30 >/dev/null 2>&1 & echo $!"])
+            // The inner shell reports its own pid and then becomes the sleep,
+            // so the pid we hold belongs to the process we intend to kill.
+            .args(["-c", &format!("sh -c 'echo $$ > {0}; exec sleep 30'", pidfile.display())])
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         prepare_process_group(&mut command);
-        let mut child = command.spawn().expect("spawn tree");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        let mut line = String::new();
-        std::io::BufReader::new(stdout).read_line(&mut line).expect("read grandchild pid");
-        let grandchild: u32 = line.trim().parse().expect("a pid");
+        let child = command.spawn().expect("spawn tree");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let grandchild = loop {
+            if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                if let Ok(pid) = text.trim().parse::<u32>() {
+                    break pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the inner shell never reported its pid via {}",
+                pidfile.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let _ = std::fs::remove_file(&pidfile);
         (child, grandchild)
+    }
+
+    /// The process group a pid belongs to, or `None` when it is gone.
+    #[cfg(unix)]
+    fn process_group_of(pid: u32) -> Option<u32> {
+        let output =
+            Command::new("ps").args(["-o", "pgid=", "-p", &pid.to_string()]).output().ok()?;
+        String::from_utf8_lossy(&output.stdout).trim().parse::<u32>().ok()
+    }
+
+    /// The scheduler state of a pid (`Z` means a zombie), or `None` if gone.
+    #[cfg(unix)]
+    fn process_state_of(pid: u32) -> Option<String> {
+        let output =
+            Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!text.is_empty()).then_some(text)
     }
 
     #[cfg(unix)]
@@ -345,16 +391,33 @@ mod tests {
         let parent = child.id();
         assert!(process_exists(grandchild), "the grandchild should be running before the kill");
 
+        // Check the premise instead of assuming it: a group kill can only
+        // reclaim a descendant that is in the group. If this fails, the
+        // mechanism is fine and the test is wrong.
+        assert_eq!(
+            process_group_of(grandchild),
+            Some(parent),
+            "the grandchild must be in the child's process group for this test to mean anything"
+        );
+
         let outcome = kill_process_tree(parent);
         let _ = child.wait();
         assert_eq!(outcome, Reclamation::Reclaimed);
 
+        // A killed process can linger briefly as a zombie until it is reaped.
+        // A zombie holds no handles, ports or credentials, so it is not what
+        // DEV-SEC-16 is about; requiring the pid to vanish entirely would make
+        // this test depend on how promptly the platform reaps.
         let started = Instant::now();
-        while process_exists(grandchild) {
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "grandchild {grandchild} survived a tree kill of its group"
-            );
+        loop {
+            match process_state_of(grandchild) {
+                None => break,
+                Some(state) if state.starts_with('Z') => break,
+                Some(_) => assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "grandchild {grandchild} survived a tree kill of its group"
+                ),
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
