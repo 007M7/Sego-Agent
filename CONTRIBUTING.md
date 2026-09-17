@@ -1,6 +1,6 @@
 # Contributing to sego
 
-Thanks for your interest in contributing. sego is an open-source AI coding agent engine — we welcome all contributions.
+Thanks for your interest in contributing. Sego is a local-first code review and engineering trust layer that runs after AI coding tools — it reviews code that has just been generated or changed, and does not generate code itself. Changes that broaden it into a code generator, IDE, or cloud platform are out of scope; see [AGENTS.md](AGENTS.md) for the two questions to ask when judging fit.
 
 ## Getting Started
 
@@ -16,10 +16,12 @@ Thanks for your interest in contributing. sego is an open-source AI coding agent
 
 ```bash
 cd rust
-cargo fmt --all --check       # Format check
-cargo clippy --workspace -- -D warnings  # Lint
-cargo test --workspace         # All tests must pass
+cargo fmt --all --check       # Format check — gate
+cargo test --workspace        # All tests must pass — gate
+cargo clippy --workspace --all-targets -- -D warnings  # Lint — advisory
 ```
+
+`cargo fmt --all --check` and `cargo test --workspace` are gates. **Clippy is advisory today**: the command above does not pass on `main` because of a pre-existing pedantic-warning baseline, so a clippy failure is not by itself evidence that your change is at fault. Please do not add new warnings. Clearing that baseline is tracked in `ROADMAP.md`.
 
 ### Commit style
 
@@ -30,7 +32,7 @@ cargo test --workspace         # All tests must pass
 ### Code guidelines
 
 - Follow existing patterns in each crate
-- No `unsafe` code without explicit justification
+- No `unsafe` code: the workspace sets `unsafe_code = "forbid"`, so it does not compile rather than needing justification
 - New modules need corresponding tests
 - New tools need tool spec definitions in `tools/src/lib.rs`
 - Lane Events should be emitted for new workflow steps

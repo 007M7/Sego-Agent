@@ -146,9 +146,55 @@ fn is_within_workspace(path: &str, workspace_root: &str) -> bool {
 }
 
 /// Conservative heuristic: is this bash command read-only?
+///
+/// The allowlist names only commands that read. Verb-shaped exceptions are
+/// handled explicitly:
+/// - `find` and `awk` read, but `-exec` / `-delete` / `system(` turn them into
+///   execution or deletion;
+/// - `cargo`, `git` and `gh` are read-only only in their read-only subcommand
+///   form, since `cargo run` executes the artefact and `git push` mutates a
+///   remote;
+/// - interpreters (`python`, `node`, `ruby`, `rustc`) are not read-only at all:
+///   running a script or compiling a file *is* code execution, so they are not
+///   listed. They were previously allowed here.
+/// - `tee` and `xargs` write and execute respectively, and were also previously
+///   listed.
 fn is_read_only_command(command: &str) -> bool {
     let first_token =
         command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
+    let lowered = command.to_ascii_lowercase();
+
+    if matches!(first_token, "find" | "awk") {
+        return !lowered.contains("-exec")
+            && !lowered.contains("-delete")
+            && !lowered.contains("-ok ")
+            && !lowered.contains("system(")
+            && !lowered.contains("print >")
+            // `>` writes however it is spaced: `> file`, `>file`, `>>file`.
+            && !command.contains('>');
+    }
+
+    if matches!(first_token, "cargo" | "git" | "gh") {
+        return is_read_only_subcommand(first_token, command);
+    }
+
+    // `sed -i`, `sed -i.bak` and `-i's/x/y/'` all write in place. Restricted to
+    // the tools where `-i` means in-place, because for `grep`/`rg` it means
+    // ignore-case and stays read-only.
+    if matches!(first_token, "sed" | "perl")
+        && command.split_whitespace().any(|token| {
+            token == "-i" || token.starts_with("-i") || token.starts_with("--in-place")
+        })
+    {
+        return false;
+    }
+
+    // Any redirection is a write, spaced or not. A `>` inside a quoted argument
+    // is refused too: the classifier does not parse shell quoting, and refusing
+    // costs a confirmation while missing one costs the file.
+    if command.contains('>') {
+        return false;
+    }
 
     matches!(
         first_token,
@@ -187,8 +233,6 @@ fn is_read_only_command(command: &str) -> bool {
             | "tr"
             | "cut"
             | "paste"
-            | "tee"
-            | "xargs"
             | "test"
             | "true"
             | "false"
@@ -207,18 +251,138 @@ fn is_read_only_command(command: &str) -> bool {
             | "tree"
             | "jq"
             | "yq"
-            | "python3"
-            | "python"
-            | "node"
-            | "ruby"
-            | "cargo"
-            | "rustc"
-            | "git"
-            | "gh"
-    ) && !command.contains("-i ")
-        && !command.contains("--in-place")
-        && !command.contains(" > ")
-        && !command.contains(" >> ")
+    ) && !command.contains("--in-place")
+}
+
+/// Lower-cased argument tokens, with `--flag=value` split into both parts.
+///
+/// Word-splitting alone is not enough. `gh` uses pflag, so `--method=DELETE` is
+/// ordinary input and arrives as a single whitespace token that never equals
+/// `delete` - which let `gh api --method=DELETE <url>` pass as read-only.
+fn argument_tokens(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .skip(1)
+        .flat_map(|token| token.split('='))
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
+}
+
+/// Is a multi-purpose build or VCS command in a read-only subcommand form?
+///
+/// The action is matched anywhere in the argument list rather than by position:
+/// these tools accept flags that take a separate value (`git -C /repo diff`),
+/// so "the first token that is not flag-shaped" is not the action. A command is
+/// read-only only when a known read-only action appears *and* no known mutating
+/// action does.
+fn is_read_only_subcommand(tool: &str, command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    let tokens = argument_tokens(command);
+    let has_any = |verbs: &[&str]| tokens.iter().any(|token| verbs.contains(&token.as_str()));
+
+    match tool {
+        "cargo" => {
+            const READ_ONLY: &[&str] =
+                &["test", "build", "check", "clippy", "fmt", "verify", "metadata", "tree"];
+            const MUTATING: &[&str] = &[
+                "run",
+                "install",
+                "uninstall",
+                "publish",
+                "add",
+                "remove",
+                "rm",
+                "update",
+                "clean",
+                "new",
+                "init",
+                "login",
+                "logout",
+                "owner",
+                "yank",
+            ];
+            has_any(READ_ONLY) && !has_any(MUTATING)
+        }
+        "git" => {
+            const READ_ONLY: &[&str] = &[
+                "status",
+                "diff",
+                "log",
+                "show",
+                "blame",
+                "ls-files",
+                "ls-tree",
+                "rev-parse",
+                "describe",
+                "shortlog",
+                "branch",
+                "remote",
+                "config",
+            ];
+            const MUTATING: &[&str] = &[
+                "push",
+                "commit",
+                "merge",
+                "rebase",
+                "reset",
+                "checkout",
+                "switch",
+                "restore",
+                "revert",
+                "cherry-pick",
+                "clean",
+                "apply",
+                "am",
+                "tag",
+                "stash",
+                "submodule",
+                "gc",
+                "prune",
+                "fetch",
+                "pull",
+                "init",
+                "clone",
+                "worktree",
+            ];
+            if has_any(MUTATING) {
+                return false;
+            }
+            // `git branch` lists, unless asked to delete; `git config` reads,
+            // unless asked to write.
+            if lowered.contains(" --delete")
+                || lowered.contains(" -d ")
+                || lowered.contains(" --set-")
+                || lowered.contains(" --unset")
+            {
+                return false;
+            }
+            has_any(READ_ONLY)
+        }
+        "gh" => {
+            // `gh` names a resource group before the action (`gh pr list`), so
+            // match the action anywhere in the argument list - but treat any
+            // mutating verb, or an explicit HTTP method, as a refusal. Without
+            // the method check `gh api -X DELETE ...` would read as read-only
+            // because `api` is in the allowed set.
+            const MUTATING: &[&str] = &[
+                "delete", "merge", "close", "create", "edit", "push", "comment", "review",
+                "reopen", "transfer", "ready", "lock", "unlock",
+            ];
+            const READ_ONLY: &[&str] =
+                &["status", "view", "list", "search", "api", "diff", "checks", "browse"];
+            if has_any(MUTATING) {
+                return false;
+            }
+            // Prefix match, not a two-sided one: `--method=DELETE` has no space
+            // after the flag name and `-XDELETE` has none before the value, so
+            // requiring a trailing space misses both spellings.
+            if lowered.contains(" --method") || lowered.contains(" -x") {
+                return false;
+            }
+            has_any(READ_ONLY)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -232,7 +396,13 @@ mod tests {
 
     #[test]
     fn allow_mode_permits_everything() {
-        let enforcer = make_enforcer(PermissionMode::Allow);
+        // `Allow` means "no per-tool prompting", not "authorize tools the
+        // registry has never heard of": requirements must still be declared.
+        let policy = PermissionPolicy::new(PermissionMode::Allow)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("edit_file", PermissionMode::WorkspaceWrite);
+        let enforcer = PermissionEnforcer::new(policy);
         assert!(enforcer.is_allowed("bash", ""));
         assert!(enforcer.is_allowed("write_file", ""));
         assert!(enforcer.is_allowed("edit_file", ""));
@@ -241,6 +411,8 @@ mod tests {
             EnforcementResult::Allowed
         );
         assert_eq!(enforcer.check_bash("rm -rf /"), EnforcementResult::Allowed);
+        // An undeclared tool is denied even in the most permissive mode.
+        assert!(!enforcer.is_allowed("not_a_registered_tool", ""));
     }
 
     #[test]
@@ -317,6 +489,92 @@ mod tests {
         assert!(!is_read_only_command("rm file.txt"));
         assert!(!is_read_only_command("echo test > file.txt"));
         assert!(!is_read_only_command("sed -i 's/a/b/' file"));
+    }
+
+    #[test]
+    fn read_only_heuristic_excludes_code_execution_and_writes() {
+        // Running a script or compiling a file is code execution, not reading,
+        // so interpreters are not read-only however they are invoked.
+        for command in [
+            "python -c 'import os'",
+            "python3 script.py",
+            "python -i",
+            "node -e 'require(\"child_process\")'",
+            "node server.js",
+            "ruby -e 'system(\"id\")'",
+            "rustc build.rs",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `tee` writes and `xargs` executes.
+        assert!(!is_read_only_command("tee /etc/hosts"));
+        assert!(!is_read_only_command("xargs rm"));
+        // `find` and `awk` read, unless a flag turns them into something else.
+        assert!(is_read_only_command("find . -name '*.rs'"));
+        assert!(!is_read_only_command("find . -exec rm {} ;"));
+        assert!(!is_read_only_command("find . -delete"));
+        assert!(!is_read_only_command("awk 'BEGIN { system(\"id\") }'"));
+    }
+
+    #[test]
+    fn read_only_heuristic_rejects_flag_value_forms_that_change_remote_state() {
+        // `--flag=value` is standard pflag/Cobra syntax, not a malformed input:
+        // word-splitting alone leaves `--method=delete` as one token that never
+        // equals `delete`, and a two-sided " --method " match misses it because
+        // there is no space after the flag name.
+        for command in [
+            "gh api --method=DELETE /repos/x",
+            "gh api --method DELETE /repos/x",
+            "gh api -X=DELETE /repos/x",
+            "gh api -XDELETE /repos/x",
+            "gh api --method=delete /repos/x",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // The read-only forms still pass.
+        assert!(is_read_only_command("gh api /repos/x"));
+        assert!(is_read_only_command("gh pr list"));
+    }
+
+    #[test]
+    fn read_only_heuristic_rejects_redirection_and_in_place_writes() {
+        // `>` writes whether or not it is spaced: `>file` and `>>log` are as
+        // much a redirect as `> file`.
+        for command in [
+            "echo hi >/etc/hosts",
+            "echo hi > /etc/hosts",
+            "echo hi>>log",
+            "printf x >y",
+            "cat a >b",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `sed -i` writes in place, including the attached-value spellings.
+        for command in ["sed -i s/a/b/ f", "sed -i.bak s/a/b/ f", "sed -i's/a/b/' f"] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `grep -i` means ignore-case, and plain `sed` only prints.
+        assert!(is_read_only_command("grep -i pattern file"));
+        assert!(is_read_only_command("sed s/a/b/ f"));
+        assert!(is_read_only_command("cat file.txt"));
+    }
+
+    #[test]
+    fn read_only_heuristic_gates_multipurpose_tools_by_subcommand() {
+        // Read-only forms stay allowed.
+        assert!(is_read_only_command("cargo test"));
+        assert!(is_read_only_command("cargo build --release"));
+        assert!(is_read_only_command("git status"));
+        assert!(is_read_only_command("git -C /repo diff"));
+        assert!(is_read_only_command("gh pr list"));
+        // Mutating or executing forms do not, even though the tool is allowed.
+        assert!(!is_read_only_command("cargo run"));
+        assert!(!is_read_only_command("cargo install ripgrep"));
+        assert!(!is_read_only_command("git push origin main"));
+        assert!(!is_read_only_command("git commit -m x"));
+        assert!(!is_read_only_command("git branch -D feat/old"));
+        assert!(!is_read_only_command("git config --set-env x"));
+        assert!(!is_read_only_command("gh api -X DELETE /repos/x"));
     }
 
     #[test]

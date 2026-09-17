@@ -71,6 +71,18 @@ pub struct ReviewEvidenceCoverage {
 }
 
 impl EvidenceStatus {
+    /// Every label, in declaration order. Kept next to the enum so the
+    /// contract conformance suite can pin it against the schema enums.
+    pub const ALL_LABELS: [&str; 7] = [
+        "verified",
+        "unverified_file",
+        "unverified_line",
+        "unverified_dependency",
+        "scope_not_captured",
+        "content_not_captured",
+        "content_truncated",
+    ];
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -500,6 +512,11 @@ pub enum ReviewParseStatus {
 }
 
 impl ReviewParseStatus {
+    /// Every label, in declaration order. Kept next to the enum so the
+    /// contract conformance suite can pin it against the schema enums.
+    pub const ALL_LABELS: [&str; 3] =
+        ["structured", "fallback_raw_text", "parse_attempted_but_failed"];
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -712,6 +729,11 @@ pub enum ReviewFindingStatus {
 }
 
 impl ReviewFindingStatus {
+    /// Every label, in declaration order. Kept next to the enum so the
+    /// contract conformance suite can pin it against the schema enums.
+    pub const ALL_LABELS: [&str; 6] =
+        ["open", "acknowledged", "fixed", "accepted_risk", "false_positive", "ignored"];
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {

@@ -11,6 +11,10 @@ pub enum ReviewSeverity {
 }
 
 impl ReviewSeverity {
+    /// Every label, in declaration order. Kept next to the enum so the
+    /// contract conformance suite can pin it against the schema enums.
+    pub const ALL_LABELS: [&str; 5] = ["critical", "high", "medium", "low", "info"];
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {

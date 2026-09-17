@@ -1,0 +1,31 @@
+# Review ownership (DEV-GOV-01).
+#
+# One maintainer today, so the value of this file is not routing but
+# declaration: it records which surfaces must not change without the owner
+# looking, which is the part a second contributor cannot infer.
+#
+# Note: a CODEOWNERS file only becomes a gate when `main` requires code-owner
+# review in its branch protection rules. This repository's `main` is not
+# protected at all today, so this file documents ownership rather than
+# enforcing it. See DEV-GOV-05 for that gap.
+
+# Everything, as the default.
+*                       @007M7
+
+# Surfaces where a mistake is not a normal code change.
+
+# Published contracts: the source of what consumers parse.
+/schema/                @007M7
+
+# The trust chain: release gating and installer verification.
+/.github/workflows/     @007M7
+/install.ps1            @007M7
+/install.sh             @007M7
+
+# The stated security posture and the boundary claims.
+/SECURITY.md            @007M7
+/docs/PUBLIC_CLAIM_BOUNDARY.md @007M7
+/PARITY.md              @007M7
+
+# Contributor-facing traps: the facts that have misled a change before.
+/AGENTS.md              @007M7

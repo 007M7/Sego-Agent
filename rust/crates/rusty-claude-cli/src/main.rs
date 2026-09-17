@@ -187,6 +187,10 @@ const SESSION_REFERENCE_ALIASES: &[&str] = &[LATEST_SESSION_REFERENCE, "last", "
 const UPDATE_CHECK_ENV: &str = "SEGO_SKIP_UPDATE_CHECK";
 const UPDATE_LATEST_URL: &str = "https://api.github.com/repos/007M7/Sego-Agent/releases/latest";
 const UPDATE_WINDOWS_ASSET: &str = "sego.exe";
+const UPDATE_CHECKSUMS_ASSET: &str = "checksums.txt";
+/// Explicit opt-out from verifying a downloaded update. Named so it can be
+/// documented and so an accidental set is visible in the warning it prints.
+const UPDATE_ALLOW_UNVERIFIED_ENV: &str = "SEGO_UPDATE_ALLOW_UNVERIFIED";
 const CLI_OPTION_SUGGESTIONS: &[&str] = &[
     "--help",
     "-h",
@@ -5035,23 +5039,19 @@ fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Downloading {} ...", asset.browser_download_url);
     download_file(&asset.browser_download_url, &temp_exe)?;
 
+    // Verify against the release's published checksums *before* the binary is
+    // allowed to replace anything. A failed verification removes the download
+    // and leaves the installed version untouched.
+    verify_release_checksum(&release, &asset.name, &temp_exe)?;
+
     let script_path = install_dir.join("sego-update.cmd");
     let backup_exe = install_dir.join("sego.previous.exe");
-    let script = format!(
-        "@echo off\r\n\
-         setlocal EnableExtensions\r\n\
-         echo Updating Sego to {tag}...\r\n\
-         timeout /t 1 /nobreak >nul\r\n\
-         if exist \"{backup}\" del /f /q \"{backup}\"\r\n\
-         if exist \"{current}\" move /y \"{current}\" \"{backup}\" >nul\r\n\
-         move /y \"{temp}\" \"{current}\" >nul\r\n\
-         echo Sego updated to {tag}.\r\n\
-         \"{current}\" --version\r\n\
-         pause\r\n",
-        tag = release.tag_name,
-        backup = backup_exe.display(),
-        current = current_exe.display(),
-        temp = temp_exe.display(),
+    let script = build_update_script(
+        &release.tag_name,
+        &current_exe,
+        &backup_exe,
+        &temp_exe,
+        &release.html_url,
     );
     fs::write(&script_path, script)?;
 
@@ -5063,6 +5063,166 @@ fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Error>> {
         .stderr(Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// Build the batch script that finishes an update after this process exits.
+///
+/// Every step checks its exit code and has somewhere to go. The previous
+/// version moved the current binary aside and then ran `move` for the new one
+/// with `>nul` and no error branch: had that move failed, the install
+/// directory would have held no executable at all while the working binary sat
+/// in the backup, recoverable only by hand. `restore` puts the backup back on
+/// any failure between the swap and a successful `--version` smoke test.
+fn build_update_script(
+    tag: &str,
+    current: &Path,
+    backup: &Path,
+    temp: &Path,
+    release_url: &str,
+) -> String {
+    format!(
+        "@echo off\r\n\
+         setlocal EnableExtensions\r\n\
+         echo Updating Sego to {tag}...\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         if exist \"{backup}\" del /f /q \"{backup}\"\r\n\
+         if exist \"{current}\" move /y \"{current}\" \"{backup}\" >nul\r\n\
+         if errorlevel 1 goto :backup_failed\r\n\
+         move /y \"{temp}\" \"{current}\" >nul\r\n\
+         if errorlevel 1 goto :replace_failed\r\n\
+         \"{current}\" --version\r\n\
+         if errorlevel 1 goto :launch_failed\r\n\
+         echo Sego updated to {tag}.\r\n\
+         goto :done\r\n\
+         \r\n\
+         :replace_failed\r\n\
+         echo Update failed: the new binary could not be put in place.\r\n\
+         goto :restore\r\n\
+         \r\n\
+         :launch_failed\r\n\
+         echo Update failed: the new binary did not start.\r\n\
+         goto :restore\r\n\
+         \r\n\
+         :restore\r\n\
+         if not exist \"{backup}\" goto :failed\r\n\
+         del /f /q \"{current}\" >nul 2>&1\r\n\
+         move /y \"{backup}\" \"{current}\" >nul\r\n\
+         if errorlevel 1 goto :failed\r\n\
+         echo Previous version restored.\r\n\
+         goto :failed\r\n\
+         \r\n\
+         :backup_failed\r\n\
+         echo Update failed: the installed binary could not be moved aside. Nothing was changed.\r\n\
+         goto :failed\r\n\
+         \r\n\
+         :failed\r\n\
+         echo Sego was NOT updated.\r\n\
+         echo Download manually: {release_url}\r\n\
+         pause\r\n\
+         exit /b 1\r\n\
+         \r\n\
+         :done\r\n\
+         pause\r\n\
+         exit /b 0\r\n",
+        tag = tag,
+        backup = backup.display(),
+        current = current.display(),
+        temp = temp.display(),
+        release_url = release_url,
+    )
+}
+
+/// Compare a downloaded release asset against the `checksums.txt` published
+/// with the same release.
+///
+/// A missing checksums file, a missing entry, or a mismatch removes the
+/// download and returns an error, so an unverified binary never reaches the
+/// replacement step. `SEGO_UPDATE_ALLOW_UNVERIFIED=1` is an explicit opt-out.
+fn verify_release_checksum(
+    release: &GithubRelease,
+    asset_name: &str,
+    downloaded: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if env::var_os(UPDATE_ALLOW_UNVERIFIED_ENV).is_some() {
+        println!("WARNING: {UPDATE_ALLOW_UNVERIFIED_ENV} is set - skipping checksum verification.");
+        return Ok(());
+    }
+
+    let Some(checksums) = release.assets.iter().find(|asset| asset.name == UPDATE_CHECKSUMS_ASSET)
+    else {
+        let _ = fs::remove_file(downloaded);
+        return Err(format!(
+            "release {} does not publish {UPDATE_CHECKSUMS_ASSET}; refusing to install an \
+             unverified binary (set {UPDATE_ALLOW_UNVERIFIED_ENV}=1 to override)",
+            release.tag_name
+        )
+        .into());
+    };
+
+    let body = match fetch_text(&checksums.browser_download_url) {
+        Ok(body) => body,
+        Err(error) => {
+            let _ = fs::remove_file(downloaded);
+            return Err(format!("could not read {UPDATE_CHECKSUMS_ASSET}: {error}").into());
+        }
+    };
+
+    let Some(expected) = expected_hash_for(&body, asset_name) else {
+        let _ = fs::remove_file(downloaded);
+        return Err(format!(
+            "{UPDATE_CHECKSUMS_ASSET} for {} does not list {asset_name}; refusing to install an \
+             unverified binary",
+            release.tag_name
+        )
+        .into());
+    };
+
+    let actual = sha256_of_file(downloaded)?;
+    if actual != expected {
+        let _ = fs::remove_file(downloaded);
+        return Err(format!(
+            "checksum mismatch for {asset_name}: expected {expected}, got {actual}. The download \
+             was discarded and nothing was replaced."
+        )
+        .into());
+    }
+    println!("Checksum verified ({expected}).");
+    Ok(())
+}
+
+/// Extract the hash for `asset_name` from a `sha256sum`-style listing, whose
+/// lines are `<hash>  <name>` (`*` prefix optional, as produced by `sha256sum -b`).
+fn expected_hash_for(checksums: &str, asset_name: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        let name = parts.next()?.trim_start_matches('*');
+        (name == asset_name).then(|| hash.to_ascii_lowercase())
+    })
+}
+
+fn sha256_of_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn fetch_text(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let response = client
+            .get(url)
+            .header("user-agent", concat!("sego/", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(format!("request failed with {}", response.status()).into());
+        }
+        Ok::<_, Box<dyn std::error::Error>>(response.text().await?)
+    })
 }
 
 fn fetch_latest_release() -> Result<Option<GithubRelease>, Box<dyn std::error::Error>> {
@@ -9147,6 +9307,23 @@ mod tests {
         })
     }
 
+    /// True when the interpreter this host would use actually runs.
+    ///
+    /// Resolving a name is not the same as having a working interpreter: on
+    /// macOS `/usr/bin/python3` can be a shim that refuses to run, and on
+    /// Windows the name may resolve only to the Store alias stub. Tests whose
+    /// fixture is a Python script cannot tell that apart from the product
+    /// failing to discover an MCP server, so they check first.
+    fn python_is_usable() -> bool {
+        std::process::Command::new(python_command())
+            .args(["-c", "print(1)"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     #[test]
     fn identifies_turn_cancelled_errors_without_usage_hint() {
         assert!(is_turn_cancelled_message(TURN_CANCELLED_MESSAGE));
@@ -9472,6 +9649,219 @@ mod tests {
         assert!(super::is_newer_version("v0.1.4", "0.1.3"));
         assert!(!super::is_newer_version("v0.1.3", "0.1.3"));
         assert!(!super::is_newer_version("v0.1.2", "0.1.3"));
+    }
+
+    #[test]
+    fn update_script_branches_on_every_step_and_can_roll_back() {
+        let script = super::build_update_script(
+            "v9.9.9",
+            Path::new("C:\\sego\\sego.exe"),
+            Path::new("C:\\sego\\sego.previous.exe"),
+            Path::new("C:\\sego\\sego.update.exe"),
+            "https://example.invalid/release",
+        );
+
+        // Each mutating step is followed by an exit-code check. The `move`
+        // lines may or may not be preceded by a space, so match the bare token.
+        let moves = script.matches("move /y \"").count();
+        let checks = script.matches("if errorlevel 1 goto :").count();
+        assert!(moves >= 3, "expected the swap steps to be present: {script}");
+        assert!(
+            checks >= 4,
+            "every move and the smoke test need an error branch, found {checks}: {script}"
+        );
+        // The failure paths exist and lead somewhere terminal.
+        for label in [":backup_failed", ":replace_failed", ":launch_failed", ":restore", ":failed"]
+        {
+            assert!(script.contains(label), "missing {label} in {script}");
+        }
+        // A rollback is actually attempted, not just announced.
+        assert!(script.contains("move /y \"C:\\sego\\sego.previous.exe\" \"C:\\sego\\sego.exe\""));
+        // Both outcomes report their status to the caller.
+        assert!(script.contains("exit /b 1"));
+        assert!(script.contains("exit /b 0"));
+        // The tag and the manual download link are carried through.
+        assert!(script.contains("v9.9.9"));
+        assert!(script.contains("https://example.invalid/release"));
+    }
+
+    /// Minimal one-shot HTTP server, enough to serve a `checksums.txt`.
+    fn serve_checksums_once(body: String) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind checksums server");
+        let addr = listener.local_addr().expect("addr");
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}/checksums.txt"), handle)
+    }
+
+    /// A release whose only published asset is a `checksums.txt` at `url`.
+    fn release_with_checksums(url: String) -> super::GithubRelease {
+        super::GithubRelease {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.invalid/release".to_string(),
+            assets: vec![super::GithubReleaseAsset {
+                name: super::UPDATE_CHECKSUMS_ASSET.to_string(),
+                browser_download_url: url,
+            }],
+        }
+    }
+
+    // Every test below shares the environment lock: one of them sets an override
+    // variable, and without serialising them it would leak into a sibling and
+    // turn "refused" into "allowed".
+    #[test]
+    fn update_verification_refuses_and_discards_a_tampered_download() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"tampered payload").expect("write tampered file");
+
+        let (url, server) = serve_checksums_once(
+            "0000000000000000000000000000000000000000000000000000000000000000  sego.exe\n"
+                .to_string(),
+        );
+        let release = release_with_checksums(url);
+
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("a mismatched hash must be refused");
+        assert!(format!("{error}").contains("checksum mismatch"), "{error}");
+        assert!(
+            !downloaded.exists(),
+            "the tampered download must be deleted, not left on disk to be run by hand"
+        );
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_refuses_a_checksums_file_without_the_asset() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"payload").expect("write file");
+
+        // The listing is well-formed but never mentions the binary.
+        let (url, server) = serve_checksums_once(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  sego-windows.zip\n"
+                .to_string(),
+        );
+        let release = release_with_checksums(url);
+
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("an unlisted asset must be refused");
+        assert!(format!("{error}").contains("does not list"), "{error}");
+        assert!(!downloaded.exists(), "an unverifiable download must be discarded");
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_accepts_a_matching_download() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"genuine payload").expect("write file");
+
+        let digest = super::sha256_of_file(&downloaded).expect("hash the file");
+        let (url, server) = serve_checksums_once(format!("{digest}  sego.exe\n"));
+        let release = release_with_checksums(url);
+
+        super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect("a matching hash must be accepted");
+        assert!(downloaded.exists(), "a verified download must be kept");
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_skips_only_with_the_explicit_override() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        std::fs::write(&downloaded, b"payload").expect("write file");
+
+        // No checksums asset at all: refused by default...
+        let release = super::GithubRelease {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.invalid/release".to_string(),
+            assets: Vec::new(),
+        };
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("a release without checksums must be refused by default");
+        assert!(format!("{error}").contains("does not publish"), "{error}");
+
+        // ...and skipped only when the override is set explicitly.
+        std::env::set_var(super::UPDATE_ALLOW_UNVERIFIED_ENV, "1");
+        let skipped = super::verify_release_checksum(&release, "sego.exe", &downloaded);
+        std::env::remove_var(super::UPDATE_ALLOW_UNVERIFIED_ENV);
+        assert!(skipped.is_ok(), "the documented override must be honoured: {skipped:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_expected_hash_from_a_checksums_listing() {
+        let listing = "\
+0a1b2c3d4e5f60718293a4b5c6d7e8f90011223344556677889900aabbccddee  sego.exe
+fe1b2c3d4e5f60718293a4b5c6d7e8f90011223344556677889900aabbccddee  sego-windows.zip
+1234567890abcdef  sego
+abcdef1234567890  sego-macos
+";
+        assert_eq!(
+            super::expected_hash_for(listing, "sego.exe").as_deref(),
+            Some("0a1b2c3d4e5f60718293a4b5c6d7e8f90011223344556677889900aabbccddee")
+        );
+        assert_eq!(
+            super::expected_hash_for(listing, "sego-macos").as_deref(),
+            Some("abcdef1234567890")
+        );
+        // `sha256sum -b` marks binary mode with a leading asterisk.
+        assert_eq!(
+            super::expected_hash_for("deadbeef  *sego.exe\n", "sego.exe").as_deref(),
+            Some("deadbeef")
+        );
+        // Case is normalised so a listing in upper case still matches.
+        assert_eq!(
+            super::expected_hash_for("DEADBEEF  sego.exe\n", "sego.exe").as_deref(),
+            Some("deadbeef")
+        );
+        // A missing entry is what makes the installer refuse, so it must be None.
+        assert_eq!(super::expected_hash_for(listing, "not-shipped"), None);
+        assert_eq!(super::expected_hash_for("", "sego.exe"), None);
+    }
+
+    #[test]
+    fn hashes_a_file_with_sha256() {
+        let path = std::env::temp_dir().join(format!(
+            "sego-sha256-test-{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"abc").expect("write fixture");
+        let digest = super::sha256_of_file(&path).expect("hash should succeed");
+        let _ = std::fs::remove_file(&path);
+        // SHA-256("abc")
+        assert_eq!(digest, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     #[test]
@@ -11010,7 +11400,9 @@ UU conflicted.rs",
         assert!(!report.contains("+++ b/ignored.txt"));
         assert!(!report.contains("+++ b/.omx/state.json"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Same reason as the test below: a Windows handle race on a temporary
+        // directory must not be reported as a product failure.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -11037,7 +11429,12 @@ UU conflicted.rs",
         assert!(message.contains("Unstaged changes:"));
         assert!(message.contains("tracked.txt"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        // Cleanup must tolerate failure. This test leaves no handle of its own,
+        // but it runs `git` in `root`, and on Windows a just-exited child or a
+        // scanner can still hold the directory, which turns a passing test into
+        // `ERROR_SHARING_VIOLATION` under parallel load. The assertions above
+        // are the test; deleting the directory is not.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -11587,6 +11984,18 @@ UU conflicted.rs",
 
     #[test]
     fn build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers() {
+        // The MCP fixture is a Python script, so this test needs a working
+        // interpreter to exist at all. Without the check, a host that only has
+        // a non-running python shim reports "mcp tools should be allow-listable"
+        // - a product defect - when the real situation is a missing fixture.
+        if !python_is_usable() {
+            eprintln!(
+                "skipping build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers: \
+                 `{}` is not a working interpreter on this host",
+                python_command()
+            );
+            return;
+        }
         let config_home = temp_dir();
         let workspace = temp_dir();
         fs::create_dir_all(&config_home).expect("config home");

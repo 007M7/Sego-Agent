@@ -52,6 +52,9 @@ pub enum CommandIntent {
 const WRITE_COMMANDS: &[&str] = &[
     "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown", "chgrp", "ln", "install", "tee",
     "truncate", "shred", "mkfifo", "mknod", "dd",
+    // Windows equivalents. Sego ships a Windows binary and the list held only
+    // the POSIX names, so `del file` was not recognised as a write at all.
+    "copy", "xcopy", "robocopy", "move", "del", "erase", "ren", "rename",
 ];
 
 /// Commands that modify system state and should be blocked in read-only mode.
@@ -270,12 +273,15 @@ pub fn validate_mode(command: &str, mode: PermissionMode) -> ValidationResult {
     match mode {
         PermissionMode::ReadOnly => validate_read_only(command, mode),
         PermissionMode::WorkspaceWrite => {
-            // In workspace-write mode, check for system-level destructive
-            // operations that go beyond workspace scope.
+            // Writing to a system location is outside the scope workspace-write
+            // grants. This used to be a warning, which left the action available
+            // under a mode whose name says it is not.
             if command_targets_outside_workspace(command) {
-                return ValidationResult::Warn {
-                    message:
-                        "Command appears to target files outside the workspace — requires elevated permission"
+                return ValidationResult::Block {
+                    reason:
+                        "command targets a path outside the workspace; workspace-write does not \
+                             grant access there (grant danger-full-access deliberately if this is \
+                             really intended)"
                             .to_string(),
                 };
             }
@@ -288,9 +294,34 @@ pub fn validate_mode(command: &str, mode: PermissionMode) -> ValidationResult {
 }
 
 /// Heuristic: does the command reference absolute paths outside typical workspace dirs?
+///
+/// Windows locations are listed too: Sego ships a Windows binary, and the table
+/// previously covered only POSIX paths, so a `copy x C:\Windows\...` would have
+/// passed. Matching is case-insensitive because Windows paths are.
 fn command_targets_outside_workspace(command: &str) -> bool {
-    let system_paths = [
-        "/etc/", "/usr/", "/var/", "/boot/", "/sys/", "/proc/", "/dev/", "/sbin/", "/lib/", "/opt/",
+    const SYSTEM_PATHS: &[&str] = &[
+        // POSIX
+        "/etc/",
+        "/usr/",
+        "/var/",
+        "/boot/",
+        "/sys/",
+        "/proc/",
+        "/dev/",
+        "/sbin/",
+        "/lib/",
+        "/opt/",
+        "/bin/",
+        "/root/",
+        // Windows, both separators
+        "c:\\windows",
+        "c:/windows",
+        "c:\\program files",
+        "c:/program files",
+        "c:\\programdata",
+        "c:/programdata",
+        "\\windows\\system32",
+        "/windows/system32",
     ];
 
     let first = extract_first_command(command);
@@ -301,13 +332,8 @@ fn command_targets_outside_workspace(command: &str) -> bool {
         return false;
     }
 
-    for sys_path in &system_paths {
-        if command.contains(sys_path) {
-            return true;
-        }
-    }
-
-    false
+    let lowered = command.to_ascii_lowercase();
+    SYSTEM_PATHS.iter().any(|sys_path| lowered.contains(sys_path))
 }
 
 // ---------------------------------------------------------------------------
@@ -806,11 +832,35 @@ mod tests {
     // --- modeValidation ---
 
     #[test]
-    fn workspace_write_warns_system_paths() {
+    fn workspace_write_blocks_system_paths() {
+        // Was a warning, which left the write available under a mode that says
+        // it is not granted.
         assert!(matches!(
             validate_mode("cp file.txt /etc/config", PermissionMode::WorkspaceWrite),
-            ValidationResult::Warn { message } if message.contains("outside the workspace")
+            ValidationResult::Block { reason } if reason.contains("outside the workspace")
         ));
+        // Windows locations, and case-insensitive matching.
+        assert!(matches!(
+            validate_mode(
+                r"copy file.txt C:\Windows\System32\drivers\etc\hosts",
+                PermissionMode::WorkspaceWrite
+            ),
+            ValidationResult::Block { .. }
+        ));
+        assert!(matches!(
+            validate_mode("cp file.txt c:/ProgramData/x", PermissionMode::WorkspaceWrite),
+            ValidationResult::Block { .. }
+        ));
+        // A system path only matters for a command that writes.
+        assert_eq!(
+            validate_mode("cat /etc/hosts", PermissionMode::WorkspaceWrite),
+            ValidationResult::Allow
+        );
+        // Danger-full-access stays deliberate and unblocked.
+        assert_eq!(
+            validate_mode("cp file.txt /etc/config", PermissionMode::DangerFullAccess),
+            ValidationResult::Allow
+        );
     }
 
     #[test]

@@ -188,6 +188,20 @@ impl PermissionPolicy {
             };
         }
 
+        // A tool with no declared requirement is a registration defect, not a
+        // tool that "needs the highest permission". The previous fallback to
+        // `DangerFullAccess` denied it under ReadOnly by accident, but silently
+        // permitted it under `Allow` or `DangerFullAccess` - the two modes where
+        // the fallback no longer acts as a gate. Deny explicitly instead, and
+        // keep `required_mode_for` (a query used for display) unchanged.
+        if !self.tool_requirements.contains_key(tool_name) {
+            return PermissionOutcome::Deny {
+                reason: format!(
+                    "tool '{tool_name}' is not registered with a permission requirement"
+                ),
+            };
+        }
+
         // review-trust profile: classify bash commands before mode comparison.
         // This runs after explicit deny rules (user config wins) but before
         // override/allow rules, so that classified decisions are applied
@@ -523,6 +537,44 @@ mod tests {
     }
 
     #[test]
+    fn unregistered_tools_are_denied_in_every_mode() {
+        // `Allow` and `DangerFullAccess` used to admit an unregistered tool
+        // because the requirement fell back to `DangerFullAccess`.
+        for mode in [
+            PermissionMode::ReadOnly,
+            PermissionMode::WorkspaceWrite,
+            PermissionMode::DangerFullAccess,
+            PermissionMode::Prompt,
+            PermissionMode::Allow,
+        ] {
+            let policy = PermissionPolicy::new(mode)
+                .with_tool_requirement("read_file", PermissionMode::ReadOnly);
+            match policy.authorize("not_a_registered_tool", "{}", None) {
+                PermissionOutcome::Deny { reason } => {
+                    assert!(reason.contains("not registered"), "unexpected reason: {reason}");
+                }
+                other => panic!("unregistered tool must be denied in {mode:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn registered_tools_still_authorize_normally() {
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("read_file", PermissionMode::ReadOnly)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+
+        assert_eq!(policy.authorize("read_file", "{}", None), PermissionOutcome::Allow);
+        assert_eq!(policy.authorize("write_file", "{}", None), PermissionOutcome::Allow);
+        assert_eq!(policy.required_mode_for("read_file"), PermissionMode::ReadOnly);
+        // The query keeps its documented fallback; only `authorize` denies.
+        assert_eq!(
+            policy.required_mode_for("not_a_registered_tool"),
+            PermissionMode::DangerFullAccess
+        );
+    }
+
+    #[test]
     fn allows_tools_when_active_mode_meets_requirement() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("read_file", PermissionMode::ReadOnly)
@@ -572,6 +624,55 @@ mod tests {
         assert!(matches!(
             policy.authorize("bash", "echo hi", Some(&mut prompter)),
             PermissionOutcome::Deny { reason } if reason == "not now"
+        ));
+    }
+
+    #[test]
+    fn hook_allow_override_cannot_escalate_beyond_the_active_mode() {
+        // A hook returning `permissionDecision: allow` may relax an ask, but it
+        // must not grant authority the active mode does not have - otherwise a
+        // plugin could hand itself write access from a read-only session.
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+        let context = PermissionContext::new(
+            Some(PermissionOverride::Allow),
+            Some("hook said allow".to_string()),
+        );
+
+        let outcome = policy.authorize_with_context("write_file", "{}", &context, None);
+        assert!(
+            !matches!(outcome, PermissionOutcome::Allow),
+            "a hook allow must not escalate beyond read-only, got {outcome:?}"
+        );
+
+        // The same override is not simply ignored: where the mode already
+        // permits the tool, it still allows.
+        let permitted = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .authorize_with_context("write_file", "{}", &context, None);
+        assert_eq!(permitted, PermissionOutcome::Allow);
+    }
+
+    #[test]
+    fn hook_allow_override_cannot_override_an_explicit_deny_rule() {
+        // Deny rules are evaluated before any override, and a plugin does not
+        // get to argue with them.
+        let rules = RuntimePermissionRuleConfig::new(
+            Vec::new(),
+            vec!["write_file(*)".to_string()],
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .with_permission_rules(&rules);
+        let context = PermissionContext::new(
+            Some(PermissionOverride::Allow),
+            Some("hook said allow".to_string()),
+        );
+
+        assert!(matches!(
+            policy.authorize_with_context("write_file", "{}", &context, None),
+            PermissionOutcome::Deny { reason } if reason.contains("denied by rule")
         ));
     }
 

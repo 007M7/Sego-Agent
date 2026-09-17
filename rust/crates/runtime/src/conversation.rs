@@ -930,7 +930,8 @@ mod tests {
                 .sum::<i32>();
             Ok(total.to_string())
         });
-        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
+        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("add", PermissionMode::ReadOnly);
         let system_prompt = SystemPromptBuilder::new()
             .with_project_context(ProjectContext {
                 cwd: PathBuf::from("/tmp/project"),
@@ -975,7 +976,8 @@ mod tests {
             Session::new(),
             ScriptedApiClient { call_count: 0 },
             StaticToolExecutor::new().register("add", |_input| Ok("4".to_string())),
-            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+                .with_tool_requirement("add", PermissionMode::ReadOnly),
             vec!["system".to_string()],
         )
         .with_session_tracer(tracer);
@@ -1033,7 +1035,8 @@ mod tests {
             Session::new(),
             SingleCallApiClient,
             StaticToolExecutor::new(),
-            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+                .with_tool_requirement("blocked", PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
         );
 
@@ -1192,7 +1195,8 @@ mod tests {
             Session::new(),
             TwoCallApiClient { calls: 0 },
             StaticToolExecutor::new().register("add", |_input| Ok("4".to_string())),
-            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess)
+                .with_tool_requirement("add", PermissionMode::ReadOnly),
             vec!["system".to_string()],
             &RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
                 vec![shell_snippet("printf 'pre hook ran'")],
@@ -1259,7 +1263,8 @@ mod tests {
             TwoCallApiClient { calls: 0 },
             StaticToolExecutor::new()
                 .register("fail", |_input| Err(ToolError::new("tool exploded"))),
-            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess)
+                .with_tool_requirement("fail", PermissionMode::ReadOnly),
             vec!["system".to_string()],
             &RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
                 Vec::new(),

@@ -120,7 +120,7 @@ Model output goes through a three-tier parsing strategy — **Direct JSON → Fe
 Each finding is deterministically validated: does the cited location actually exist in the reviewed change? Findings that pass receive a stable `stable_finding_id` for cross-version tracking.
 
 **⑤ Persistence & presentation**
-Results are written to `.sego/reviews/` and rendered as a terminal summary / HTML Review Card (Green / Yellow / Red confidence), aggregated into an `AcceptanceRecord` to support acceptance decisions.
+Results are written to `.sego/reviews/` and rendered as a terminal summary / HTML Review Card (Green / Yellow / Red confidence), aggregated into an `AcceptanceRecord` to support acceptance decisions. The card's colour is a presentation grade, not a status: `Green` means the artifact parsed and recorded no unresolved risk, **not** that the code is problem-free or accepted. [Contract](docs/REVIEW_ARTIFACT_CONTRACT.md).
 
 <p align="center">
   <img src="assets/figures/fig4-artifact-lifecycle.svg" width="880" alt="Artifact lifecycle: diff_hash binding, append-only index, four-state separation, finding disposition state machine">

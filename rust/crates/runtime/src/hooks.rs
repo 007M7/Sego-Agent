@@ -410,6 +410,11 @@ impl HookRunner {
         child.stdin(Stdio::piped());
         child.stdout(Stdio::piped());
         child.stderr(Stdio::piped());
+        // A hook is an arbitrary shell string from plugin configuration, so it
+        // must not inherit this process's environment: otherwise a hook that
+        // fails, or one that is malicious, can read provider credentials
+        // straight out of its own environment.
+        apply_minimal_env(&mut child);
         child.env("HOOK_EVENT", event.as_str());
         child.env("HOOK_TOOL_NAME", tool_name);
         child.env("HOOK_TOOL_INPUT", tool_input);
@@ -631,6 +636,60 @@ fn shell_command(command: &str) -> CommandWithStdin {
     command_builder
 }
 
+/// Environment variables a hook process may inherit.
+///
+/// Hooks are arbitrary shell strings from plugin configuration, so they must not
+/// see this process's environment. This is the minimum a child needs in order to
+/// start and locate its own runtime: process/OS essentials, temp and home
+/// directories, locale, and shell identity. `NODE_OPTIONS` is deliberately
+/// absent because it injects code into any Node child.
+const INHERITED_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "OS",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+];
+
+/// Is this variable name allowed to reach a hook process?
+///
+/// Case-insensitive because Windows variable names are.
+fn allowed_inherited_env_key(key: &str) -> bool {
+    INHERITED_ENV_ALLOWLIST.iter().any(|allowed| allowed.eq_ignore_ascii_case(key))
+}
+
+/// Drop the inherited environment and re-add only the allowlisted variables.
+///
+/// Kept separate from [`run_command`] so the policy can be exercised against a
+/// real child process in tests.
+fn apply_minimal_env(child: &mut CommandWithStdin) {
+    child.env_clear();
+    for (key, value) in std::env::vars_os() {
+        if key.to_str().is_some_and(allowed_inherited_env_key) {
+            child.env(key, value);
+        }
+    }
+}
+
 struct CommandWithStdin {
     command: Command,
 }
@@ -652,6 +711,11 @@ impl CommandWithStdin {
 
     fn stderr(&mut self, cfg: Stdio) -> &mut Self {
         self.command.stderr(cfg);
+        self
+    }
+
+    fn env_clear(&mut self) -> &mut Self {
+        self.command.env_clear();
         self
     }
 
@@ -696,10 +760,12 @@ enum CommandExecution {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
     use std::thread;
     use std::time::Duration;
 
     use super::{
+        allowed_inherited_env_key, apply_minimal_env, shell_command, CommandExecution,
         HookAbortSignal, HookEvent, HookProgressEvent, HookProgressReporter, HookRunResult,
         HookRunner,
     };
@@ -714,6 +780,71 @@ mod tests {
         fn on_event(&mut self, event: &HookProgressEvent) {
             self.events.push(event.clone());
         }
+    }
+
+    #[test]
+    fn hook_env_allowlist_excludes_credentials() {
+        for allowed in ["PATH", "SystemRoot", "COMSPEC", "TEMP", "HOME", "USERPROFILE"] {
+            assert!(allowed_inherited_env_key(allowed), "{allowed} should be inheritable");
+        }
+        // Windows variable names are case-insensitive.
+        assert!(allowed_inherited_env_key("path"));
+
+        for blocked in [
+            "DEEPSEEK_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "XAI_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "NODE_OPTIONS",
+            "CLAW_CONFIG_HOME",
+            "SEGO_REVIEW_TRUST",
+        ] {
+            assert!(!allowed_inherited_env_key(blocked), "{blocked} must not be inheritable");
+        }
+    }
+
+    #[test]
+    fn hook_process_does_not_inherit_the_parent_environment() {
+        // The probe names one variable that exists only in this process and is
+        // not on the allowlist, instead of enumerating whatever the ambient
+        // environment happens to hold. Enumerating looked stricter but was not
+        // testable on Unix: the hook runs through a shell, and a shell exports
+        // `PWD` (and `SHLVL`, `_`) on its own, so the child reports names this
+        // process never passed it. The assertion could not tell "we leaked it"
+        // apart from "the shell created it", and failed on the Linux runner for
+        // exactly that reason. A unique name has one possible source.
+        let _guard = crate::test_env_lock();
+        const CANARY: &str = "SEGO_TEST_PARENT_ONLY_CANARY";
+        assert!(
+            !allowed_inherited_env_key(CANARY),
+            "{CANARY} must not be on the allowlist, or this test proves nothing"
+        );
+        std::env::set_var(CANARY, "must-not-reach-the-child");
+
+        let probe = if cfg!(windows) { "set" } else { "env" };
+        let mut command = shell_command(probe);
+        // `shell_command` only builds the Command; `run_command` is what pipes
+        // the streams, so the probe has to ask for them itself.
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        apply_minimal_env(&mut command);
+        let stdout = match command.output_with_stdin(b"", None).expect("probe should run") {
+            CommandExecution::Finished(output) => {
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            }
+            CommandExecution::Cancelled => panic!("probe was reported as cancelled"),
+        };
+        std::env::remove_var(CANARY);
+
+        assert!(!stdout.is_empty(), "probe produced no output, so it cannot have run: {stdout}");
+        assert!(
+            !stdout.to_ascii_uppercase().contains(CANARY),
+            "the child inherited a variable outside the allowlist: {stdout}"
+        );
+        // PATH has to survive or a hook cannot find its own interpreter.
+        assert!(stdout.to_ascii_uppercase().contains("PATH="), "PATH must be inherited: {stdout}");
     }
 
     #[test]

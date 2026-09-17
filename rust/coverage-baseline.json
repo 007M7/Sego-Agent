@@ -1,0 +1,61 @@
+{
+  "policy": "coverage-floor",
+  "contract": "DEV-QA-04",
+  "measured": {
+    "date": "2026-09-17",
+    "tool": "cargo-llvm-cov 0.8.7",
+    "command": "cargo llvm-cov --offline --workspace --summary-only",
+    "platform": "windows-x86_64-pc-windows-msvc",
+    "measured_on": "branch fix/p0-trust-boundary",
+    "caveat": "Measured in a worktree that also held another window's uncommitted work (rust/crates/runtime/src/process_tree.rs and its lib.rs wiring). That file is therefore present in this baseline but not in the branch's committed state, and the run is not reproducible from the commit alone. Re-measure once the branch is the only writer.",
+    "overall_lines_percent": 81.39,
+    "lines_covered": 40291,
+    "lines_total": 49504,
+    "lines_missed": 9213
+  },
+  "floor": {
+    "lines_percent": 75.0,
+    "reason": "Set below the measured Windows baseline on purpose. Coverage is measured on Linux in CI, where #[cfg(unix)] code is compiled and therefore enters the denominator, so the CI number is expected to differ from this one. The floor is a ratchet against a real drop, not a target: raise it to the first measured Linux value minus about one point, and never raise it without a measurement to justify the new value.",
+    "per_crate": {
+      "runtime": 85.0,
+      "api": 80.0,
+      "plugins": 80.0,
+      "tools": 75.0,
+      "commands": 70.0,
+      "telemetry": 75.0,
+      "rusty-claude-cli": 60.0,
+      "mock-anthropic-service": 65.0,
+      "compat-harness": 20.0
+    }
+  },
+  "measured_per_crate_lines_percent": {
+    "runtime": 90.55,
+    "api": 86.08,
+    "plugins": 88.17,
+    "tools": 80.94,
+    "commands": 78.32,
+    "telemetry": 83.27,
+    "rusty-claude-cli": 66.67,
+    "mock-anthropic-service": 71.46,
+    "compat-harness": 25.59
+  },
+  "not_judged": [
+    {
+      "path": "compat-harness",
+      "why": "Development-only harness. Its low number is a consequence of being driven by other crates' tests, not of untested product behaviour."
+    },
+    {
+      "path": "mock-anthropic-service/src/main.rs",
+      "why": "Binary entry point for a test fixture; exercised as a process, so per-line coverage of main is not meaningful."
+    },
+    {
+      "path": "rusty-claude-cli/src/main.rs",
+      "why": "CLI wiring. The measured 58.40% is mostly argument dispatch and terminal rendering. Do not read the overall number as product assurance while this file dominates the uncovered total (3843 uncovered lines)."
+    }
+  ],
+  "limits": [
+    "Line coverage counts execution, not verification. A line can run without its result being asserted, so this number must never be presented as evidence that a behaviour is correct.",
+    "The floor guards against a drop, not against weak tests. Adding a large module with shallow tests can hold the number steady while lowering the quality of the suite.",
+    "Only lines that are compiled count. Code behind #[cfg(unix)] or #[cfg(windows)] is invisible to a run on the other platform."
+  ]
+}

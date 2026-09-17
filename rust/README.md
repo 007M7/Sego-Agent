@@ -1,4 +1,4 @@
-# Sego Agent ? Rust Implementation
+# Sego Agent — Rust Implementation
 
 A high-performance Rust implementation of the Sego AI coding agent. Built for speed, safety, and native tool execution.
 
@@ -117,39 +117,39 @@ Harness coverage:
 
 Primary artifacts:
 
-- `crates/mock-anthropic-service/` ? reusable mock Anthropic-compatible service
-- `crates/rusty-claude-cli/tests/mock_parity_harness.rs` ? clean-env CLI harness
-- `scripts/run_mock_parity_harness.sh` ? reproducible wrapper
-- `scripts/run_mock_parity_diff.py` ? scenario checklist + PARITY mapping runner
-- `mock_parity_scenarios.json` ? scenario-to-PARITY manifest
+- `crates/mock-anthropic-service/` — reusable mock Anthropic-compatible service
+- `crates/rusty-claude-cli/tests/mock_parity_harness.rs` — clean-env CLI harness
+- `scripts/run_mock_parity_harness.sh` — reproducible wrapper
+- `scripts/run_mock_parity_diff.py` — scenario checklist + PARITY mapping runner
+- `mock_parity_scenarios.json` — scenario-to-PARITY manifest
 
 ## Features
 
 | Feature | Status |
 |---------|--------|
-| Anthropic API + streaming | ? |
-| OAuth login/logout | ? |
-| Interactive REPL (rustyline) | ? |
-| Tool system (bash, read, write, edit, grep, glob) | ? |
-| Web tools (search, fetch) | ? |
-| Sub-agent orchestration | ? |
-| Todo tracking | ? |
-| Notebook editing | ? |
-| CLAUDE.md / project memory | ? |
-| Config file hierarchy (.claude.json) | ? |
-| Permission system | ? |
-| MCP server lifecycle | ? |
-| Session persistence + resume | ? |
-| Extended thinking (thinking blocks) | ? |
-| Cost tracking + usage display | ? |
-| Git integration | ? |
-| Full repo audit (non-Git) | ? |
-| Markdown terminal rendering (ANSI) | ? |
-| Model aliases (opus/sonnet/haiku) | ? |
-| Slash commands (/status, /compact, /clear, etc.) | ? |
-| Hooks (PreToolUse/PostToolUse) | ?? Config only |
-| Plugin system | ?? Planned |
-| Skills registry | ?? Planned |
+| Anthropic API + streaming | ✅ |
+| OAuth login/logout | ✅ |
+| Interactive REPL (rustyline) | ✅ |
+| Tool system (bash, read, write, edit, grep, glob) | ✅ |
+| Web tools (search, fetch) | ✅ |
+| Sub-agent orchestration | ✅ |
+| Todo tracking | ✅ |
+| Notebook editing | ✅ |
+| CLAUDE.md / project memory | ✅ |
+| Config file hierarchy (.claude.json) | ✅ |
+| Permission system | ✅ |
+| MCP server lifecycle | ✅ |
+| Session persistence + resume | ✅ |
+| Extended thinking (thinking blocks) | ✅ |
+| Cost tracking + usage display | ✅ |
+| Git integration | ✅ |
+| Full repo audit (non-Git) | ✅ |
+| Markdown terminal rendering (ANSI) | ✅ |
+| Model aliases (opus/sonnet/haiku) | ✅ |
+| Slash commands (/status, /compact, /clear, etc.) | ✅ |
+| Hooks (PreToolUse/PostToolUse) | 🔧 Config only |
+| Plugin system | 📋 Planned |
+| Skills registry | 📋 Planned |
 
 ## Model Aliases
 
@@ -218,39 +218,39 @@ See [`USAGE.md`](USAGE.md) for examples covering interactive use, JSON automatio
 
 ```
 rust/
-??? Cargo.toml              # Workspace root
-??? Cargo.lock
-??? crates/
-    ??? api/                # Anthropic API client + SSE streaming
-    ??? commands/           # Shared slash-command registry
-    ??? compat-harness/     # TS manifest extraction harness
-    ??? mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
-    ??? plugins/            # Plugin registry and hook wiring primitives
-    ??? runtime/            # Session, config, permissions, MCP, prompts
-    ??? rusty-claude-cli/   # Main CLI binary (`sego`)
-    ??? telemetry/          # Session tracing and usage telemetry types
-    ??? tools/              # Built-in tool implementations
+├── Cargo.toml              # Workspace root
+├── Cargo.lock
+└── crates/
+    ├── api/                # Anthropic API client + SSE streaming
+    ├── commands/           # Shared slash-command registry
+    ├── compat-harness/     # TS manifest extraction harness
+    ├── mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+    ├── plugins/            # Plugin registry and hook wiring primitives
+    ├── runtime/            # Session, config, permissions, MCP, prompts
+    ├── rusty-claude-cli/   # Main CLI binary (`sego`)
+    ├── telemetry/          # Session tracing and usage telemetry types
+    └── tools/              # Built-in tool implementations
 ```
 
 ### Crate Responsibilities
 
-- **api** ? HTTP client, SSE stream parser, request/response types, auth (API key + OAuth bearer)
-- **commands** ? Slash command definitions and help text generation
-- **compat-harness** ? Extracts tool/prompt manifests from upstream TS source
-- **mock-anthropic-service** ? Deterministic `/v1/messages` mock for CLI parity tests and local harness runs
-- **plugins** ? Plugin metadata, registries, and hook integration surfaces
-- **runtime** ? `ConversationRuntime` agentic loop, `ConfigLoader` hierarchy, `Session` persistence, permission policy, MCP client, system prompt assembly, usage tracking
-- **rusty-claude-cli** ? REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing
-- **telemetry** ? Session trace events and supporting telemetry payloads
-- **tools** ? Tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, REPL runtimes
+- **api** — HTTP client, SSE stream parser, request/response types, auth (API key + OAuth bearer)
+- **commands** — Slash command definitions and help text generation
+- **compat-harness** — Extracts tool/prompt manifests from upstream TS source
+- **mock-anthropic-service** — Deterministic `/v1/messages` mock for CLI parity tests and local harness runs
+- **plugins** — Plugin metadata, registries, and hook integration surfaces
+- **runtime** — `ConversationRuntime` agentic loop, `ConfigLoader` hierarchy, `Session` persistence, permission policy, MCP client, system prompt assembly, usage tracking
+- **rusty-claude-cli** — REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing
+- **telemetry** — Session trace events and supporting telemetry payloads
+- **tools** — Tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, REPL runtimes
 
 ## Stats
 
-- **~20K lines** of Rust
+- **~75K lines** of Rust (9 crates; ~72K under `crates/*/src`)
 - **9 crates** in workspace
 - **Binary name:** `sego`
 - **Default model:** `claude-opus-4-6`
-- **Default permissions:** `danger-full-access`
+- **Default permissions:** `read-only` — write and command access require an explicit `--permission-mode`, `RUSTY_CLAUDE_PERMISSION_MODE`, or project config
 
 ## License
 

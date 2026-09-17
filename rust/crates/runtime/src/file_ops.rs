@@ -28,7 +28,11 @@ fn is_binary_file(path: &Path) -> io::Result<bool> {
 /// Validate that a resolved path stays within the given workspace root.
 /// Returns the canonical path on success, or an error if the path escapes
 /// the workspace boundary (e.g. via `../` traversal or symlink).
-#[allow(dead_code)]
+///
+/// Callers must pass an already-normalised path: [`normalize_path`] and
+/// [`normalize_path_allow_missing`] canonicalise the file or its nearest
+/// existing parent, which resolves symlinks and junctions before the
+/// comparison.
 fn validate_workspace_boundary(resolved: &Path, workspace_root: &Path) -> io::Result<()> {
     if !resolved.starts_with(workspace_root) {
         return Err(io::Error::new(
@@ -41,6 +45,18 @@ fn validate_workspace_boundary(resolved: &Path, workspace_root: &Path) -> io::Re
         ));
     }
     Ok(())
+}
+
+/// Workspace root that confines the file operations exposed as tools.
+///
+/// The tools layer already treats the process working directory as the
+/// workspace - todos, the agents directory and local settings all resolve
+/// against it - so confinement uses the same root rather than inventing a
+/// second one. Tests that operate on a scratch tree therefore `set_current_dir`
+/// into it before calling these functions.
+fn workspace_root() -> io::Result<PathBuf> {
+    let root = std::env::current_dir()?;
+    Ok(root.canonicalize().unwrap_or(root))
 }
 
 /// Text payload returned by file-reading operations.
@@ -172,15 +188,27 @@ pub struct GrepSearchOutput {
 }
 
 /// Reads a text file and returns a line-windowed payload.
+///
+/// The path must resolve inside the workspace root; absolute paths, `..`
+/// traversal and symlink/junction escapes are rejected.
 pub fn read_file(
     path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
+    validate_workspace_boundary(&absolute_path, &workspace_root()?)?;
+    read_file_resolved(&absolute_path, offset, limit)
+}
 
+/// Read an already-validated path. Boundary enforcement is the caller's job.
+fn read_file_resolved(
+    absolute_path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> io::Result<ReadFileOutput> {
     // Check file size before reading
-    let metadata = fs::metadata(&absolute_path)?;
+    let metadata = fs::metadata(absolute_path)?;
     if metadata.len() > MAX_READ_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -189,11 +217,11 @@ pub fn read_file(
     }
 
     // Detect binary files
-    if is_binary_file(&absolute_path)? {
+    if is_binary_file(absolute_path)? {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "file appears to be binary"));
     }
 
-    let content = fs::read_to_string(&absolute_path)?;
+    let content = fs::read_to_string(absolute_path)?;
     let lines: Vec<&str> = content.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
     let end_index =
@@ -213,7 +241,17 @@ pub fn read_file(
 }
 
 /// Replaces a file's contents and returns patch metadata.
+///
+/// The path must resolve inside the workspace root; a symlinked parent that
+/// points outside it is rejected before anything is created.
 pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
+    let absolute_path = normalize_path_allow_missing(path)?;
+    validate_workspace_boundary(&absolute_path, &workspace_root()?)?;
+    write_file_resolved(&absolute_path, content)
+}
+
+/// Write an already-validated path. Boundary enforcement is the caller's job.
+fn write_file_resolved(absolute_path: &Path, content: &str) -> io::Result<WriteFileOutput> {
     if content.len() > MAX_WRITE_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -221,12 +259,11 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
         ));
     }
 
-    let absolute_path = normalize_path_allow_missing(path)?;
-    let original_file = fs::read_to_string(&absolute_path).ok();
+    let original_file = fs::read_to_string(absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&absolute_path, content)?;
+    fs::write(absolute_path, content)?;
 
     Ok(WriteFileOutput {
         kind: if original_file.is_some() { String::from("update") } else { String::from("create") },
@@ -239,6 +276,8 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
 }
 
 /// Performs an in-file string replacement and returns patch metadata.
+///
+/// The path must resolve inside the workspace root.
 pub fn edit_file(
     path: &str,
     old_string: &str,
@@ -246,7 +285,18 @@ pub fn edit_file(
     replace_all: bool,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let original_file = fs::read_to_string(&absolute_path)?;
+    validate_workspace_boundary(&absolute_path, &workspace_root()?)?;
+    edit_file_resolved(&absolute_path, old_string, new_string, replace_all)
+}
+
+/// Edit an already-validated path. Boundary enforcement is the caller's job.
+fn edit_file_resolved(
+    absolute_path: &Path,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> io::Result<EditFileOutput> {
+    let original_file = fs::read_to_string(absolute_path)?;
     if old_string == new_string {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -262,7 +312,7 @@ pub fn edit_file(
     } else {
         original_file.replacen(old_string, new_string, 1)
     };
-    fs::write(&absolute_path, &updated)?;
+    fs::write(absolute_path, &updated)?;
 
     Ok(EditFileOutput {
         file_path: absolute_path.to_string_lossy().into_owned(),
@@ -510,11 +560,28 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
         return Ok(canonical);
     }
 
-    if let Some(parent) = candidate.parent() {
-        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
-        if let Some(name) = candidate.file_name() {
-            return Ok(canonical_parent.join(name));
+    // The target may not exist yet. Walk up to the nearest existing ancestor,
+    // canonicalise that, then re-append the missing tail.
+    //
+    // Re-appending matters for boundary checks: `canonicalize` and
+    // `current_dir` do not return paths on the same basis on Windows
+    // (`canonicalize` adds a `\\?\` prefix), so falling back to the raw parent
+    // would compare a prefixed root against an unprefixed path and reject a
+    // target that is really inside the workspace.
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor: &Path = &candidate;
+    while let Some(parent) = cursor.parent() {
+        if let Some(name) = cursor.file_name() {
+            tail.push(name.to_os_string());
         }
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            let mut resolved = canonical_parent;
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return Ok(resolved);
+        }
+        cursor = parent;
     }
 
     Ok(candidate)
@@ -532,7 +599,9 @@ pub fn read_file_in_workspace(
     let canonical_root =
         workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
-    read_file(path, offset, limit)
+    // The path is already resolved and checked here, so call the inner body
+    // rather than the public entry that would re-check against the cwd.
+    read_file_resolved(&absolute_path, offset, limit)
 }
 
 /// Write a file with workspace boundary enforcement.
@@ -546,7 +615,7 @@ pub fn write_file_in_workspace(
     let canonical_root =
         workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
-    write_file(path, content)
+    write_file_resolved(&absolute_path, content)
 }
 
 /// Edit a file with workspace boundary enforcement.
@@ -562,7 +631,7 @@ pub fn edit_file_in_workspace(
     let canonical_root =
         workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
-    edit_file(path, old_string, new_string, replace_all)
+    edit_file_resolved(&absolute_path, old_string, new_string, replace_all)
 }
 
 /// Check whether a path is a symlink that resolves outside the workspace.
@@ -595,8 +664,95 @@ mod tests {
         std::env::temp_dir().join(format!("clawd-native-{name}-{unique}"))
     }
 
+    /// Serialises the tests that change the process working directory, which
+    /// the file operations treat as the workspace root.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Runs a test with the temporary directory as the workspace root.
+    ///
+    /// These tests address scratch files by absolute path, so the workspace has
+    /// to be entered before the confined entry points will accept them.
+    struct TempWorkspaceCwd {
+        previous: std::path::PathBuf,
+    }
+
+    impl Drop for TempWorkspaceCwd {
+        fn drop(&mut self) {
+            // Cleanup must tolerate failure (see AGENTS.md): the directory may
+            // already be gone on Windows.
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
+
+    fn enter_temp_workspace() -> TempWorkspaceCwd {
+        enter_workspace(&std::env::temp_dir())
+    }
+
+    fn enter_workspace(workspace: &std::path::Path) -> TempWorkspaceCwd {
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(workspace).expect("enter workspace");
+        TempWorkspaceCwd { previous }
+    }
+
+    #[test]
+    fn live_file_entries_refuse_paths_outside_the_workspace() {
+        let _guard = env_lock();
+        let workspace = temp_path("live-confinement");
+        std::fs::create_dir_all(&workspace).expect("workspace dir should be created");
+        let _cwd = enter_workspace(&workspace);
+
+        // A relative path inside the workspace is still accepted.
+        write_file("inside.txt", "ok").expect("relative path inside the workspace");
+
+        // Seed the target that must stay unreachable, so every rejection below
+        // is a boundary decision and not a missing-file error.
+        let outside = temp_path("live-confinement-outside.txt");
+        std::fs::write(&outside, "content").expect("seed outside file");
+
+        let error = write_file(outside.to_string_lossy().as_ref(), "nope")
+            .expect_err("writing outside the workspace must be refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("escapes workspace"), "{error}");
+
+        let error = read_file(outside.to_string_lossy().as_ref(), None, None)
+            .expect_err("reading outside the workspace must be refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+
+        let error = edit_file(outside.to_string_lossy().as_ref(), "content", "other", false)
+            .expect_err("editing outside the workspace must be refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+
+        // `..` traversal resolves outside and is refused.
+        let traversal = format!("..{}escape.txt", std::path::MAIN_SEPARATOR);
+        let error = write_file(&traversal, "nope").expect_err("../ traversal must be refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            !std::env::temp_dir().join("escape.txt").exists(),
+            "traversal must not create a file"
+        );
+
+        // A symlink inside the workspace pointing outside does not launder a
+        // write: the parent is canonicalised before the boundary check.
+        #[cfg(unix)]
+        {
+            let link = workspace.join("escape-link");
+            std::os::unix::fs::symlink(std::env::temp_dir(), &link).expect("symlink");
+            let error = write_file(link.join("via-link.txt").to_string_lossy().as_ref(), "nope")
+                .expect_err("a symlinked parent escaping the workspace must be refused");
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert!(!std::env::temp_dir().join("via-link.txt").exists());
+        }
+    }
+
     #[test]
     fn reads_and_writes_files() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let path = temp_path("read-write.txt");
         let write_output = write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
             .expect("write should succeed");
@@ -609,6 +765,8 @@ mod tests {
 
     #[test]
     fn edits_file_contents() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let path = temp_path("edit.txt");
         write_file(path.to_string_lossy().as_ref(), "alpha beta alpha")
             .expect("initial write should succeed");
@@ -619,6 +777,8 @@ mod tests {
 
     #[test]
     fn rejects_binary_files() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let path = temp_path("binary-test.bin");
         std::fs::write(&path, b"\x00\x01\x02\x03binary content").expect("write should succeed");
         let result = read_file(path.to_string_lossy().as_ref(), None, None);
@@ -630,6 +790,8 @@ mod tests {
 
     #[test]
     fn rejects_oversized_writes() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let path = temp_path("oversize-write.txt");
         let huge = "x".repeat(MAX_WRITE_SIZE + 1);
         let result = write_file(path.to_string_lossy().as_ref(), &huge);
@@ -641,6 +803,8 @@ mod tests {
 
     #[test]
     fn enforces_workspace_boundary() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let workspace = temp_path("workspace-boundary");
         std::fs::create_dir_all(&workspace).expect("workspace dir should be created");
         let inside = workspace.join("inside.txt");
@@ -686,6 +850,8 @@ mod tests {
 
     #[test]
     fn globs_and_greps_directory() {
+        let _guard = env_lock();
+        let _cwd = enter_temp_workspace();
         let dir = temp_path("search-dir");
         std::fs::create_dir_all(&dir).expect("directory should be created");
         let file = dir.join("demo.rs");

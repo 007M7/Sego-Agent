@@ -51,12 +51,13 @@ $request | powershell -File skills/sego-review/scripts/sego-review.ps1
   "cwd": "/absolute/path/to/project",
   "scope": "staged",
   "options": { "model": null },
-  "context": { "user_intent": "optional description of what the user wants" }
+  "context": { "diff_hash": "<sha256 of the diff under review>", "invocation_id": "<caller execution id, optional>" }
 }
 ```
 
 - `scope`: `"staged"` (git staged changes), `"workspace"` (all uncommitted changes), or a path like `"src/auth"`.
 - `options.model`: override the review model (default: auto-selected).
+- `context`: accepts only `diff_hash` and `invocation_id`; the envelope rejects unknown keys. The previously documented `user_intent` was never read by any code path and has been removed — sending it makes the request fail validation.
 
 ### Response format
 

@@ -138,21 +138,107 @@ fn contains_unsafe_chain(command: &str) -> bool {
         || command.contains('>')
 }
 
-/// Heuristic: does the command write to Sego-owned `.sego/` metadata?
+/// Heuristic: does this command write, and write **only**, to Sego-owned
+/// `.sego/` metadata?
+///
+/// Returns `false` whenever the command could touch anything else:
+/// - any chaining, piping or substitution operator (a second command is not
+///   inspected here, so it falls through to the chain check, which denies it),
+/// - any redirection target outside `.sego/`,
+/// - any path argument outside `.sego/`,
+/// - any verb that can execute arbitrary code (`python`, `node`, `sh`, ...).
+///
+/// A `false` result only costs an extra confirmation, or a denial for commands
+/// that chain — never a bypass. An earlier version matched substrings instead
+/// (`command.contains(".sego/")` plus a loose verb list), which auto-allowed
+/// `python -c "..." .sego/x` and `echo hi > .sego/x && rm -rf /`.
 fn targets_sego_metadata(command: &str) -> bool {
-    // Common patterns: redirection to .sego/, or commands whose target path
-    // starts with .sego/. This is intentionally broad — writing under .sego/ is
-    // always Sego metadata under review-trust.
-    command.contains(".sego/")
-        && (command.contains("write")
-            || command.contains("mkdir")
-            || command.contains("mv ")
-            || command.contains("cp ")
-            || command.contains("tee")
-            || command.contains("cat >")
-            || command.contains("echo")
-            || command.contains("python")
-            || command.contains("node"))
+    let lowered = command.to_ascii_lowercase();
+    if lowered.contains("&&")
+        || lowered.contains("||")
+        || lowered.contains('|')
+        || lowered.contains(';')
+        || lowered.contains('`')
+        || lowered.contains("$(")
+        || lowered.contains('&')
+    {
+        return false;
+    }
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let Some(&verb) = tokens.first() else {
+        return false;
+    };
+    let verb = verb.to_ascii_lowercase();
+
+    // Verbs that only ever write files. `echo` and `cat` are handled through
+    // their redirection targets instead, because their bare form is a read.
+    let mutating_verb = matches!(
+        verb.as_str(),
+        "mkdir" | "touch" | "cp" | "mv" | "rm" | "del" | "tee" | "dd" | "install" | "rmdir"
+    );
+    // Verbs that may write, but only through an explicit redirection.
+    let redirect_verb = matches!(verb.as_str(), "echo" | "printf" | "cat");
+
+    let mut redirect_target: Option<&str> = None;
+    let mut index = 1;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if token.chars().all(|c| c == '>') {
+            let Some(target) = tokens.get(index + 1) else {
+                return false; // dangling redirection
+            };
+            redirect_target = Some(target);
+            index += 2;
+            continue;
+        }
+        if let Some(rest) = token.strip_prefix('>') {
+            let rest = rest.trim_start_matches('>');
+            if rest.is_empty() {
+                let Some(target) = tokens.get(index + 1) else {
+                    return false;
+                };
+                redirect_target = Some(target);
+                index += 2;
+                continue;
+            }
+            redirect_target = Some(rest);
+            index += 1;
+            continue;
+        }
+        // Every path-looking argument must also live under `.sego/`.
+        if looks_like_path(token) && !is_sego_metadata_path(token) {
+            return false;
+        }
+        index += 1;
+    }
+
+    let Some(target) = redirect_target else {
+        return mutating_verb;
+    };
+    if !is_sego_metadata_path(target) {
+        return false;
+    }
+    mutating_verb || redirect_verb
+}
+
+/// Does this token look like a filesystem path rather than a flag or literal?
+fn looks_like_path(token: &str) -> bool {
+    token.contains('/') || token.contains('\\') || token.starts_with('.')
+}
+
+/// Is this path inside the Sego-owned `.sego/` metadata directory?
+///
+/// Accepts both separators and an optional `./` prefix. Quoted paths are
+/// rejected rather than parsed: the classifier does not implement shell
+/// quoting, and a `false` result is the safe direction.
+fn is_sego_metadata_path(path: &str) -> bool {
+    if path.contains('"') || path.contains('\'') {
+        return false;
+    }
+    let normalized = path.replace('\\', "/");
+    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
+    normalized == ".sego" || normalized.starts_with(".sego/")
 }
 
 /// Commands that are unambiguously destructive or irreversible.
@@ -440,6 +526,51 @@ mod tests {
             classify_bash_command("echo {} > .sego/reviews/idx.json"),
             BashCommandRisk::SegaMetadataWrite
         );
+    }
+
+    #[test]
+    fn metadata_write_does_not_cover_chained_or_outside_writes() {
+        // Chaining must not be auto-allowed just because `.sego/` appears.
+        assert_eq!(
+            classify_bash_command("echo hi > .sego/x && rm -rf /"),
+            BashCommandRisk::DenyDangerous
+        );
+        // A verb that can execute arbitrary code is never a metadata write.
+        assert_ne!(
+            classify_bash_command(r#"python -c "open('/tmp/x','w')" .sego/x"#),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        assert_ne!(
+            classify_bash_command("node script.js .sego/x"),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        // A write target outside `.sego/` is not Sego metadata.
+        assert_ne!(
+            classify_bash_command("echo hi > /tmp/x .sego/y"),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        assert_ne!(
+            classify_bash_command("mv /etc/hosts .sego/x"),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        assert_ne!(classify_bash_command("cp .sego/a /tmp/b"), BashCommandRisk::SegaMetadataWrite);
+        // Reading metadata is not writing it (it is covered by read-only rules).
+        assert_ne!(
+            classify_bash_command("cat .sego/index.jsonl"),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        // Quoted paths are not parsed, so they never qualify.
+        assert_ne!(
+            classify_bash_command(r#"echo x > ".sego/a b.json""#),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        // Windows separators are recognised.
+        assert_eq!(
+            classify_bash_command(r"echo {} > .sego\reviews\idx.json"),
+            BashCommandRisk::SegaMetadataWrite
+        );
+        // Bare echo remains a read-only command.
+        assert_eq!(classify_bash_command("echo hello"), BashCommandRisk::SafeReadonly);
     }
 
     #[test]

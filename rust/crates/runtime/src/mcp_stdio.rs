@@ -20,13 +20,21 @@ use crate::mcp_lifecycle_hardened::{
 
 // Keep test timeouts short, but not so tight that CI Python cold-start jitter
 // turns MCP lifecycle tests into release-blocking flakes.
+//
+// One second was too tight in practice: `given_initialize_hangs_once...` failed
+// on a Windows runner with `Timeout { server_name: "alpha", method:
+// "initialize", timeout_ms: 1000 }` on the attempt that was supposed to
+// succeed. The runner was merely busy - the same test passes when run alone -
+// and Python cold start plus the MCP handshake is what has to fit inside this
+// budget. Five seconds keeps the test fast in wall-clock terms and stops it
+// depending on runner load.
 #[cfg(test)]
-const MCP_INITIALIZE_TIMEOUT_MS: u64 = 1_000;
+const MCP_INITIALIZE_TIMEOUT_MS: u64 = 5_000;
 #[cfg(not(test))]
 const MCP_INITIALIZE_TIMEOUT_MS: u64 = 10_000;
 
 #[cfg(test)]
-const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 1_000;
+const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 5_000;
 #[cfg(not(test))]
 const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 30_000;
 
@@ -1048,8 +1056,22 @@ impl McpStdioProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         apply_env(&mut command, &transport.env);
+        // Own process group on Unix so terminate()/shutdown() can reach the
+        // whole tree, not just the server binary (DEV-SEC-16). No-op on Windows,
+        // where taskkill /T walks the tree without spawn-time setup.
+        crate::process_tree::prepare_process_group(command.as_std_mut());
 
         let mut child = command.spawn()?;
+        // Recovery ledger (DEV-CON-08): recorded only while a task is active.
+        // An MCP server outlives the call that started it, so it is exactly the
+        // kind of process a crash leaves behind.
+        if let Some(pid) = child.id() {
+            crate::process_tree::record_spawn(
+                pid,
+                command.as_std().get_program().to_string_lossy().as_ref(),
+                "mcp server",
+            );
+        }
         let stdin = child
             .stdin
             .take()
@@ -1232,8 +1254,31 @@ impl McpStdioProcess {
         self.request(id, "resources/read", Some(params)).await
     }
 
+    /// Reclaim the whole process tree, returning an operator-facing receipt
+    /// when reclamation could not be confirmed.
+    fn reclaim_tree(&mut self) -> Option<String> {
+        let pid = self.child.id()?;
+        let outcome = crate::process_tree::kill_process_tree(pid);
+        // The server is stopped either way, so its ledger entry is closed here
+        // rather than being left looking alive to a later crash reconciliation.
+        crate::process_tree::record_exit(pid);
+        outcome.failure_receipt(pid)
+    }
+
     pub async fn terminate(&mut self) -> io::Result<()> {
-        self.child.kill().await
+        // Kill the tree, not just the server binary: an MCP server that
+        // spawned helpers would leave them orphaned (DEV-SEC-16).
+        let receipt = self.reclaim_tree();
+        let killed = self.child.kill().await;
+        // The direct kill is reported first, because it decides whether the
+        // server itself is gone. A tree that could not be reclaimed is then
+        // reported instead of swallowed: descendants may still be running, and
+        // that is exactly what an operator needs to know.
+        match (killed, receipt) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Some(receipt)) => Err(io::Error::other(receipt)),
+            (Ok(()), None) => Ok(()),
+        }
     }
 
     pub async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
@@ -1245,7 +1290,9 @@ impl McpStdioProcess {
     }
 
     async fn shutdown(&mut self) -> io::Result<()> {
+        let mut receipt = None;
         if self.child.try_wait()?.is_none() {
+            receipt = self.reclaim_tree();
             match self.child.kill().await {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
@@ -1253,7 +1300,10 @@ impl McpStdioProcess {
             }
         }
         let _ = self.child.wait().await?;
-        Ok(())
+        match receipt {
+            Some(receipt) => Err(io::Error::other(receipt)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1270,7 +1320,66 @@ pub fn spawn_mcp_stdio_process(bootstrap: &McpClientBootstrap) -> io::Result<Mcp
     }
 }
 
+/// Environment variables a managed stdio child may inherit from Sego.
+///
+/// Everything else is dropped, so a malicious or compromised MCP server cannot
+/// read this process's provider credentials (`DEEPSEEK_API_KEY`,
+/// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) or any other secret that happens
+/// to be exported. Variables declared in the server's own configuration are
+/// applied afterwards and take precedence.
+///
+/// The list is deliberately limited to what a child needs in order to start
+/// and locate its own runtime: process/OS essentials, temp and home
+/// directories, locale, and shell identity. `NODE_OPTIONS` is excluded on
+/// purpose - it injects code into any Node child.
+const INHERITED_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "OS",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+];
+
+/// Is this environment variable name allowed to be inherited by a child?
+///
+/// Comparison is case-insensitive because Windows variable names are.
+#[must_use]
+fn allowed_inherited_env_key(key: &str) -> bool {
+    INHERITED_ENV_ALLOWLIST.iter().any(|allowed| allowed.eq_ignore_ascii_case(key))
+}
+
 fn apply_env(command: &mut Command, env: &BTreeMap<String, String>) {
+    // Start from an empty environment rather than the parent's.
+    command.env_clear();
+    // `vars_os` instead of `vars`: the latter panics on a non-Unicode entry.
+    for (key, value) in std::env::vars_os() {
+        let Some(key_text) = key.to_str() else {
+            continue;
+        };
+        if allowed_inherited_env_key(key_text) {
+            command.env(key, value);
+        }
+    }
+    // Server-declared variables win over inherited ones.
     for (key, value) in env {
         command.env(key, value);
     }
@@ -1306,6 +1415,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
+    use tokio::process::Command;
     use tokio::runtime::Builder;
 
     use crate::config::{
@@ -1316,10 +1426,11 @@ mod tests {
     use crate::mcp_client::McpClientBootstrap;
 
     use super::{
-        spawn_mcp_stdio_process, unsupported_server_failed_server, JsonRpcId, JsonRpcRequest,
-        JsonRpcResponse, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
-        McpInitializeServerInfo, McpListToolsResult, McpReadResourceParams, McpReadResourceResult,
-        McpServerManager, McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
+        allowed_inherited_env_key, apply_env, spawn_mcp_stdio_process,
+        unsupported_server_failed_server, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+        McpInitializeClientInfo, McpInitializeParams, McpInitializeResult, McpInitializeServerInfo,
+        McpListToolsResult, McpReadResourceParams, McpReadResourceResult, McpServerManager,
+        McpServerManagerError, McpStdioProcess, McpTool, McpToolCallParams,
     };
     use crate::McpLifecyclePhase;
 
@@ -2631,5 +2742,100 @@ mod tests {
 
             cleanup_script(&script_path);
         });
+    }
+
+    #[test]
+    fn inherited_env_allowlist_excludes_credentials() {
+        // Process/OS essentials must pass through or a child cannot start.
+        for allowed in ["PATH", "SystemRoot", "windir", "TEMP", "HOME", "USERPROFILE", "COMSPEC"] {
+            assert!(allowed_inherited_env_key(allowed), "{allowed} should be inheritable");
+        }
+        // Windows variable names are case-insensitive.
+        assert!(allowed_inherited_env_key("path"));
+        assert!(allowed_inherited_env_key("SYSTEMROOT"));
+
+        // Provider credentials and anything else must not.
+        for blocked in [
+            "DEEPSEEK_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "XAI_API_KEY",
+            "MOONSHOT_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "NODE_OPTIONS",
+            "RUSTY_CLAUDE_PERMISSION_MODE",
+            "SEGO_REVIEW_TRUST",
+        ] {
+            assert!(!allowed_inherited_env_key(blocked), "{blocked} must not be inheritable");
+        }
+    }
+
+    /// A child process that prints its own environment, for the check below.
+    fn env_probe_command() -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("cmd");
+            command.args(["/c", "set"]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new("env")
+        }
+    }
+
+    #[test]
+    fn spawned_child_sees_only_allowlisted_variables_plus_its_own_config() {
+        let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
+
+        // Names this process exports that the allowlist does not cover. These
+        // are what a credential-leaking child would expose.
+        let parent_only: Vec<String> = std::env::vars_os()
+            .filter_map(|(key, _)| key.to_str().map(str::to_owned))
+            .filter(|key| !allowed_inherited_env_key(key))
+            .collect();
+        assert!(
+            !parent_only.is_empty(),
+            "no non-allowlisted variable exists in this environment, so the filter is untested"
+        );
+
+        let mut command = env_probe_command();
+        let configured = BTreeMap::from([("SEGO_TEST_CONFIGURED".to_string(), "yes".to_string())]);
+        apply_env(&mut command, &configured);
+
+        // The future is created *inside* `block_on`. Building it outside and
+        // passing it in compiles and passes on Windows, but on Unix tokio's
+        // process spawn needs the runtime context when the future is created
+        // and panics with "there is no reactor running" - which is why every
+        // other spawn test in this file is shaped this way.
+        let output =
+            runtime.block_on(async { command.output().await }).expect("env probe should run");
+        let text = String::from_utf8_lossy(&output.stdout);
+        let child_names: Vec<String> = text
+            .lines()
+            .filter_map(|line| {
+                line.split_once('=').map(|(name, _)| name.trim().to_ascii_uppercase())
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(!child_names.is_empty(), "the probe produced no variables: {text}");
+
+        // The real property: nothing outside the allowlist survives.
+        for name in &parent_only {
+            assert!(
+                !child_names.contains(&name.to_ascii_uppercase()),
+                "child inherited a variable outside the allowlist: {name}"
+            );
+        }
+        // Variables declared by the server config are still delivered.
+        assert!(
+            child_names.contains(&"SEGO_TEST_CONFIGURED".to_string()),
+            "config-declared variables must reach the child: {text}"
+        );
+        // PATH survives, or a real child could not start.
+        assert!(child_names.contains(&"PATH".to_string()), "PATH must be inherited: {text}");
     }
 }

@@ -12,9 +12,15 @@ If another site asks you to download Sego, submit private source code, or pay fo
 
 ## Reporting security issues
 
-Please do not post secrets, private source code, customer data, wallet private keys, or production credentials in public GitHub issues.
+Report vulnerabilities through GitHub Private Advisories, which is enabled for this repository:
 
-For now, open a GitHub issue with a minimal description and mark that it is security-related. We will confirm a private handoff path before requesting sensitive details.
+https://github.com/007M7/Sego-Agent/security/advisories/new
+
+That channel stays private between you and the maintainer, so a fix can be prepared before anything is disclosed. Do not post secrets, private source code, customer data, wallet private keys, or production credentials in a public GitHub issue.
+
+A normal public issue is fine for reports that are not sensitive on their own — a hardening suggestion, a missing header, or a bug with no exploitable path. If you are unsure which applies, choose the private channel.
+
+A useful report includes the Sego version or commit, the platform, what you ran, what happened, and what you expected. A minimal reproduction is worth more than a long description. There is no bug bounty and no paid disclosure programme.
 
 ## Payment safety
 
