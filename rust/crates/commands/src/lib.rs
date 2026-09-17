@@ -329,63 +329,31 @@ pub fn handle_slash_command(
 
 mod specs;
 
-#[cfg(test)]
-// The tests walk the table; nothing in the library reaches it from here.
-pub(crate) use specs::SLASH_COMMAND_SPECS;
-
 mod parsing;
 
 // `validate_slash_command_input` was public before the move and is used by the
 // CLI crate, so it is re-exported publicly; the rest were crate-private.
 pub use parsing::validate_slash_command_input;
-#[cfg(test)]
-// The names below are used by the tests through `super::`; the library itself
-// calls them from inside `parsing`, so re-exporting them here under
-// `cfg(test)` keeps the build warning-free without hiding anything.
-pub(crate) use parsing::{
-    command_error, optional_single_arg, parse_clear_args, parse_config_section,
-    parse_list_or_help_args, parse_mcp_command, parse_permissions_mode, parse_plugin_command,
-    parse_session_command, parse_skills_args, remainder_after_command, require_remainder,
-    usage_error, validate_no_args,
-};
 
 mod definitions;
 
 #[cfg(test)]
-// Reached from inside `definitions` and from the tests now.
-pub(crate) use definitions::{
-    discover_definition_roots, discover_skill_roots, install_skill, load_agents_from_roots,
-    load_skills_from_roots,
-};
+// The tests reach these two through `super::`.
+pub(crate) use definitions::{load_agents_from_roots, load_skills_from_roots};
 
 // Only the tests reach these; the library calls the rest of the layer
 // through the names above.
 #[cfg(test)]
-pub(crate) use definitions::{
-    copy_directory_contents, default_skill_install_root, derive_skill_install_name,
-    install_skill_into, parse_skill_frontmatter, parse_toml_string, push_unique_root,
-    push_unique_skill_root, resolve_skill_install_source, sanitize_skill_invocation_name,
-    unquote_frontmatter_value,
-};
+pub(crate) use definitions::{install_skill_into, parse_skill_frontmatter};
 
 mod reports;
 
 pub(crate) use reports::normalize_optional_args;
 
-// The renderers below are used by the handlers and the tests.
+// The renderers below are reached from the tests through `super::`; the
+// library calls the rest of the layer.
 #[cfg(test)]
-pub(crate) use reports::{
-    render_agents_report, render_agents_usage, render_mcp_server_report, render_mcp_summary_report,
-    render_mcp_usage, render_skill_install_report, render_skills_report, render_skills_usage,
-};
-
-// The formatting helpers below are called only from inside the renderers and
-// from the tests, so the crate root re-exports them under `cfg(test)`.
-#[cfg(test)]
-pub(crate) use reports::{
-    agent_detail, config_source_label, format_mcp_oauth, format_optional_keys,
-    format_optional_list, mcp_server_summary, mcp_transport_label,
-};
+pub(crate) use reports::{render_agents_report, render_skill_install_report, render_skills_report};
 
 mod help;
 
@@ -397,10 +365,7 @@ pub use help::{
 
 // Reached only from inside `help` and from the tests.
 #[cfg(test)]
-pub(crate) use help::{
-    find_slash_command_spec, format_slash_command_help_line, levenshtein_distance,
-    slash_command_category, slash_command_detail_lines, slash_command_usage,
-};
+pub(crate) use help::slash_command_category;
 
 mod handlers;
 
@@ -411,9 +376,7 @@ pub use handlers::{
 
 // Used inside `handlers` and by the tests.
 #[cfg(test)]
-pub(crate) use handlers::{
-    render_mcp_report_for, render_plugin_install_report, resolve_plugin_target,
-};
+pub(crate) use handlers::render_mcp_report_for;
 
 #[cfg(test)]
 mod tests;
