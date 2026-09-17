@@ -628,6 +628,55 @@ mod tests {
     }
 
     #[test]
+    fn hook_allow_override_cannot_escalate_beyond_the_active_mode() {
+        // A hook returning `permissionDecision: allow` may relax an ask, but it
+        // must not grant authority the active mode does not have - otherwise a
+        // plugin could hand itself write access from a read-only session.
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+        let context = PermissionContext::new(
+            Some(PermissionOverride::Allow),
+            Some("hook said allow".to_string()),
+        );
+
+        let outcome = policy.authorize_with_context("write_file", "{}", &context, None);
+        assert!(
+            !matches!(outcome, PermissionOutcome::Allow),
+            "a hook allow must not escalate beyond read-only, got {outcome:?}"
+        );
+
+        // The same override is not simply ignored: where the mode already
+        // permits the tool, it still allows.
+        let permitted = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .authorize_with_context("write_file", "{}", &context, None);
+        assert_eq!(permitted, PermissionOutcome::Allow);
+    }
+
+    #[test]
+    fn hook_allow_override_cannot_override_an_explicit_deny_rule() {
+        // Deny rules are evaluated before any override, and a plugin does not
+        // get to argue with them.
+        let rules = RuntimePermissionRuleConfig::new(
+            Vec::new(),
+            vec!["write_file(*)".to_string()],
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .with_permission_rules(&rules);
+        let context = PermissionContext::new(
+            Some(PermissionOverride::Allow),
+            Some("hook said allow".to_string()),
+        );
+
+        assert!(matches!(
+            policy.authorize_with_context("write_file", "{}", &context, None),
+            PermissionOutcome::Deny { reason } if reason.contains("denied by rule")
+        ));
+    }
+
+    #[test]
     fn applies_rule_based_denials_and_allows() {
         let rules = RuntimePermissionRuleConfig::new(
             vec!["bash(git:*)".to_string()],
