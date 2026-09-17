@@ -1253,25 +1253,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_lsp(input: LspInput) -> Result<String, String> {
-    let registry = global_lsp_registry();
-    let action = &input.action;
-    let path = input.path.as_deref();
-    let line = input.line;
-    let character = input.character;
-    let query = input.query.as_deref();
-
-    match registry.dispatch(action, path, line, character, query) {
-        Ok(result) => to_pretty_json(result),
-        Err(e) => to_pretty_json(json!({
-            "action": action,
-            "error": e,
-            "status": "error"
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_list_mcp_resources(input: McpResourceInput) -> Result<String, String> {
     let registry = global_mcp_registry();
     let server = input.server.as_deref().unwrap_or("default");
@@ -1978,19 +1959,6 @@ struct AskUserQuestionInput {
 
 const fn default_auto_recover_prompt_misdelivery() -> bool {
     true
-}
-
-#[derive(Debug, Deserialize)]
-struct LspInput {
-    action: String,
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
-    line: Option<u32>,
-    #[serde(default)]
-    character: Option<u32>,
-    #[serde(default)]
-    query: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4623,10 +4591,12 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 }
 
 pub mod lane_completion;
+mod lsp;
 mod registries;
 mod tasks;
 mod team_cron;
 mod workers;
+use lsp::{run_lsp, LspInput};
 use tasks::{
     run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
     run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
@@ -4643,7 +4613,7 @@ use workers::{
 mod web_fetch;
 // Only the registries this file still reaches for; each domain imports its own
 // from `crate::registries`.
-use registries::{global_lsp_registry, global_mcp_registry};
+use registries::global_mcp_registry;
 
 use web_fetch::{run_web_fetch, WebFetchInput};
 // The rest of the WebFetch surface is exercised directly by the tests, which
