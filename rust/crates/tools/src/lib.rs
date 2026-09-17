@@ -13,14 +13,10 @@ use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
     check_freshness, edit_file, execute_bash, glob_search, grep_search, load_system_prompt,
-    lsp_client::LspRegistry,
-    mcp_tool_bridge::McpToolRegistry,
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
-    task_registry::TaskRegistry,
-    team_cron_registry::{CronRegistry, TeamRegistry},
-    worker_boot::{WorkerReadySnapshot, WorkerRegistry},
+    worker_boot::WorkerReadySnapshot,
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
     BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
     LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus, LaneFailureClass,
@@ -29,43 +25,6 @@ use runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-/// Global task registry shared across tool invocations within a session.
-fn global_lsp_registry() -> &'static LspRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<LspRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(LspRegistry::new)
-}
-
-fn global_mcp_registry() -> &'static McpToolRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<McpToolRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(McpToolRegistry::new)
-}
-
-fn global_team_registry() -> &'static TeamRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<TeamRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(TeamRegistry::new)
-}
-
-fn global_cron_registry() -> &'static CronRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<CronRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(CronRegistry::new)
-}
-
-fn global_task_registry() -> &'static TaskRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<TaskRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(TaskRegistry::new)
-}
-
-fn global_worker_registry() -> &'static WorkerRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<WorkerRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(WorkerRegistry::new)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
@@ -4984,7 +4943,12 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 }
 
 pub mod lane_completion;
+mod registries;
 mod web_fetch;
+use registries::{
+    global_cron_registry, global_lsp_registry, global_mcp_registry, global_task_registry,
+    global_team_registry, global_worker_registry,
+};
 
 use web_fetch::{run_web_fetch, WebFetchInput};
 // The rest of the WebFetch surface is exercised directly by the tests, which
