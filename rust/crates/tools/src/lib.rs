@@ -5716,6 +5716,67 @@ mod tests {
     }
 
     #[test]
+    fn web_fetch_revalidates_every_hop_instead_of_following_blindly() {
+        // A page that redirects to a cloud metadata address. With reqwest's own
+        // redirect policy this was followed, because only the first URL was ever
+        // checked; the hop policy is what has to refuse it.
+        let redirector = TestServer::spawn(Arc::new(|request_line: &str| {
+            assert!(request_line.starts_with("GET /jump "), "{request_line}");
+            HttpResponse::redirect("http://169.254.169.254/latest/meta-data/")
+        }));
+
+        let input = WebFetchInput {
+            url: format!("http://{}/jump", redirector.addr()),
+            prompt: "Summarize".to_string(),
+        };
+        let error = execute_web_fetch_with(&input, true)
+            .expect_err("a redirect to a metadata address must not be followed");
+        assert!(error.contains("link-local"), "{error}");
+        assert!(error.contains("169.254.169.254"), "{error}");
+    }
+
+    #[test]
+    fn web_fetch_follows_a_permitted_redirect_and_counts_it() {
+        let target = TestServer::spawn(Arc::new(|request_line: &str| {
+            assert!(request_line.starts_with("GET /final "), "{request_line}");
+            HttpResponse::text(200, "OK", "arrived")
+        }));
+        let location = format!("http://{}/final", target.addr());
+        let redirector = TestServer::spawn(Arc::new(move |_| HttpResponse::redirect(&location)));
+
+        let input = WebFetchInput {
+            url: format!("http://{}/start", redirector.addr()),
+            prompt: "Show me the content".to_string(),
+        };
+        let fetched =
+            execute_web_fetch_with(&input, true).expect("a permitted redirect should be followed");
+        let output = serde_json::to_value(&fetched).expect("serialize");
+        assert_eq!(output["redirects"], 1);
+        assert!(output["result"].as_str().expect("result").contains("arrived"));
+    }
+
+    #[test]
+    fn web_fetch_stops_after_the_redirect_cap() {
+        // A server that redirects to itself: the hop cap has to stop it, not the
+        // client's own limit or a stack overflow.
+        let shared: Arc<Mutex<Option<SocketAddr>>> = Arc::new(Mutex::new(None));
+        let for_handler = Arc::clone(&shared);
+        let server = TestServer::spawn(Arc::new(move |_| {
+            let target = for_handler.lock().expect("lock").expect("addr is set below");
+            HttpResponse::redirect(&format!("http://{target}/loop"))
+        }));
+        *shared.lock().expect("lock") = Some(server.addr());
+
+        let input = WebFetchInput {
+            url: format!("http://{}/loop", server.addr()),
+            prompt: "x".to_string(),
+        };
+        let error =
+            execute_web_fetch_with(&input, true).expect_err("the hop cap must stop the loop");
+        assert!(error.contains("redirects"), "{error}");
+    }
+
+    #[test]
     fn web_search_extracts_and_filters_results() {
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.contains("GET /search?q=rust+web+search "));
@@ -7439,6 +7500,7 @@ printf 'pwsh:%s' "$1"
         reason: &'static str,
         content_type: &'static str,
         body: String,
+        location: Option<String>,
     }
 
     impl HttpResponse {
@@ -7448,6 +7510,7 @@ printf 'pwsh:%s' "$1"
                 reason,
                 content_type: "text/html; charset=utf-8",
                 body: body.to_string(),
+                location: None,
             }
         }
 
@@ -7457,15 +7520,34 @@ printf 'pwsh:%s' "$1"
                 reason,
                 content_type: "text/plain; charset=utf-8",
                 body: body.to_string(),
+                location: None,
+            }
+        }
+
+        /// A `302` carrying a `Location`, so redirection handling can be
+        /// exercised against a real server rather than reasoned about.
+        fn redirect(location: &str) -> Self {
+            Self {
+                status: 302,
+                reason: "Found",
+                content_type: "text/plain; charset=utf-8",
+                body: String::new(),
+                location: Some(location.to_string()),
             }
         }
 
         fn to_bytes(&self) -> Vec<u8> {
+            let location = self
+                .location
+                .as_ref()
+                .map(|value| format!("Location: {value}\r\n"))
+                .unwrap_or_default();
             format!(
-                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 self.status,
                 self.reason,
                 self.content_type,
+                location,
                 self.body.len(),
                 self.body
             )

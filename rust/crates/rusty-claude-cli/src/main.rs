@@ -9668,6 +9668,138 @@ mod tests {
         assert!(script.contains("https://example.invalid/release"));
     }
 
+    /// Minimal one-shot HTTP server, enough to serve a `checksums.txt`.
+    fn serve_checksums_once(body: String) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind checksums server");
+        let addr = listener.local_addr().expect("addr");
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}/checksums.txt"), handle)
+    }
+
+    /// A release whose only published asset is a `checksums.txt` at `url`.
+    fn release_with_checksums(url: String) -> super::GithubRelease {
+        super::GithubRelease {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.invalid/release".to_string(),
+            assets: vec![super::GithubReleaseAsset {
+                name: super::UPDATE_CHECKSUMS_ASSET.to_string(),
+                browser_download_url: url,
+            }],
+        }
+    }
+
+    // Every test below shares the environment lock: one of them sets an override
+    // variable, and without serialising them it would leak into a sibling and
+    // turn "refused" into "allowed".
+    #[test]
+    fn update_verification_refuses_and_discards_a_tampered_download() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"tampered payload").expect("write tampered file");
+
+        let (url, server) = serve_checksums_once(
+            "0000000000000000000000000000000000000000000000000000000000000000  sego.exe\n"
+                .to_string(),
+        );
+        let release = release_with_checksums(url);
+
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("a mismatched hash must be refused");
+        assert!(format!("{error}").contains("checksum mismatch"), "{error}");
+        assert!(
+            !downloaded.exists(),
+            "the tampered download must be deleted, not left on disk to be run by hand"
+        );
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_refuses_a_checksums_file_without_the_asset() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"payload").expect("write file");
+
+        // The listing is well-formed but never mentions the binary.
+        let (url, server) = serve_checksums_once(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  sego-windows.zip\n"
+                .to_string(),
+        );
+        let release = release_with_checksums(url);
+
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("an unlisted asset must be refused");
+        assert!(format!("{error}").contains("does not list"), "{error}");
+        assert!(!downloaded.exists(), "an unverifiable download must be discarded");
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_accepts_a_matching_download() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        fs::write(&downloaded, b"genuine payload").expect("write file");
+
+        let digest = super::sha256_of_file(&downloaded).expect("hash the file");
+        let (url, server) = serve_checksums_once(format!("{digest}  sego.exe\n"));
+        let release = release_with_checksums(url);
+
+        super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect("a matching hash must be accepted");
+        assert!(downloaded.exists(), "a verified download must be kept");
+
+        let _ = server.join();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_verification_skips_only_with_the_explicit_override() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let downloaded = root.join("sego.exe");
+        std::fs::write(&downloaded, b"payload").expect("write file");
+
+        // No checksums asset at all: refused by default...
+        let release = super::GithubRelease {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.invalid/release".to_string(),
+            assets: Vec::new(),
+        };
+        let error = super::verify_release_checksum(&release, "sego.exe", &downloaded)
+            .expect_err("a release without checksums must be refused by default");
+        assert!(format!("{error}").contains("does not publish"), "{error}");
+
+        // ...and skipped only when the override is set explicitly.
+        std::env::set_var(super::UPDATE_ALLOW_UNVERIFIED_ENV, "1");
+        let skipped = super::verify_release_checksum(&release, "sego.exe", &downloaded);
+        std::env::remove_var(super::UPDATE_ALLOW_UNVERIFIED_ENV);
+        assert!(skipped.is_ok(), "the documented override must be honoured: {skipped:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn reads_expected_hash_from_a_checksums_listing() {
         let listing = "\
