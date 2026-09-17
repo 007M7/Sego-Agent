@@ -157,6 +157,35 @@ jobs:
     # first run's findings are fixed or waived with a reason in `deny.toml`.
     continue-on-error: true
 
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Measure coverage and enforce the recorded floor
+        # The floor and its justification live in rust/coverage-baseline.json.
+        # runtime/tests/coverage_policy.rs asserts this job uses the number
+        # recorded there, so the file and CI cannot drift apart.
+        #
+        # A ratchet against a real drop, not a quality target: line coverage
+        # counts execution, not verification. Ubuntu only, because coverage
+        # numbers are not comparable across platforms - code behind
+        # #[cfg(windows)] or #[cfg(unix)] only compiles where it applies.
+        run: cargo llvm-cov --workspace --fail-under-lines 75
+
   contracts:
     name: published contract metadata
     runs-on: ubuntu-latest
