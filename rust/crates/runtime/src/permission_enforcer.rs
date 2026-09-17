@@ -170,12 +170,30 @@ fn is_read_only_command(command: &str) -> bool {
             && !lowered.contains("-ok ")
             && !lowered.contains("system(")
             && !lowered.contains("print >")
-            && !command.contains(" > ")
-            && !command.contains(" >> ");
+            // `>` writes however it is spaced: `> file`, `>file`, `>>file`.
+            && !command.contains('>');
     }
 
     if matches!(first_token, "cargo" | "git" | "gh") {
         return is_read_only_subcommand(first_token, command);
+    }
+
+    // `sed -i`, `sed -i.bak` and `-i's/x/y/'` all write in place. Restricted to
+    // the tools where `-i` means in-place, because for `grep`/`rg` it means
+    // ignore-case and stays read-only.
+    if matches!(first_token, "sed" | "perl")
+        && command.split_whitespace().any(|token| {
+            token == "-i" || token.starts_with("-i") || token.starts_with("--in-place")
+        })
+    {
+        return false;
+    }
+
+    // Any redirection is a write, spaced or not. A `>` inside a quoted argument
+    // is refused too: the classifier does not parse shell quoting, and refusing
+    // costs a confirmation while missing one costs the file.
+    if command.contains('>') {
+        return false;
     }
 
     matches!(
@@ -233,10 +251,21 @@ fn is_read_only_command(command: &str) -> bool {
             | "tree"
             | "jq"
             | "yq"
-    ) && !command.contains("-i ")
-        && !command.contains("--in-place")
-        && !command.contains(" > ")
-        && !command.contains(" >> ")
+    ) && !command.contains("--in-place")
+}
+
+/// Lower-cased argument tokens, with `--flag=value` split into both parts.
+///
+/// Word-splitting alone is not enough. `gh` uses pflag, so `--method=DELETE` is
+/// ordinary input and arrives as a single whitespace token that never equals
+/// `delete` - which let `gh api --method=DELETE <url>` pass as read-only.
+fn argument_tokens(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .skip(1)
+        .flat_map(|token| token.split('='))
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
 }
 
 /// Is a multi-purpose build or VCS command in a read-only subcommand form?
@@ -248,8 +277,7 @@ fn is_read_only_command(command: &str) -> bool {
 /// action does.
 fn is_read_only_subcommand(tool: &str, command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
-    let tokens: Vec<String> =
-        command.split_whitespace().skip(1).map(|part| part.to_ascii_lowercase()).collect();
+    let tokens = argument_tokens(command);
     let has_any = |verbs: &[&str]| tokens.iter().any(|token| verbs.contains(&token.as_str()));
 
     match tool {
@@ -345,7 +373,10 @@ fn is_read_only_subcommand(tool: &str, command: &str) -> bool {
             if has_any(MUTATING) {
                 return false;
             }
-            if lowered.contains(" -x ") || lowered.contains(" --method ") {
+            // Prefix match, not a two-sided one: `--method=DELETE` has no space
+            // after the flag name and `-XDELETE` has none before the value, so
+            // requiring a trailing space misses both spellings.
+            if lowered.contains(" --method") || lowered.contains(" -x") {
                 return false;
             }
             has_any(READ_ONLY)
@@ -483,6 +514,49 @@ mod tests {
         assert!(!is_read_only_command("find . -exec rm {} ;"));
         assert!(!is_read_only_command("find . -delete"));
         assert!(!is_read_only_command("awk 'BEGIN { system(\"id\") }'"));
+    }
+
+    #[test]
+    fn read_only_heuristic_rejects_flag_value_forms_that_change_remote_state() {
+        // `--flag=value` is standard pflag/Cobra syntax, not a malformed input:
+        // word-splitting alone leaves `--method=delete` as one token that never
+        // equals `delete`, and a two-sided " --method " match misses it because
+        // there is no space after the flag name.
+        for command in [
+            "gh api --method=DELETE /repos/x",
+            "gh api --method DELETE /repos/x",
+            "gh api -X=DELETE /repos/x",
+            "gh api -XDELETE /repos/x",
+            "gh api --method=delete /repos/x",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // The read-only forms still pass.
+        assert!(is_read_only_command("gh api /repos/x"));
+        assert!(is_read_only_command("gh pr list"));
+    }
+
+    #[test]
+    fn read_only_heuristic_rejects_redirection_and_in_place_writes() {
+        // `>` writes whether or not it is spaced: `>file` and `>>log` are as
+        // much a redirect as `> file`.
+        for command in [
+            "echo hi >/etc/hosts",
+            "echo hi > /etc/hosts",
+            "echo hi>>log",
+            "printf x >y",
+            "cat a >b",
+        ] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `sed -i` writes in place, including the attached-value spellings.
+        for command in ["sed -i s/a/b/ f", "sed -i.bak s/a/b/ f", "sed -i's/a/b/' f"] {
+            assert!(!is_read_only_command(command), "{command} must not be read-only");
+        }
+        // `grep -i` means ignore-case, and plain `sed` only prints.
+        assert!(is_read_only_command("grep -i pattern file"));
+        assert!(is_read_only_command("sed s/a/b/ f"));
+        assert!(is_read_only_command("cat file.txt"));
     }
 
     #[test]
