@@ -350,12 +350,66 @@ fn read_credentials_root(path: &PathBuf) -> io::Result<Map<String, Value>> {
 fn write_credentials_root(path: &PathBuf, root: &Map<String, Value>) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        restrict_directory_permissions(parent);
     }
     let rendered = serde_json::to_string_pretty(&Value::Object(root.clone()))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, format!("{rendered}\n"))?;
-    fs::rename(temp_path, path)
+    write_private_file(&temp_path, format!("{rendered}\n").as_bytes())?;
+    fs::rename(temp_path, path)?;
+    restrict_file_permissions(path);
+    Ok(())
+}
+
+/// Write a file that only the current user can read.
+///
+/// The credentials file holds OAuth tokens, so it must not inherit a permissive
+/// umask - 0644 is a common default, which lets any local user read it. On Unix
+/// the mode is applied at creation time, which closes the window between
+/// creating the file and chmod-ing it. `std` exposes no portable equivalent for
+/// Windows ACLs, so there the file relies on the ACLs of the profile directory
+/// it lives in; that is recorded as a remaining gap rather than claimed.
+fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)
+    }
+}
+
+fn restrict_file_permissions(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+fn restrict_directory_permissions(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn base64url_encode(bytes: &[u8]) -> String {
@@ -525,6 +579,45 @@ mod tests {
             refresh.form_params().get("scope").map(String::as_str),
             Some("org:read user:write")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_credentials_are_not_readable_by_other_users() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        let path = credentials_path().expect("credentials path");
+
+        let token_set = OAuthTokenSet {
+            access_token: "access-token".to_string(),
+            refresh_token: Some("refresh-token".to_string()),
+            expires_at: Some(123),
+            scopes: vec!["scope:a".to_string()],
+        };
+        save_oauth_credentials(&token_set).expect("save credentials");
+
+        let file_mode =
+            std::fs::metadata(&path).expect("stat credentials").permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600, "credentials file must be owner-only, got {file_mode:o}");
+
+        let dir = path.parent().expect("parent");
+        let dir_mode =
+            std::fs::metadata(dir).expect("stat config home").permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "credentials directory must be owner-only, got {dir_mode:o}");
+
+        // The temp file used for the atomic replace must not be readable either,
+        // which is why the mode is set at creation rather than after the write.
+        let stray: Vec<_> = std::fs::read_dir(dir)
+            .expect("list config home")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(stray.is_empty(), "a temporary credentials file was left behind");
+
+        std::env::remove_var("CLAW_CONFIG_HOME");
     }
 
     #[test]
