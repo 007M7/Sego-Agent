@@ -5016,8 +5016,19 @@ fn command_path(command: &str) -> Option<String> {
     }
     #[cfg(not(windows))]
     {
+        // Deliberately not a login shell. `sh -lc` sources the user's profile,
+        // and on macOS `/etc/profile` runs `path_helper`, which rebuilds PATH
+        // from `/etc/paths` and discards the one this process was given. The
+        // resolver then finds whatever the profile prefers rather than what the
+        // agent was handed - which is how `pwsh` on the macOS runner resolved
+        // to `/usr/local/bin/pwsh` while the caller's PATH pointed at its own
+        // stub. Resolution has to follow the environment we pass to children,
+        // not the one a profile would prefer.
+        //
+        // Running a *user's* command is a different question, and the call
+        // sites that do that keep their login shell on purpose.
         std::process::Command::new("sh")
-            .arg("-lc")
+            .arg("-c")
             .arg(format!("command -v {command}"))
             .output()
             .ok()
