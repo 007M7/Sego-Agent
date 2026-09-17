@@ -145,17 +145,23 @@ jobs:
           tool: cargo-deny
       - name: Audit dependencies
         run: cargo deny check
-    # Advisory on purpose, and labelled as such rather than left to inference:
-    # this is the repository's first dependency audit, so nobody has seen what it
-    # reports, and a blocking job that starts red would just be disabled. The
-    # policy itself is in rust/deny.toml - which cannot be hollowed out or
-    # deleted, because runtime/tests/dependency_policy.rs asserts its shape.
+    # Blocking now, which is what the previous comment said to do once the first
+    # run's findings were dealt with. They are: two quick-xml vulnerabilities
+    # and a rustls TLS advisory are fixed by dependency bumps, and the two
+    # remaining entries are unmaintained-not-vulnerable crates that arrive
+    # through syntect, each waived with a written reason in `rust/deny.toml`.
+    # `advisories ok, bans ok, licenses ok, sources ok` as of that change.
     #
-    # The offline half of DEV-SEC-14 already blocks: crates.io-only sources, no
-    # git dependencies and the policy file's presence ride
-    # `cargo test --workspace` above. Drop this `continue-on-error` once the
-    # first run's findings are fixed or waived with a reason in `deny.toml`.
-    continue-on-error: true
+    # This job depends on the remote advisory database, so a newly published
+    # advisory can turn it red without anything in the repository changing. That
+    # is intended rather than a flake: the response is to fix the dependency or
+    # write a waiver with a reason, and the policy file cannot be hollowed out
+    # or deleted because runtime/tests/dependency_policy.rs asserts its shape -
+    # including that every waiver carries a reason.
+    #
+    # The offline half of DEV-SEC-14 also blocks, on every `cargo test
+    # --workspace`: crates.io-only sources, no git dependencies, and the policy
+    # file's presence.
 
   coverage:
     name: coverage floor

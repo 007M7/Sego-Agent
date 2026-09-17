@@ -246,6 +246,31 @@ fn the_dependency_audit_policy_is_present_and_not_hollowed_out() {
         text.contains("allow = ["),
         "the licence allow list must stay explicit rather than defaulting to permissive"
     );
+    // A waiver is only a waiver if it says why. The comment above the list has
+    // always claimed "one reason per entry"; now the claim is checked, so an
+    // entry added in a hurry cannot quietly suppress an advisory.
+    let waivers = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("{ id = \"RUSTSEC-"))
+        .collect::<Vec<_>>();
+    for waiver in &waivers {
+        assert!(
+            waiver.contains("reason = \"") && !waiver.contains("reason = \"\""),
+            "every advisory waiver must carry a reason: {waiver}"
+        );
+    }
+    // The path-wildcard exemption is a deliberate, narrow decision about
+    // in-repo dependencies. Naming it here means removing or widening it takes
+    // an edit to this test as well.
+    assert!(
+        text.contains("allow-wildcard-paths = true"),
+        "the wildcard policy exempts in-repo path dependencies explicitly; if that changed, update the reasoning rather than dropping the line"
+    );
+    assert!(
+        text.contains("wildcards = \"deny\""),
+        "registry wildcards must stay denied - the exemption is for path dependencies only"
+    );
     // The policy belongs to the workspace it audits.
     assert!(repo_root().join("rust/Cargo.toml").exists());
 }
