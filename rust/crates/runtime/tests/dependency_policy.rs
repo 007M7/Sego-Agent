@@ -226,14 +226,19 @@ fn the_dependency_audit_policy_is_present_and_not_hollowed_out() {
     for section in ["[advisories]", "[licenses]", "[sources]", "[bans]"] {
         assert!(text.contains(section), "deny.toml must keep its {section} section");
     }
-    // An explicit, empty ignore list is the baseline mechanism: waivers are
-    // listed one per line with a reason, rather than by disabling the check.
+    // Compare against the file without carriage returns. The repository has no
+    // `.gitattributes`, so a Windows checkout with `core.autocrlf` hands this
+    // test CRLF while Linux and macOS see LF - and the earlier version of this
+    // assertion looked for `ignore = [\n`, which then failed on the Windows
+    // runner alone. The property being checked is that an explicit ignore list
+    // exists, so the line ending must not be part of it.
+    let normalized = text.replace('\r', "");
     assert!(
-        text.contains("ignore = []")
-            || text.contains("ignore = [\n")
-            || text.contains("ignore = [ {"),
+        normalized.contains("ignore = ["),
         "deny.toml must carry an explicit ignore list so waivers stay visible and reviewable"
     );
+    // An empty list, `ignore = []`, still counts: it is the baseline state, and
+    // the point is that the list is visible rather than that it is non-empty.
     assert!(
         text.contains("unknown-git = \"deny\"") && text.contains("unknown-registry = \"deny\""),
         "dependency sources must stay denied, matching the offline test beside this one"
