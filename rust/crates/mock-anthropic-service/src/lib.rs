@@ -100,7 +100,19 @@ enum Scenario {
     PluginToolRoundtrip,
     AutoCompactTriggered,
     TokenCostReporting,
+    /// Returns a findings document so the review pipeline
+    /// (request → model → parse → evidence gate → persist → response) can be
+    /// driven end to end against a mock endpoint, instead of only through unit
+    /// tests of its individual stages.
+    ReviewFindings,
 }
+
+/// The document `Scenario::ReviewFindings` returns.
+///
+/// It cites `src/lib.rs` line 2 because a caller using this scenario stages a
+/// diff that adds exactly that line - which is what the evidence gate needs in
+/// order to have a citation it can resolve.
+const REVIEW_FINDINGS_JSON: &str = r#"{"findings":[{"severity":"high","file":"src/lib.rs","line":2,"title":"Added branch bypasses the validation guard","evidence":"the diff adds a branch before the guard runs","risk":"unvalidated input can reach the parser","suggestion":"move the guard above the new branch","confidence":0.82,"verification_hint":"rg guard src/lib.rs"}]}"#;
 
 impl Scenario {
     fn parse(value: &str) -> Option<Self> {
@@ -117,6 +129,7 @@ impl Scenario {
             "plugin_tool_roundtrip" => Some(Self::PluginToolRoundtrip),
             "auto_compact_triggered" => Some(Self::AutoCompactTriggered),
             "token_cost_reporting" => Some(Self::TokenCostReporting),
+            "review_findings" => Some(Self::ReviewFindings),
             _ => None,
         }
     }
@@ -135,6 +148,7 @@ impl Scenario {
             Self::PluginToolRoundtrip => "plugin_tool_roundtrip",
             Self::AutoCompactTriggered => "auto_compact_triggered",
             Self::TokenCostReporting => "token_cost_reporting",
+            Self::ReviewFindings => "review_findings",
         }
     }
 }
@@ -347,6 +361,8 @@ fn bash_command_text(text: &str) -> String {
 fn build_stream_body(request: &MessageRequest, scenario: Scenario) -> String {
     match scenario {
         Scenario::StreamingText => streaming_text_sse(),
+        // The review path may stream; both shapes carry the same document.
+        Scenario::ReviewFindings => final_text_sse(REVIEW_FINDINGS_JSON),
         Scenario::ReadFileRoundtrip => match latest_tool_result(request) {
             Some((tool_output, _)) => final_text_sse(&format!(
                 "read_file roundtrip complete: {}",
@@ -477,6 +493,9 @@ fn build_message_response(request: &MessageRequest, scenario: Scenario) -> Messa
             "msg_streaming_text",
             "Mock streaming says hello from the parity harness.",
         ),
+        Scenario::ReviewFindings => {
+            text_message_response("msg_review_findings", REVIEW_FINDINGS_JSON)
+        }
         Scenario::ReadFileRoundtrip => match latest_tool_result(request) {
             Some((tool_output, _)) => text_message_response(
                 "msg_read_file_final",
@@ -642,6 +661,7 @@ fn request_id_for(scenario: Scenario) -> &'static str {
         Scenario::PluginToolRoundtrip => "req_plugin_tool_roundtrip",
         Scenario::AutoCompactTriggered => "req_auto_compact_triggered",
         Scenario::TokenCostReporting => "req_token_cost_reporting",
+        Scenario::ReviewFindings => "req_review_findings",
     }
 }
 
