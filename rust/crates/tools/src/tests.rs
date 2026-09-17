@@ -583,6 +583,13 @@ fn web_fetch_stops_after_the_redirect_cap() {
 
 #[test]
 fn web_search_extracts_and_filters_results() {
+    // This test replaces `CLAWD_WEB_SEARCH_BASE_URL` and restores it. That is
+    // process-global state: without the lock, the sibling test that holds the
+    // lock to protect its own use of the same variable can have it removed
+    // underneath it, fall through to the live endpoint, and then assert on real
+    // search results. That is exactly what happened on the macOS runner - it
+    // counted 8 results where the fixture has 2.
+    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let server = TestServer::spawn(Arc::new(|request_line: &str| {
         assert!(request_line.contains("GET /search?q=rust+web+search "));
         HttpResponse::html(
