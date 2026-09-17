@@ -1662,7 +1662,12 @@ impl LiveCli {
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let previous = env::current_dir()?;
         let next = resolve_cli_cwd(requested_path)?;
-        if next == previous {
+        // `resolve_cli_cwd` canonicalizes, and on Windows that yields a verbatim
+        // (`\\?\`) path while `current_dir` does not - the two are never equal as
+        // text even when they name the same directory. Compare the canonical form
+        // of both sides, or re-selecting the current workspace tears the session
+        // down and starts a fresh one.
+        if next == previous.canonicalize().unwrap_or_else(|_| previous.clone()) {
             println!("{}", format_workspace_switch_report(&previous, &next, false));
             return Ok(false);
         }
