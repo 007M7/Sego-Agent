@@ -20,13 +20,21 @@ use crate::mcp_lifecycle_hardened::{
 
 // Keep test timeouts short, but not so tight that CI Python cold-start jitter
 // turns MCP lifecycle tests into release-blocking flakes.
+//
+// One second was too tight in practice: `given_initialize_hangs_once...` failed
+// on a Windows runner with `Timeout { server_name: "alpha", method:
+// "initialize", timeout_ms: 1000 }` on the attempt that was supposed to
+// succeed. The runner was merely busy - the same test passes when run alone -
+// and Python cold start plus the MCP handshake is what has to fit inside this
+// budget. Five seconds keeps the test fast in wall-clock terms and stops it
+// depending on runner load.
 #[cfg(test)]
-const MCP_INITIALIZE_TIMEOUT_MS: u64 = 1_000;
+const MCP_INITIALIZE_TIMEOUT_MS: u64 = 5_000;
 #[cfg(not(test))]
 const MCP_INITIALIZE_TIMEOUT_MS: u64 = 10_000;
 
 #[cfg(test)]
-const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 1_000;
+const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 5_000;
 #[cfg(not(test))]
 const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 30_000;
 
