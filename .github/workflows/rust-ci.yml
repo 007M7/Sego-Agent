@@ -129,6 +129,34 @@ jobs:
       - name: Run all tests
         run: cargo test --workspace
 
+  dependency-audit:
+    name: cargo deny (advisories, licences, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Audit dependencies
+        run: cargo deny check
+    # Advisory on purpose, and labelled as such rather than left to inference:
+    # this is the repository's first dependency audit, so nobody has seen what it
+    # reports, and a blocking job that starts red would just be disabled. The
+    # policy itself is in rust/deny.toml - which cannot be hollowed out or
+    # deleted, because runtime/tests/dependency_policy.rs asserts its shape.
+    #
+    # The offline half of DEV-SEC-14 already blocks: crates.io-only sources, no
+    # git dependencies and the policy file's presence ride
+    # `cargo test --workspace` above. Drop this `continue-on-error` once the
+    # first run's findings are fixed or waived with a reason in `deny.toml`.
+    continue-on-error: true
+
   contracts:
     name: published contract metadata
     runs-on: ubuntu-latest

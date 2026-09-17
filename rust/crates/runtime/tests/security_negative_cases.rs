@@ -144,20 +144,23 @@ const REQUIRED_CASES: &[(&str, &[&str])] = &[
         &["platform_isolation_is_declared_even_when_nothing_is_requested"],
     ),
     ("DEV-SEC-15 fetched content is marked untrusted", &["web_fetch_returns_prompt_aware_summary"]),
+    (
+        "DEV-SEC-14 a non-crates.io or git dependency is detected",
+        &[
+            "every_resolved_dependency_comes_from_crates_io",
+            "a_git_or_alternate_registry_dependency_is_detected",
+            "no_manifest_declares_a_git_dependency",
+            "the_dependency_audit_policy_is_present_and_not_hollowed_out",
+        ],
+    ),
 ];
 
 /// Items whose negative case cannot exist yet, with the reason. Kept separate so
 /// an absent case is recorded rather than quietly passing.
-const PENDING_CASES: &[(&str, &str)] = &[
-    (
-        "DEV-SEC-16",
-        "process-tree reclamation is in flight in another window (the case belongs with that change)",
-    ),
-    (
-        "DEV-SEC-14",
-        "no dependency audit exists yet, so there is nothing to assert a refusal against",
-    ),
-];
+const PENDING_CASES: &[(&str, &str)] = &[(
+    "DEV-SEC-16",
+    "process-tree reclamation is in flight in another window (the case belongs with that change)",
+)];
 
 #[test]
 fn every_fixed_security_item_still_carries_its_negative_case() {
@@ -195,11 +198,29 @@ fn pending_security_items_are_recorded_rather_than_assumed() {
     }
 }
 
+/// The lines of one top-level job in a workflow, from its key to the next key.
+fn job_block<'a>(workflow: &'a str, job: &str) -> String {
+    let lines: Vec<&str> = workflow.lines().collect();
+    let key = format!("{job}:");
+    let Some(start) = lines.iter().position(|line| line.trim_end() == format!("  {key}")) else {
+        return String::new();
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| {
+            line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':')
+        })
+        .map_or(lines.len(), |(index, _)| index);
+    lines[start..end].join("\n")
+}
+
 #[test]
 fn ci_runs_the_suite_as_a_blocking_gate() {
-    let workflow = repo_root().join(".github/workflows/rust-ci.yml");
-    let text = fs::read_to_string(&workflow)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", workflow.display()));
+    let workflow_path = repo_root().join(".github/workflows/rust-ci.yml");
+    let text = fs::read_to_string(&workflow_path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", workflow_path.display()));
 
     let test_step = text
         .lines()
@@ -213,10 +234,18 @@ fn ci_runs_the_suite_as_a_blocking_gate() {
         !text.contains("cargo test --workspace || true"),
         "the suite must not be made advisory with `|| true`"
     );
-    assert!(
-        !text.lines().any(|line| line.trim() == "continue-on-error: true" && line.contains("test")),
-        "no test job may be marked continue-on-error"
-    );
+
+    // Scoped to the jobs that run tests, and checked on the job block rather
+    // than on single lines: an earlier version of this assertion compared a line
+    // against two conditions that cannot both hold, so it could never fail.
+    for job in ["test-workspace", "test-platforms"] {
+        let block = job_block(&text, job);
+        assert!(!block.is_empty(), "{job} must still exist in the workflow");
+        assert!(
+            !block.contains("continue-on-error"),
+            "{job} runs the tests that prove the security fixes; it must not be advisory:\n{block}"
+        );
+    }
 }
 
 #[test]

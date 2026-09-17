@@ -1,0 +1,67 @@
+# cargo-deny policy for the Sego Rust workspace (DEV-SEC-14).
+#
+# Run: cargo deny --manifest-path rust/Cargo.toml check
+#
+# Before this file the repository had no dependency audit at all: advisories,
+# licences and dependency sources were unreviewed. CI runs it in
+# `dependency-audit`; read that job's comment for what blocks today and what
+# still needs a first real run.
+#
+# Key choice: this deliberately uses only long-stable keys and leaves severity
+# at cargo-deny's defaults (advisories are denied by default). Version-specific
+# severity keys were avoided because the policy could not be validated offline,
+# and a config that errors on load is worse than one that relies on defaults.
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-apple-darwin" },
+]
+
+[advisories]
+# Waivers live here, one entry per line, each with an id and a reason. The list
+# is empty on purpose: nothing has been reviewed and waived yet, and an entry
+# added without a reason defeats the point of the check. When a first real run
+# reports something that cannot be fixed now, add it as:
+#   { id = "RUSTSEC-0000-0000", reason = "<why accepted, and until when>" }
+ignore = []
+
+[licenses]
+# Derived from the actual dependency set (Cargo.lock plus the `license` field of
+# each vendored crate), not from a guess: MIT and Apache-2.0 account for most of
+# the 220 registry dependencies, with Unicode-3.0, ISC, Unlicense, BSL-1.0,
+# Zlib, 0BSD, BSD-2/3-Clause and CDLA-Permissive-2.0 covering the rest.
+# Re-derive when dependencies change - cargo-deny names the offending licence.
+#
+# Copyleft licences are deliberately absent: `LGPL-2.1-or-later` appears only
+# inside an `OR` expression that also offers MIT or Apache-2.0, so the permissive
+# branch is available and no copyleft obligation attaches.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Unicode-3.0",
+    "ISC",
+    "Unlicense",
+    "BSL-1.0",
+    "Zlib",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Every dependency must come from crates.io. A `git` or arbitrary-registry
+# dependency is a supply-chain change that should be argued for explicitly, and
+# `runtime/tests/dependency_policy.rs` enforces the same rule offline on every
+# `cargo test --workspace`.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
