@@ -499,8 +499,24 @@ pub fn generate_task_id(prefix: &str) -> String {
 mod tests {
     use super::*;
 
-    fn rand_id() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+    /// A per-call unique suffix for temporary directories.
+    ///
+    /// A clock reading alone is not unique: it is only as fine-grained as the
+    /// platform's clock, and macOS can return the same value for two rapid
+    /// calls. When two tests in this module got the same suffix they shared a
+    /// store, and `writes_recovery_prompt` failed with
+    /// `assertion failed: rp.contains("build")` because it read a prompt
+    /// written by a test whose task had a different goal. The counter makes the
+    /// value unique regardless of clock resolution; the clock keeps it distinct
+    /// across processes.
+    fn rand_id() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0);
+        format!("{nanos}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
     #[test]

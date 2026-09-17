@@ -699,37 +699,37 @@ fn renders_mcp_reports_from_loaded_config() {
     fs::write(
         workspace.join(".claw").join("settings.json"),
         r#"{
-          "mcpServers": {
-            "alpha": {
-              "command": "uvx",
-              "args": ["alpha-server"],
-              "env": {"ALPHA_TOKEN": "secret"},
-              "toolCallTimeoutMs": 1200
-            },
-            "remote": {
-              "type": "http",
-              "url": "https://remote.example/mcp",
-              "headers": {"Authorization": "Bearer secret"},
-              "headersHelper": "./bin/headers",
-              "oauth": {
-                "clientId": "remote-client",
-                "callbackPort": 7878
+              "mcpServers": {
+                "alpha": {
+                  "command": "uvx",
+                  "args": ["alpha-server"],
+                  "env": {"ALPHA_TOKEN": "secret"},
+                  "toolCallTimeoutMs": 1200
+                },
+                "remote": {
+                  "type": "http",
+                  "url": "https://remote.example/mcp",
+                  "headers": {"Authorization": "Bearer secret"},
+                  "headersHelper": "./bin/headers",
+                  "oauth": {
+                    "clientId": "remote-client",
+                    "callbackPort": 7878
+                  }
+                }
               }
-            }
-          }
-        }"#,
+            }"#,
     )
     .expect("write settings");
     fs::write(
         workspace.join(".claw").join("settings.local.json"),
         r#"{
-          "mcpServers": {
-            "remote": {
-              "type": "ws",
-              "url": "wss://remote.example/mcp"
-            }
-          }
-        }"#,
+              "mcpServers": {
+                "remote": {
+                  "type": "ws",
+                  "url": "wss://remote.example/mcp"
+                }
+              }
+            }"#,
     )
     .expect("write local settings");
 
