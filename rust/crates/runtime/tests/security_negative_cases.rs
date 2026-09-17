@@ -217,7 +217,7 @@ fn job_block<'a>(workflow: &'a str, job: &str) -> String {
 }
 
 #[test]
-fn ci_runs_the_suite_as_a_blocking_gate() {
+fn ci_runs_the_suite_without_an_escape_hatch() {
     let workflow_path = repo_root().join(".github/workflows/rust-ci.yml");
     let text = fs::read_to_string(&workflow_path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", workflow_path.display()));
@@ -246,6 +246,11 @@ fn ci_runs_the_suite_as_a_blocking_gate() {
             "{job} runs the tests that prove the security fixes; it must not be advisory:\n{block}"
         );
     }
+
+    // What this test cannot assert, and must not be read as asserting: whether a
+    // red run stops a merge. That is a repository setting, not a workflow one --
+    // `main` carries no branch protection today, so a failing run reports a
+    // result rather than blocking anything. See DEV-GOV-05.
 }
 
 #[test]
