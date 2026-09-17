@@ -1253,261 +1253,6 @@ fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> 
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_team_create(input: TeamCreateInput) -> Result<String, String> {
-    let task_ids: Vec<String> = input
-        .tasks
-        .iter()
-        .filter_map(|t| t.get("task_id").and_then(|v| v.as_str()).map(str::to_owned))
-        .collect();
-    let team = global_team_registry().create(&input.name, task_ids);
-    // Register team assignment on each task
-    for task_id in &team.task_ids {
-        let _ = global_task_registry().assign_team(task_id, &team.team_id);
-    }
-    to_pretty_json(json!({
-        "team_id": team.team_id,
-        "name": team.name,
-        "task_count": team.task_ids.len(),
-        "task_ids": team.task_ids,
-        "status": team.status,
-        "created_at": team.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_team_delete(input: TeamDeleteInput) -> Result<String, String> {
-    match global_team_registry().delete(&input.team_id) {
-        Ok(team) => to_pretty_json(json!({
-            "team_id": team.team_id,
-            "name": team.name,
-            "status": team.status,
-            "message": "Team deleted"
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_cron_create(input: CronCreateInput) -> Result<String, String> {
-    let entry =
-        global_cron_registry().create(&input.schedule, &input.prompt, input.description.as_deref());
-    to_pretty_json(json!({
-        "cron_id": entry.cron_id,
-        "schedule": entry.schedule,
-        "prompt": entry.prompt,
-        "description": entry.description,
-        "enabled": entry.enabled,
-        "created_at": entry.created_at
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_cron_delete(input: CronDeleteInput) -> Result<String, String> {
-    match global_cron_registry().delete(&input.cron_id) {
-        Ok(entry) => to_pretty_json(json!({
-            "cron_id": entry.cron_id,
-            "schedule": entry.schedule,
-            "status": "deleted",
-            "message": "Cron entry removed"
-        })),
-        Err(e) => Err(e),
-    }
-}
-
-fn run_cron_list(_input: Value) -> Result<String, String> {
-    let entries: Vec<_> = global_cron_registry()
-        .list(false)
-        .into_iter()
-        .map(|e| {
-            json!({
-                "cron_id": e.cron_id,
-                "schedule": e.schedule,
-                "prompt": e.prompt,
-                "description": e.description,
-                "enabled": e.enabled,
-                "run_count": e.run_count,
-                "last_run_at": e.last_run_at,
-                "created_at": e.created_at
-            })
-        })
-        .collect();
-    to_pretty_json(json!({
-        "crons": entries,
-        "count": entries.len()
-    }))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_lsp(input: LspInput) -> Result<String, String> {
-    let registry = global_lsp_registry();
-    let action = &input.action;
-    let path = input.path.as_deref();
-    let line = input.line;
-    let character = input.character;
-    let query = input.query.as_deref();
-
-    match registry.dispatch(action, path, line, character, query) {
-        Ok(result) => to_pretty_json(result),
-        Err(e) => to_pretty_json(json!({
-            "action": action,
-            "error": e,
-            "status": "error"
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_list_mcp_resources(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.list_resources(server) {
-        Ok(resources) => {
-            let items: Vec<_> = resources
-                .iter()
-                .map(|r| {
-                    json!({
-                        "uri": r.uri,
-                        "name": r.name,
-                        "description": r.description,
-                        "mime_type": r.mime_type,
-                    })
-                })
-                .collect();
-            to_pretty_json(json!({
-                "server": server,
-                "resources": items,
-                "count": items.len()
-            }))
-        }
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "resources": [],
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_read_mcp_resource(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let uri = input.uri.as_deref().unwrap_or("");
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.read_resource(server, uri) {
-        Ok(resource) => to_pretty_json(json!({
-            "server": server,
-            "uri": resource.uri,
-            "name": resource.name,
-            "description": resource.description,
-            "mime_type": resource.mime_type
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "uri": uri,
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_mcp_auth(input: McpAuthInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    match registry.get_server(&input.server) {
-        Some(state) => to_pretty_json(json!({
-            "server": input.server,
-            "status": state.status,
-            "server_info": state.server_info,
-            "tool_count": state.tools.len(),
-            "resource_count": state.resources.len()
-        })),
-        None => to_pretty_json(json!({
-            "server": input.server,
-            "status": "disconnected",
-            "message": "Server not registered. Use MCP tool to connect first."
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
-    let method = input.method.unwrap_or_else(|| "GET".to_string());
-    let client = Client::new();
-
-    let mut request = match method.to_uppercase().as_str() {
-        "GET" => client.get(&input.url),
-        "POST" => client.post(&input.url),
-        "PUT" => client.put(&input.url),
-        "DELETE" => client.delete(&input.url),
-        "PATCH" => client.patch(&input.url),
-        "HEAD" => client.head(&input.url),
-        other => return Err(format!("unsupported HTTP method: {other}")),
-    };
-
-    // Apply custom headers
-    if let Some(ref headers) = input.headers {
-        if let Some(obj) = headers.as_object() {
-            for (key, value) in obj {
-                if let Some(val) = value.as_str() {
-                    request = request.header(key.as_str(), val);
-                }
-            }
-        }
-    }
-
-    // Apply body
-    if let Some(ref body) = input.body {
-        request = request.body(body.clone());
-    }
-
-    // Execute with a 30-second timeout
-    let request = request.timeout(Duration::from_secs(30));
-
-    match request.send() {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().unwrap_or_default();
-            let truncated_body = if body.len() > 8192 {
-                format!("{}\n\n[response truncated — {} bytes total]", &body[..8192], body.len())
-            } else {
-                body
-            };
-            to_pretty_json(json!({
-                "url": input.url,
-                "method": method,
-                "status_code": status,
-                "body": truncated_body,
-                "success": (200..300).contains(&status)
-            }))
-        }
-        Err(e) => to_pretty_json(json!({
-            "url": input.url,
-            "method": method,
-            "error": e.to_string(),
-            "success": false
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_mcp_tool(input: McpToolInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let args = input.arguments.unwrap_or(serde_json::json!({}));
-    match registry.call_tool(&input.server, &input.tool, &args) {
-        Ok(result) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "result": result,
-            "status": "success"
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "error": e,
-            "status": "error"
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn run_testing_permission(input: TestingPermissionInput) -> Result<String, String> {
     to_pretty_json(json!({
         "action": input.action,
@@ -2063,75 +1808,6 @@ struct AskUserQuestionInput {
 
 const fn default_auto_recover_prompt_misdelivery() -> bool {
     true
-}
-
-#[derive(Debug, Deserialize)]
-struct TeamCreateInput {
-    name: String,
-    tasks: Vec<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeamDeleteInput {
-    team_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CronCreateInput {
-    schedule: String,
-    prompt: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CronDeleteInput {
-    cron_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct LspInput {
-    action: String,
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
-    line: Option<u32>,
-    #[serde(default)]
-    character: Option<u32>,
-    #[serde(default)]
-    query: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpResourceInput {
-    #[serde(default)]
-    server: Option<String>,
-    #[serde(default)]
-    uri: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpAuthInput {
-    server: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteTriggerInput {
-    url: String,
-    #[serde(default)]
-    method: Option<String>,
-    #[serde(default)]
-    headers: Option<Value>,
-    #[serde(default)]
-    body: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpToolInput {
-    server: String,
-    tool: String,
-    #[serde(default)]
-    arguments: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4732,12 +4408,24 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 }
 
 pub mod lane_completion;
+mod lsp;
+mod mcp;
 mod registries;
 mod tasks;
+mod team_cron;
 mod workers;
+use lsp::{run_lsp, LspInput};
+use mcp::{
+    run_list_mcp_resources, run_mcp_auth, run_mcp_tool, run_read_mcp_resource, run_remote_trigger,
+    McpAuthInput, McpResourceInput, McpToolInput, RemoteTriggerInput,
+};
 use tasks::{
     run_task_create, run_task_get, run_task_list, run_task_output, run_task_packet, run_task_stop,
     run_task_update, TaskCreateInput, TaskIdInput, TaskUpdateInput,
+};
+use team_cron::{
+    run_cron_create, run_cron_delete, run_cron_list, run_team_create, run_team_delete,
+    CronCreateInput, CronDeleteInput, TeamCreateInput, TeamDeleteInput,
 };
 use workers::{
     run_worker_await_ready, run_worker_create, run_worker_get, run_worker_observe,
@@ -4745,10 +4433,8 @@ use workers::{
     WorkerCreateInput, WorkerIdInput, WorkerObserveInput, WorkerSendPromptInput,
 };
 mod web_fetch;
-use registries::{
-    global_cron_registry, global_lsp_registry, global_mcp_registry, global_task_registry,
-    global_team_registry,
-};
+// Only the registries this file still reaches for; each domain imports its own
+// from `crate::registries`.
 
 use web_fetch::{run_web_fetch, WebFetchInput};
 // The rest of the WebFetch surface is exercised directly by the tests, which
