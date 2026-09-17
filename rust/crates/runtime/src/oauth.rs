@@ -369,7 +369,7 @@ fn write_credentials_root(path: &PathBuf, root: &Map<String, Value>) -> io::Resu
 /// creating the file and chmod-ing it. `std` exposes no portable equivalent for
 /// Windows ACLs, so there the file relies on the ACLs of the profile directory
 /// it lives in; that is recorded as a remaining gap rather than claimed.
-fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
@@ -388,7 +388,7 @@ fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
-fn restrict_file_permissions(path: &std::path::Path) {
+pub(crate) fn restrict_file_permissions(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

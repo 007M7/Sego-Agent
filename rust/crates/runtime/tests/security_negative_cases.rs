@@ -136,8 +136,20 @@ const REQUIRED_CASES: &[(&str, &[&str])] = &[
         &["metadata_write_does_not_cover_chained_or_outside_writes"],
     ),
     (
-        "DEV-SEC-10 stored credentials are owner-only",
-        &["saved_credentials_are_not_readable_by_other_users"],
+        // Two halves: the credential store is owner-only (Unix-only case), and
+        // a session transcript is redacted before it is written (cross-platform,
+        // so Windows exercises this item through the redaction cases).
+        "DEV-SEC-10 stored credentials are owner-only and transcripts are redacted",
+        &[
+            "saved_credentials_are_not_readable_by_other_users",
+            "redacts_credentials_that_have_a_recognisable_shape",
+            "redacts_secrets_assigned_to_a_credential_named_key",
+            "redacts_a_pem_private_key_block_including_its_body",
+            "leaves_ordinary_code_and_prose_alone",
+            "persisted_transcripts_redact_messages_but_keep_the_record_readable",
+            "appended_messages_are_redacted_too",
+            "redaction_is_idempotent",
+        ],
     ),
     (
         "DEV-SEC-11 the isolation a platform lacks is declared, not implied",

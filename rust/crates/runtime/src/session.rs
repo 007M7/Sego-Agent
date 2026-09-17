@@ -384,6 +384,9 @@ impl Session {
 
         let mut file = OpenOptions::new().append(true).open(path)?;
         writeln!(file, "{}", message_record(message).render())?;
+        // Heal a transcript created before this was owner-only, rather than
+        // leaving it readable for the rest of its life.
+        crate::oauth::restrict_file_permissions(path);
         Ok(())
     }
 
@@ -650,8 +653,163 @@ impl SessionFork {
 fn message_record(message: &ConversationMessage) -> JsonValue {
     let mut object = BTreeMap::new();
     object.insert("type".to_string(), JsonValue::String("message".to_string()));
-    object.insert("message".to_string(), message.to_json());
+    object.insert("message".to_string(), redact_record(message.to_json()));
     JsonValue::Object(object)
+}
+
+/// Removes credential-shaped text from a record before it is written to disk.
+///
+/// This is a **best-effort filter, not a guarantee**. It removes values whose
+/// shape is a known credential format, and values assigned to a
+/// credential-named key that also look generated. It cannot recognise an
+/// arbitrary secret that matches no known shape, so a transcript must never be
+/// treated as safe-to-share merely because it passed through here.
+///
+/// Redaction happens at the persistence boundary only. The in-memory session is
+/// left untouched, so the turn in progress still sees what the user typed.
+///
+/// `thinking` blocks are redacted but their `signature` is not: the signature
+/// is opaque to us and is replayed back to the provider, so removing it would
+/// break resume without protecting anything the provider did not already hold.
+fn redact_record(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(object) => JsonValue::Object(
+            object
+                .into_iter()
+                .map(|(key, entry)| {
+                    let redacted = if REDACTABLE_RECORD_KEYS.contains(&key.as_str()) {
+                        redact_credentials_in_value(entry)
+                    } else {
+                        redact_record(entry)
+                    };
+                    (key, redacted)
+                })
+                .collect(),
+        ),
+        JsonValue::Array(items) => JsonValue::Array(items.into_iter().map(redact_record).collect()),
+        other => other,
+    }
+}
+
+fn redact_credentials_in_value(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::String(text) => JsonValue::String(redact_credentials(&text)),
+        other => redact_record(other),
+    }
+}
+
+/// Keys whose string values carry conversation content rather than structure.
+const REDACTABLE_RECORD_KEYS: &[&str] = &["text", "input", "output", "thinking"];
+
+/// Rewrites credential-shaped substrings as `[redacted:<kind>]`.
+///
+/// The replacement never introduces a `"` or a backslash, so the result stays
+/// valid JSON when it is spliced into an already-serialized record. Running it
+/// twice gives the same result as running it once, so a resumed transcript can
+/// be saved again without accumulating markers.
+fn redact_credentials(text: &str) -> String {
+    let mut result = text.to_string();
+    for pattern in credential_patterns() {
+        let kind = pattern.kind;
+        result = pattern
+            .regex
+            .replace_all(&result, |captures: &regex::Captures<'_>| match pattern.redaction {
+                Redaction::WholeMatch => format!("[redacted:{kind}]"),
+                Redaction::KeepFirstGroup => {
+                    format!("{}[redacted:{kind}]", &captures[1])
+                }
+                Redaction::KeepPrefixIfValueLooksGenerated => {
+                    let matched = captures.get(0).map_or("", |group| group.as_str());
+                    let value = captures.get(3).map_or("", |group| group.as_str());
+                    if value.bytes().any(|byte| byte.is_ascii_digit()) {
+                        format!("{}{}[redacted:{kind}]", &captures[1], &captures[2])
+                    } else {
+                        matched.to_string()
+                    }
+                }
+            })
+            .into_owned();
+    }
+    result
+}
+
+/// How much of a match survives redaction.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Redaction {
+    /// The whole match is a secret.
+    WholeMatch,
+    /// Group 1 is context worth keeping (a scheme name, a key name).
+    KeepFirstGroup,
+    /// Groups 1 and 2 are the name and separator; group 3 is the value, and it
+    /// is only treated as a secret when it also looks generated.
+    KeepPrefixIfValueLooksGenerated,
+}
+
+struct CredentialPattern {
+    regex: regex::Regex,
+    kind: &'static str,
+    redaction: Redaction,
+}
+
+fn credential_patterns() -> &'static [CredentialPattern] {
+    static PATTERNS: std::sync::OnceLock<Vec<CredentialPattern>> = std::sync::OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        // Ordered: multi-line and prefix-anchored shapes first, then the looser
+        // assignment rule, so a token removed by an earlier pass is not
+        // re-examined by a later one.
+        let sources: &[(&str, &str, Redaction)] = &[
+            (
+                r"(?s)-----BEGIN[ A-Z]*PRIVATE KEY-----.*?-----END[ A-Z]*PRIVATE KEY-----",
+                "private-key",
+                Redaction::WholeMatch,
+            ),
+            (
+                r"\b(?:sk-ant-|sk-proj-|sk-)[A-Za-z0-9_\-]{16,}\b",
+                "api-key",
+                Redaction::WholeMatch,
+            ),
+            (
+                r"\b(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-)[A-Za-z0-9_\-]{16,}\b",
+                "access-token",
+                Redaction::WholeMatch,
+            ),
+            (
+                r"\bxox[bpars]-[A-Za-z0-9\-]{10,}\b",
+                "access-token",
+                Redaction::WholeMatch,
+            ),
+            (r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b", "aws-key-id", Redaction::WholeMatch),
+            // Real Google API keys are `AIza` plus 35 characters; the floor is
+            // set below that so a shortened future shape is still caught.
+            (r"\bAIza[A-Za-z0-9_\-]{30,}\b", "api-key", Redaction::WholeMatch),
+            // A JWT is three base64url segments; requiring all three and a
+            // generous minimum length keeps ordinary base64 out of the net.
+            (
+                r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
+                "jwt",
+                Redaction::WholeMatch,
+            ),
+            (r"(?i)\b(bearer\s+)[A-Za-z0-9._\-]{20,}", "bearer-token", Redaction::KeepFirstGroup),
+            (
+                // `name = value` / `name: value`, quoted or not. A name alone is
+                // weak evidence -- `let token = fetch_token();` is ordinary code
+                // -- so the value is only removed when it also contains a digit,
+                // which real generated secrets have and most identifiers do not.
+                r#"(?i)\b(api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|password|passwd|secret|token)\b(\s*[:=]\s*['"]?)([A-Za-z0-9._\-/+]{12,})"#,
+                "assigned-credential",
+                Redaction::KeepPrefixIfValueLooksGenerated,
+            ),
+        ];
+        sources
+            .iter()
+            .map(|(source, kind, redaction)| CredentialPattern {
+                regex: regex::Regex::new(source)
+                    .unwrap_or_else(|error| panic!("invalid redaction pattern {source}: {error}")),
+                kind,
+                redaction: *redaction,
+            })
+            .collect()
+    })
 }
 
 fn usage_to_json(usage: TokenUsage) -> JsonValue {
@@ -757,8 +915,11 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), SessionError> {
         fs::create_dir_all(parent)?;
     }
     let temp_path = temporary_path_for(path);
-    fs::write(&temp_path, contents)?;
-    fs::rename(temp_path, path)?;
+    // Written owner-only: the contents are a transcript, and on a shared host
+    // the default mode would leave it readable by every other account.
+    crate::oauth::write_private_file(&temp_path, contents.as_bytes())?;
+    fs::rename(&temp_path, path)?;
+    crate::oauth::restrict_file_permissions(path);
     Ok(())
 }
 
@@ -821,14 +982,177 @@ fn cleanup_rotated_logs(path: &Path) -> Result<(), SessionError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_rotated_logs, rotate_session_file_if_needed, ContentBlock, ConversationMessage,
-        MessageRole, Session, SessionFork,
+        cleanup_rotated_logs, redact_credentials, rotate_session_file_if_needed, ContentBlock,
+        ConversationMessage, MessageRole, Session, SessionFork,
     };
     use crate::json::JsonValue;
     use crate::usage::TokenUsage;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn redacts_credentials_that_have_a_recognisable_shape() {
+        // The fixtures carry the *shape* of each credential, not a copy of a
+        // real one. They are spelled with a `TESTVECTOR` marker on purpose:
+        // GitHub's push protection blocks the push when a commit contains a
+        // credential-shaped string, and the first version of this table - using
+        // plausible-looking filler - had exactly that effect. Rewriting them to
+        // be unmistakably fake keeps the shape rule under test without making
+        // the repository look like it ships a leaked token.
+        let cases = [
+            ("sk-ant-api03-TESTVECTORNOTASECRET000000", "Anthropic key"),
+            ("sk-proj-TESTVECTORNOTASECRET000000", "OpenAI project key"),
+            ("ghp_TESTVECTORNOTASECRET0000000000", "GitHub token"),
+            ("github_pat_TESTVECTORNOTASECRET", "fine-grained GitHub token"),
+            ("glpat-TESTVECTORNOTASECRET", "GitLab token"),
+            ("xoxb-TESTVECTOR-NOT-A-REAL-TOKEN", "Slack token"),
+            ("AKIA000000000000TEST", "AWS access key id"),
+            ("AIzaTESTVECTORNOTASECRET000000000000", "Google API key"),
+            ("eyJ0ZXN0Ijp0cnVlfQ.eyJ0ZXN0Ijp0cnVlfQ.eyJ0ZXN0Ijp0cnVlfQ", "JWT"),
+            ("Bearer TESTVECTORNOTASECRET00000000", "bearer token"),
+        ];
+        for (secret, label) in cases {
+            let redacted = redact_credentials(&format!("value is {secret} here"));
+            assert!(!redacted.contains(secret), "{label} must not survive redaction: {redacted}");
+            assert!(
+                redacted.contains("[redacted:"),
+                "{label} must leave a marker so a reader can see something was removed: {redacted}"
+            );
+        }
+    }
+
+    #[test]
+    fn redacts_secrets_assigned_to_a_credential_named_key() {
+        for line in [
+            "API_KEY=TESTVECTOR0000000000",
+            "api-key: \"TESTVECTOR0000000000\"",
+            "client_secret = TESTVECTOR0000000000",
+            "PASSWORD='TESTVECTOR0000000000'",
+        ] {
+            let redacted = redact_credentials(line);
+            assert!(
+                !redacted.contains("TESTVECTOR0000000000"),
+                "the value in `{line}` must not survive redaction: {redacted}"
+            );
+        }
+    }
+
+    #[test]
+    fn redacts_a_pem_private_key_block_including_its_body() {
+        let text = "before\n-----BEGIN RSA PRIVATE KEY-----\nNOT-A-KEY-JUST-A-TEST-VECTOR\n5678\n-----END RSA PRIVATE KEY-----\nafter";
+        let redacted = redact_credentials(text);
+        assert!(!redacted.contains("NOT-A-KEY-JUST-A-TEST-VECTOR"), "key body must be removed");
+        assert!(!redacted.contains("-----END"), "the end marker must be removed too");
+        assert!(redacted.starts_with("before"), "surrounding text must be preserved");
+        assert!(redacted.ends_with("after"), "surrounding text must be preserved");
+    }
+
+    #[test]
+    fn leaves_ordinary_code_and_prose_alone() {
+        // The false-positive side matters as much as the true-positive side: a
+        // filter that mangles ordinary transcripts would make `--resume` replay
+        // corrupted context.
+        let untouched = [
+            "let token = fetch_token();",
+            "token = some_function_name",
+            "if api_key.is_empty() { return; }",
+            "the secret to good review is a small diff",
+            "password: required",
+            "Authorization: Bearer placeholder",
+            "grep -rn \"api_key\" src/",
+            "eyJhbGciOiJIUzI1NiJ9",
+        ];
+        for text in untouched {
+            assert_eq!(redact_credentials(text), text, "`{text}` must be left unchanged");
+        }
+    }
+
+    #[test]
+    fn persisted_transcripts_redact_messages_but_keep_the_record_readable() {
+        let mut session = Session::new();
+        session
+            .push_user_text("deploy with sk-ant-api03-TESTVECTORNOTASECRET000000 please")
+            .expect("user message should append");
+        session
+            .push_message(ConversationMessage::tool_result(
+                "tool-1",
+                "bash",
+                "export GH_TOKEN=ghp_TESTVECTORNOTASECRET0000000000",
+                false,
+            ))
+            .expect("tool result should append");
+
+        let path = temp_session_path("redaction");
+        session.save_to_path(&path).expect("session should save");
+        let contents = fs::read_to_string(&path).expect("session file should be readable");
+        let restored = Session::load_from_path(&path).expect("redacted session must still parse");
+        fs::remove_file(&path).expect("temp file should be removable");
+
+        assert!(!contents.contains("sk-ant-api03"), "the key must not reach disk:\n{contents}");
+        assert!(!contents.contains("ghp_TESTVECTOR"), "the token must not reach disk:\n{contents}");
+        // Redaction must not have broken the line format: the transcript is
+        // still one JSON object per line, and still replays.
+        for line in contents.lines() {
+            assert!(!line.is_empty());
+            assert!(
+                JsonValue::parse(line).is_ok(),
+                "a redacted record must remain valid JSON: {line}"
+            );
+        }
+        assert_eq!(restored.messages.len(), 2);
+        // The original session is untouched, so the live turn still sees what
+        // the user actually typed.
+        assert!(session.messages[0].blocks.iter().any(
+            |block| matches!(block, ContentBlock::Text { text } if text.contains("sk-ant-api03"))
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_saved_transcript_is_not_readable_by_other_users() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut session = Session::new();
+        session.push_user_text("hello").expect("user message should append");
+        let path = temp_session_path("private");
+        session.save_to_path(&path).expect("session should save");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        fs::remove_file(&path).expect("temp file should be removable");
+        assert_eq!(mode, 0o600, "a transcript is user state, not shared state");
+    }
+
+    #[test]
+    fn redaction_is_idempotent() {
+        // A resumed transcript is redacted again when it is saved again. If the
+        // second pass changed anything, markers would accumulate on every save.
+        let text =
+            "key=sk-ant-api03-TESTVECTORNOTASECRET000000 and Bearer TESTVECTORNOTASECRET00000000";
+        let once = redact_credentials(text);
+        let twice = redact_credentials(&once);
+        assert_eq!(once, twice, "a second pass must be a no-op");
+        assert!(once.contains("[redacted:"), "the first pass must redact something");
+    }
+
+    #[test]
+    fn appended_messages_are_redacted_too() {
+        // The snapshot path and the append path are separate writers; a fix that
+        // only covered `save_to_path` would leak every message after the first.
+        let path = temp_session_path("append-redaction");
+        let mut session = Session::new().with_persistence_path(&path);
+        session.push_user_text("bootstrap").expect("first message should persist");
+        session
+            .push_user_text("my key is ghp_TESTVECTORNOTASECRET0000000000")
+            .expect("second message should append");
+
+        let contents = fs::read_to_string(&path).expect("session file should be readable");
+        fs::remove_file(&path).expect("temp file should be removable");
+        assert!(
+            !contents.contains("ghp_TESTVECTOR"),
+            "the appended line must be redacted as well:\n{contents}"
+        );
+    }
 
     #[test]
     fn persists_and_restores_session_jsonl() {
