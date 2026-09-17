@@ -589,82 +589,6 @@ struct ResumeCommandOutcome {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct StatusContext {
-    cwd: PathBuf,
-    session_path: Option<PathBuf>,
-    loaded_config_files: usize,
-    discovered_config_files: usize,
-    memory_file_count: usize,
-    project_root: Option<PathBuf>,
-    git_branch: Option<String>,
-    git_summary: GitWorkspaceSummary,
-    sandbox_status: runtime::SandboxStatus,
-}
-
-fn provider_kind_label(kind: api::ProviderKind) -> &'static str {
-    match kind {
-        api::ProviderKind::Anthropic => "anthropic",
-        api::ProviderKind::Xai => "xai",
-        api::ProviderKind::OpenAi => "openai",
-        api::ProviderKind::DeepSeek => "deepseek",
-    }
-}
-
-struct WorkspaceContext {
-    cwd: PathBuf,
-    project_root: Option<PathBuf>,
-    session_dir: PathBuf,
-    recovery_dir: PathBuf,
-    sandbox_status: runtime::SandboxStatus,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct StatusUsage {
-    message_count: usize,
-    turns: u32,
-    latest: TokenUsage,
-    cumulative: TokenUsage,
-    estimated_tokens: usize,
-}
-
-#[allow(clippy::struct_field_names)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct GitWorkspaceSummary {
-    changed_files: usize,
-    staged_files: usize,
-    unstaged_files: usize,
-    untracked_files: usize,
-    conflicted_files: usize,
-}
-
-impl GitWorkspaceSummary {
-    fn is_clean(self) -> bool {
-        self.changed_files == 0
-    }
-
-    fn headline(self) -> String {
-        if self.is_clean() {
-            "clean".to_string()
-        } else {
-            let mut details = Vec::new();
-            if self.staged_files > 0 {
-                details.push(format!("{} staged", self.staged_files));
-            }
-            if self.unstaged_files > 0 {
-                details.push(format!("{} unstaged", self.unstaged_files));
-            }
-            if self.untracked_files > 0 {
-                details.push(format!("{} untracked", self.untracked_files));
-            }
-            if self.conflicted_files > 0 {
-                details.push(format!("{} conflicted", self.conflicted_files));
-            }
-            format!("dirty · {} files · {}", self.changed_files, details.join(", "))
-        }
-    }
-}
-
 #[cfg(test)]
 fn format_unknown_slash_command_message(name: &str) -> String {
     let suggestions = suggest_slash_commands(name);
@@ -676,148 +600,6 @@ fn format_unknown_slash_command_message(name: &str) -> String {
             suggestions.join(", ")
         )
     }
-}
-
-fn format_model_report(model: &str, message_count: usize, turns: u32) -> String {
-    let models = [
-        ("deepseek-chat", "DeepSeek Chat (主力国产)"),
-        ("deepseek-v4-pro", "DeepSeek V4 Pro"),
-        ("mimo-v2.5-pro", "MiMo V2.5 Pro (月之暗面)"),
-        ("gpt-4.1", "GPT-4.1 (ChatGPT)"),
-    ];
-
-    let current_label = "\u{25cf} current";
-    let available_label = "\u{25cb} available";
-
-    let model_list = models
-        .iter()
-        .map(|(name, desc)| {
-            let marker = if model == *name { current_label } else { available_label };
-            format!("  {name:<20} {marker:<12} {desc}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        "Model
-  Current model    {model}
-  Session messages {message_count}
-  Session turns    {turns}
-
-Available models
-{model_list}
-
-Usage
-  Inspect current model with /model
-  Switch models with /model <name>"
-    )
-}
-
-fn format_model_switch_report(previous: &str, next: &str, message_count: usize) -> String {
-    format!(
-        "Model updated
-  Previous         {previous}
-  Current          {next}
-  Preserved msgs   {message_count}"
-    )
-}
-
-fn format_permissions_report(mode: &str) -> String {
-    let modes = [
-        ("read-only", "Read/search tools only", mode == "read-only"),
-        ("workspace-write", "Edit files inside the workspace", mode == "workspace-write"),
-        ("danger-full-access", "Unrestricted tool access", mode == "danger-full-access"),
-    ]
-    .into_iter()
-    .map(|(name, description, is_current)| {
-        let marker = if is_current { "● current" } else { "○ available" };
-        format!("  {name:<18} {marker:<11} {description}")
-    })
-    .collect::<Vec<_>>()
-    .join(
-        "
-",
-    );
-
-    format!(
-        "Permissions
-  Active mode      {mode}
-  Mode status      live session default
-
-Modes
-{modes}
-
-Usage
-  Inspect current mode with /permissions
-  Switch modes with /permissions <mode>"
-    )
-}
-
-fn format_permissions_switch_report(previous: &str, next: &str) -> String {
-    format!(
-        "Permissions updated
-  Result           mode switched
-  Previous mode    {previous}
-  Active mode      {next}
-  Applies to       subsequent tool calls
-  Usage            /permissions to inspect current mode"
-    )
-}
-
-fn format_cost_report(usage: TokenUsage) -> String {
-    format!(
-        "Cost
-  Input tokens     {}
-  Output tokens    {}
-  Cache create     {}
-  Cache read       {}
-  Total tokens     {}",
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
-        usage.total_tokens(),
-    )
-}
-
-fn format_resume_report(session_path: &str, message_count: usize, turns: u32) -> String {
-    format!(
-        "Session resumed
-  Session file     {session_path}
-  Messages         {message_count}
-  Turns            {turns}"
-    )
-}
-
-fn render_resume_usage() -> String {
-    format!(
-        "Resume
-  Usage            /resume <session-path|session-id|{LATEST_SESSION_REFERENCE}>
-  Auto-save        .claw/sessions/<session-id>.{PRIMARY_SESSION_EXTENSION}
-  Tip              use /session list to inspect saved sessions"
-    )
-}
-
-fn format_compact_report(removed: usize, resulting_messages: usize, skipped: bool) -> String {
-    if skipped {
-        format!(
-            "Compact
-  Result           skipped
-  Reason           session below compaction threshold
-  Messages kept    {resulting_messages}"
-        )
-    } else {
-        format!(
-            "Compact
-  Result           compacted
-  Messages removed {removed}
-  Messages kept    {resulting_messages}"
-        )
-    }
-}
-
-fn format_auto_compaction_notice(removed: usize) -> String {
-    format!("[auto-compacted: removed {removed} messages]")
 }
 
 fn parse_git_status_metadata(status: Option<&str>) -> (Option<PathBuf>, Option<String>) {
@@ -3018,18 +2800,6 @@ fn latest_managed_session() -> Result<ManagedSessionSummary, Box<dyn std::error:
     list_managed_sessions()?.into_iter().next().ok_or_else(|| format_no_managed_sessions().into())
 }
 
-fn format_missing_session_reference(reference: &str) -> String {
-    format!(
-        "session not found: {reference}\nHint: managed sessions live in .claw/sessions/. Try `{LATEST_SESSION_REFERENCE}` for the most recent session or `/session list` in the REPL."
-    )
-}
-
-fn format_no_managed_sessions() -> String {
-    format!(
-        "no managed sessions found in .claw/sessions/\nStart `claw` to create a session, then rerun with `--resume {LATEST_SESSION_REFERENCE}`."
-    )
-}
-
 fn render_session_list(active_session_id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let sessions = list_managed_sessions()?;
     let mut lines =
@@ -3060,22 +2830,6 @@ fn render_session_list(active_session_id: &str) -> Result<String, Box<dyn std::e
     Ok(lines.join("\n"))
 }
 
-fn format_session_modified_age(modified_epoch_millis: u128) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map_or(modified_epoch_millis, |duration| duration.as_millis());
-    let delta_seconds =
-        now.saturating_sub(modified_epoch_millis).checked_div(1_000).unwrap_or_default();
-    match delta_seconds {
-        0..=4 => "just-now".to_string(),
-        5..=59 => format!("{delta_seconds}s-ago"),
-        60..=3_599 => format!("{}m-ago", delta_seconds / 60),
-        3_600..=86_399 => format!("{}h-ago", delta_seconds / 3_600),
-        _ => format!("{}d-ago", delta_seconds / 86_400),
-    }
-}
-
 fn write_session_clear_backup(
     session: &Session,
     session_path: &Path,
@@ -3093,79 +2847,6 @@ fn session_clear_backup_path(session_path: &Path) -> PathBuf {
     let file_name =
         session_path.file_name().and_then(|value| value.to_str()).unwrap_or("session.jsonl");
     session_path.with_file_name(format!("{file_name}.before-clear-{timestamp}.bak"))
-}
-
-fn render_repl_help() -> String {
-    [
-        "REPL".to_string(),
-        "  /exit                Quit the REPL".to_string(),
-        "  /quit                Quit the REPL".to_string(),
-        "  /dir                 Show common commands and natural-language examples".to_string(),
-        "  Up/Down              Navigate prompt history".to_string(),
-        "  Tab                  Complete commands, modes, and recent sessions".to_string(),
-        "  Ctrl-C               Clear input (or exit on empty prompt)".to_string(),
-        "  Shift+Enter/Ctrl+J   Insert a newline".to_string(),
-        "  Auto-save            .claw/sessions/<session-id>.jsonl".to_string(),
-        "  Resume latest        /resume latest".to_string(),
-        "  Browse sessions      /session list".to_string(),
-        "  Workspace            /workspace, /pwd, /cd <path>".to_string(),
-        "  Natural workspace    say: 切换到 D:\\YourProject / 当前工作区".to_string(),
-        String::new(),
-        render_slash_command_help(),
-    ]
-    .join(
-        "
-",
-    )
-}
-
-fn render_natural_language_directory() -> String {
-    [
-        "Sego 常用动作目录 (Action Directory)".to_string(),
-        "  Usage: /dir  | say one of the examples below to trigger the local action".to_string(),
-        String::new(),
-        "  工作区 (Workspace)".to_string(),
-        "    /workspace                      当前工作区 / show workspace".to_string(),
-        "    /cd D:\\YourProject             切换到 D:\\YourProject / switch to D:\\YourProject"
-            .to_string(),
-        "      例: 切换到 D:\\Project  打开项目 E:\\code".to_string(),
-        String::new(),
-        "  审查 (Review)".to_string(),
-        "    /review                         帮我 review 当前改动 / review current changes"
-            .to_string(),
-        "    /review staged                  review staged changes / 审查已暂存改动".to_string(),
-        "    /review workspace               审查整个项目代码 / audit full workspace".to_string(),
-        "    /review card [latest|<id>]      生成并打开 Sego 验收卡".to_string(),
-        "    /review safety staged           检查已暂存代码的安全风险".to_string(),
-        "    /review --full E:\\repo           审查整个仓库(无需git diff) / full repo audit"
-            .to_string(),
-        "      例: 审查当前改动  review staged  帮我检查代码的潜在风险".to_string(),
-        String::new(),
-        "  导出 (Save/Export)".to_string(),
-        "    /export                         导出当前会话 / export conversation".to_string(),
-        "    /export E:\\code\\session.md      导出当前会话到 E:\\code\\session.md".to_string(),
-        "    把刚才的审查结果写成 E:\\code\\review.md   (must say 刚才/上一条/last/previous)"
-            .to_string(),
-        "    export the last review to report.md  (must say last/previous)".to_string(),
-        "      例: save the last review to PR43.md  把刚才的回复保存到 E:\\out.md".to_string(),
-        String::new(),
-        "  更新 (Update)".to_string(),
-        "    sego update --check             检查更新 / check for update".to_string(),
-        "    sego update                     更新到最新版 / update sego".to_string(),
-        "      例: 检查更新  帮我更新".to_string(),
-        String::new(),
-        "  退出 (Exit)".to_string(),
-        "    /exit                           退出 Sego / exit".to_string(),
-        String::new(),
-        "  安全注意 (Safety)".to_string(),
-        "    ExportLastResponse 必须包含 刚才/上一条/last/previous，避免导出错误内容。".to_string(),
-        "    如果只说 保存报告/导出md 而不指定对象，Sego 会提示 /dir。".to_string(),
-        "    Review 需要 Git 仓库 (或使用 --full 审计任意目录)。".to_string(),
-        String::new(),
-        "  说明".to_string(),
-        "    未列出的普通编码、解释、讨论请求会继续交给模型处理。".to_string(),
-    ]
-    .join("\n")
 }
 
 fn render_nl_intent_miss(miss: &NlIntentMiss) -> String {
@@ -3283,198 +2964,6 @@ fn workspace_context() -> Result<WorkspaceContext, Box<dyn std::error::Error>> {
         cwd,
         sandbox_status,
     })
-}
-
-fn format_status_report(
-    model: &str,
-    usage: StatusUsage,
-    permission_mode: &str,
-    context: &StatusContext,
-) -> String {
-    [
-        format!(
-            "Status
-  Model            {model}
-  Permission mode  {permission_mode}
-  Messages         {}
-  Turns            {}
-  Estimated tokens {}",
-            usage.message_count, usage.turns, usage.estimated_tokens,
-        ),
-        format!(
-            "Usage
-  Latest total     {}
-  Cumulative input {}
-  Cumulative output {}
-  Cumulative total {}",
-            usage.latest.total_tokens(),
-            usage.cumulative.input_tokens,
-            usage.cumulative.output_tokens,
-            usage.cumulative.total_tokens(),
-        ),
-        format!(
-            "Provider/cache
-  Provider         {}
-  Latest cache     create {}, read {}
-  Cumulative cache create {}, read {}",
-            provider_kind_label(detect_provider_kind(model)),
-            usage.latest.cache_creation_input_tokens,
-            usage.latest.cache_read_input_tokens,
-            usage.cumulative.cache_creation_input_tokens,
-            usage.cumulative.cache_read_input_tokens,
-        ),
-        format!(
-            "Workspace
-  Cwd              {}
-  Project root     {}
-  Git branch       {}
-  Git state        {}
-  Changed files    {}
-  Staged           {}
-  Unstaged         {}
-  Untracked        {}
-  Session          {}
-  Config files     loaded {}/{}
-  Memory files     {}
-  Suggested flow   /status → /diff → /commit",
-            context.cwd.display(),
-            context
-                .project_root
-                .as_ref()
-                .map_or_else(|| "unknown".to_string(), |path| path.display().to_string()),
-            context.git_branch.as_deref().unwrap_or("unknown"),
-            context.git_summary.headline(),
-            context.git_summary.changed_files,
-            context.git_summary.staged_files,
-            context.git_summary.unstaged_files,
-            context.git_summary.untracked_files,
-            context
-                .session_path
-                .as_ref()
-                .map_or_else(|| "live-repl".to_string(), |path| path.display().to_string()),
-            context.loaded_config_files,
-            context.discovered_config_files,
-            context.memory_file_count,
-        ),
-        format_sandbox_report(&context.sandbox_status),
-    ]
-    .join(
-        "
-
-",
-    )
-}
-
-fn format_workspace_report(context: &WorkspaceContext) -> String {
-    format!(
-        "Workspace
-  Active cwd       {}
-  Project root     {}
-  Session dir      {}
-  Recovery dir     {}
-  Filesystem mode  {}
-  Allowed mounts   {}
-  Natural input    say `切换到 D:\\YourProject` or `当前工作区`
-  Command input    `sego --cwd <path>`, `/workspace`, `/cd <path>`",
-        context.cwd.display(),
-        context
-            .project_root
-            .as_ref()
-            .map_or_else(|| "unknown".to_string(), |path| path.display().to_string()),
-        context.session_dir.display(),
-        context.recovery_dir.display(),
-        context.sandbox_status.filesystem_mode.as_str(),
-        if context.sandbox_status.allowed_mounts.is_empty() {
-            "<workspace only>".to_string()
-        } else {
-            context.sandbox_status.allowed_mounts.join(", ")
-        },
-    )
-}
-
-fn format_workspace_switch_report(previous: &Path, next: &Path, switched: bool) -> String {
-    if switched {
-        format!(
-            "Workspace switched
-  Previous cwd     {}
-  Active cwd       {}
-  Session scope    new workspace-local session
-  Config scope     reloaded from active cwd
-  Tip              say `当前工作区` or run `/workspace` to inspect context",
-            previous.display(),
-            next.display(),
-        )
-    } else {
-        format!(
-            "Workspace unchanged
-  Active cwd       {}
-  Reason           requested path is already active",
-            next.display(),
-        )
-    }
-}
-
-fn format_sandbox_report(status: &runtime::SandboxStatus) -> String {
-    format!(
-        "Sandbox
-  Enabled           {}
-  Active            {}
-  Supported         {}
-  In container      {}
-  Requested ns      {}
-  Active ns         {}
-  Requested net     {}
-  Active net        {}
-  Filesystem mode   {}
-  Filesystem active {}
-  Allowed mounts    {}
-  Markers           {}
-  Fallback reason   {}",
-        status.enabled,
-        status.active,
-        status.supported,
-        status.in_container,
-        status.requested.namespace_restrictions,
-        status.namespace_active,
-        status.requested.network_isolation,
-        status.network_active,
-        status.filesystem_mode.as_str(),
-        status.filesystem_active,
-        if status.allowed_mounts.is_empty() {
-            "<none>".to_string()
-        } else {
-            status.allowed_mounts.join(", ")
-        },
-        if status.container_markers.is_empty() {
-            "<none>".to_string()
-        } else {
-            status.container_markers.join(", ")
-        },
-        status.fallback_reason.clone().unwrap_or_else(|| "<none>".to_string()),
-    )
-}
-
-fn format_commit_preflight_report(branch: Option<&str>, summary: GitWorkspaceSummary) -> String {
-    format!(
-        "Commit
-  Result           ready
-  Branch           {}
-  Workspace        {}
-  Changed files    {}
-  Action           create a git commit from the current workspace changes",
-        branch.unwrap_or("unknown"),
-        summary.headline(),
-        summary.changed_files,
-    )
-}
-
-fn format_commit_skipped_report() -> String {
-    "Commit
-  Result           skipped
-  Reason           no workspace changes
-  Action           create a git commit from the current workspace changes
-  Next             /status to inspect context · /diff to inspect repo changes"
-        .to_string()
 }
 
 fn print_workflow_review(
@@ -7498,4 +6987,17 @@ pub(crate) use cli_args::{
     resolve_plugin_path, resume_command_can_absorb_token, review_history_command_to_cli_action,
     runtime_hook_config_from_plugin_hooks, CliAction, CliOutputFormat, ReviewHistoryCommand,
     RuntimeMcpState, SafetyReviewScope,
+};
+
+mod cli_reports;
+
+pub(crate) use cli_reports::{
+    format_auto_compaction_notice, format_commit_preflight_report, format_commit_skipped_report,
+    format_compact_report, format_cost_report, format_missing_session_reference,
+    format_model_report, format_model_switch_report, format_no_managed_sessions,
+    format_permissions_report, format_permissions_switch_report, format_resume_report,
+    format_sandbox_report, format_session_modified_age, format_status_report,
+    format_workspace_report, format_workspace_switch_report, provider_kind_label,
+    render_natural_language_directory, render_repl_help, render_resume_usage, GitWorkspaceSummary,
+    StatusContext, StatusUsage, WorkspaceContext,
 };
