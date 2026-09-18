@@ -867,7 +867,7 @@ fn skill_loads_local_skill_prompt() {
     } else {
         std::env::remove_var("HOME");
     }
-    fs::remove_dir_all(home).expect("temp home should clean up");
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]

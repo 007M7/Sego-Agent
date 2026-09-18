@@ -648,7 +648,7 @@ mod tests {
         assert!(!cleared.contains("\"oauth\""));
 
         std::env::remove_var("CLAW_CONFIG_HOME");
-        std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
+        let _ = std::fs::remove_dir_all(config_home);
     }
 
     #[test]

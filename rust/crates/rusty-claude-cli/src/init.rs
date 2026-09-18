@@ -355,7 +355,7 @@ mod tests {
         assert!(claude_md.contains("Languages: Rust."));
         assert!(claude_md.contains("cargo clippy --workspace --all-targets -- -D warnings"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(gitignore.matches(".claude/settings.local.json").count(), 1);
         assert_eq!(gitignore.matches(".claude/sessions/").count(), 1);
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -403,6 +403,6 @@ mod tests {
         assert!(rendered.contains("pyproject.toml"));
         assert!(rendered.contains("Next.js detected"));
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        let _ = fs::remove_dir_all(root);
     }
 }

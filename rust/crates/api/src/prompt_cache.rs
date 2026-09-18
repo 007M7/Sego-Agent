@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(persisted.completion_cache_hits, 1);
         assert_eq!(persisted.observability().completion_cache_requests, 2);
 
-        std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
+        let _ = std::fs::remove_dir_all(temp_root);
         std::env::remove_var("CLAUDE_CONFIG_HOME");
     }
 
@@ -647,7 +647,7 @@ mod tests {
 
         assert!(cache.lookup_completion(&second_request).is_none());
 
-        std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
+        let _ = std::fs::remove_dir_all(temp_root);
         std::env::remove_var("CLAUDE_CONFIG_HOME");
     }
 
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(stats.completion_cache_hits, 0);
         assert_eq!(stats.completion_cache_misses, 1);
 
-        std::fs::remove_dir_all(temp_root).expect("cleanup temp root");
+        let _ = std::fs::remove_dir_all(temp_root);
         std::env::remove_var("CLAUDE_CONFIG_HOME");
     }
 

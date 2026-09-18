@@ -199,7 +199,7 @@ mod tests {
         // then
         assert_eq!(freshness, BranchFreshness::Fresh);
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
         // then
         assert_eq!(freshness, BranchFreshness::Fresh);
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
             other => panic!("expected Stale, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -272,7 +272,7 @@ mod tests {
             other => panic!("expected Diverged, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

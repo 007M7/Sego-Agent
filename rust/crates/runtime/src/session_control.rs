@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(sessions[0].id, newer.session_id);
         assert_eq!(summary_by_id(&sessions, &older.session_id).message_count, 1);
         assert_eq!(summary_by_id(&sessions, &newer.session_id).message_count, 1);
-        fs::remove_dir_all(root).expect("temp dir should clean up");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(loaded.session.messages.len(), 1);
         assert_ne!(loaded.handle.id, older.session_id);
         assert!(is_session_reference_alias("last"));
-        fs::remove_dir_all(root).expect("temp dir should clean up");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -405,6 +405,6 @@ mod tests {
         assert_eq!(summary.parent_session_id.as_deref(), Some(source.session_id.as_str()));
         assert_eq!(summary.branch_name.as_deref(), Some("incident-review"));
         assert_eq!(forked.session.persistence_path(), Some(forked.handle.path.as_path()));
-        fs::remove_dir_all(root).expect("temp dir should clean up");
+        let _ = fs::remove_dir_all(root);
     }
 }

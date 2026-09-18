@@ -347,7 +347,7 @@ fn default_permission_mode_uses_project_config_when_env_is_unset() {
         Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
         None => std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE"),
     }
-    std::fs::remove_dir_all(root).expect("temp config root should clean up");
+    let _ = std::fs::remove_dir_all(root);
 
     assert_eq!(resolved, PermissionMode::WorkspaceWrite);
 }
@@ -378,7 +378,7 @@ fn env_permission_mode_overrides_project_config_default() {
         Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
         None => std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE"),
     }
-    std::fs::remove_dir_all(root).expect("temp config root should clean up");
+    let _ = std::fs::remove_dir_all(root);
 
     assert_eq!(resolved, PermissionMode::ReadOnly);
 }
@@ -506,7 +506,7 @@ fn parses_global_cwd_before_workspace_action() {
             .expect("args should parse")
     });
 
-    fs::remove_dir_all(root).expect("temp workspace should clean up");
+    let _ = fs::remove_dir_all(root);
     assert_eq!(action, CliAction::Workspace { output_format: CliOutputFormat::Text });
 }
 
@@ -1223,7 +1223,7 @@ fn review_card_latest_selects_the_newest_artifact() {
     assert_eq!(generated.review_id, "review-new");
     assert!(generated.card_path.is_file());
     assert!(generated.latest_card_path.is_file());
-    fs::remove_dir_all(root).expect("cleanup temp workspace");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1267,7 +1267,7 @@ fn review_card_normalizes_extended_paths_from_review_index() {
     assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&json_path))));
     assert!(html.contains(&format!("href=\"{}\"", crate::local_file_url(&markdown_path))));
     assert!(!html.contains("file:////%3F/"));
-    fs::remove_dir_all(root).expect("cleanup temp workspace");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1277,7 +1277,7 @@ fn review_card_requires_an_existing_artifact() {
     let error = generate_review_card_for(&root, "latest")
         .expect_err("review card should require an existing artifact");
     assert!(error.to_string().contains("run `sego review` first"));
-    fs::remove_dir_all(root).expect("cleanup temp workspace");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1608,7 +1608,7 @@ fn startup_banner_mentions_workflow_completions() {
     assert!(banner.contains("Tab"));
     assert!(banner.contains("workflow completions"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1880,7 +1880,7 @@ fn parses_git_status_metadata() {
     );
     assert_eq!(branch.as_deref(), Some("rcc/cli"));
     assert!(project_root.is_none());
-    fs::remove_dir_all(temp_root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(temp_root);
 }
 
 #[test]
@@ -1936,7 +1936,7 @@ fn render_diff_report_shows_clean_tree_for_committed_repo() {
     let report = render_diff_report_for(&root).expect("diff report should render");
     assert!(report.contains("clean working tree"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1960,7 +1960,7 @@ fn render_diff_report_includes_staged_and_unstaged_sections() {
     assert!(report.contains("Unstaged changes:"));
     assert!(report.contains("tracked.txt"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1977,7 +1977,7 @@ fn review_readiness_blocks_when_no_files_are_staged() {
     assert!(report.contains("Staged files     0"));
     assert!(report.contains("stage changes before running /review ready"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1999,7 +1999,7 @@ fn non_git_directory_review_shows_friendly_error() {
     assert!(!error.contains("fatal:"));
     git(&["init", "--quiet"], &root);
     assert!(is_git_worktree(&root));
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -2174,7 +2174,7 @@ fn review_readiness_plans_manual_review_and_fast_verify_for_staged_files() {
     assert!(report.contains("Command        sego /review staged"));
     assert!(report.contains("Command        sego /verify fast"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -2194,7 +2194,7 @@ fn review_summary_renders_empty_git_repo_without_side_effects() {
     assert!(report.contains("Verify fast"));
     assert!(report.contains("Suggested next steps"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -2218,7 +2218,7 @@ fn review_summary_includes_staged_safety_and_fast_verify_plan() {
     assert!(report.contains("cargo build (.)"));
     assert!(report.contains("sego /review staged"));
 
-    fs::remove_dir_all(root).expect("cleanup temp dir");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

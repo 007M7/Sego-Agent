@@ -314,7 +314,7 @@ mod tests {
             Some(root.join("ca-bundle.crt").to_string_lossy().as_ref())
         );
 
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
         fs::write(&token_path, " abc123 \n").expect("write token");
         assert_eq!(read_token(&token_path).expect("read token").as_deref(), Some("abc123"));
         assert_eq!(read_token(&root.join("missing")).expect("missing token"), None);
-        fs::remove_dir_all(root).expect("cleanup temp dir");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

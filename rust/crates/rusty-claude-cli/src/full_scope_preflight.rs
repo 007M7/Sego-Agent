@@ -730,7 +730,7 @@ mod tests {
         assert!(result.resolved_target.is_some());
         assert!(result.git_root.is_some());
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-02: Top-level embedded Git external block; no snapshot/model.
@@ -761,7 +761,7 @@ mod tests {
             other => panic!("expected ExternalRepositoryDetected, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-03: Unknown untracked top-level non-Git dir block.
@@ -784,7 +784,7 @@ mod tests {
             other => panic!("expected UntrackedTopLevelDirectory, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-04: Accepted PEP paths -> allow + complete exclusions evidence.
@@ -818,7 +818,7 @@ mod tests {
             assert!(!excl.rationale.is_empty());
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-05: Existing Git path allow, no full-snapshot claim.
@@ -840,7 +840,7 @@ mod tests {
         // Git-path review does not produce full-snapshot claim.
         assert!(result.resolved_target.is_some());
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-06: Missing Git path block, no empty-diff success.
@@ -860,7 +860,7 @@ mod tests {
             other => panic!("expected GitPathNotFound, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-07: Windows drive/path with spaces — no token loss.
@@ -891,7 +891,7 @@ mod tests {
             assert!(resolved.to_string_lossy().contains("Fixture Space"));
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-08: Worktree-external drive target block.
@@ -910,8 +910,8 @@ mod tests {
             other_reason => panic!("expected OutsideWorktreeDriveTarget, got {other_reason:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup root");
-        fs::remove_dir_all(&other).expect("cleanup other");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&other);
     }
 
     // FSP-09: Non-Git target block.
@@ -931,7 +931,7 @@ mod tests {
             other => panic!("expected NonGitTarget, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // Missing full target blocks before snapshot. Parser-level FSP-10 coverage
@@ -947,7 +947,7 @@ mod tests {
         assert!(!result.snapshot_started);
         assert!(matches!(result.block_reason, Some(BlockReason::TargetNotFound)));
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-11: AionUi name is not the decisive factor; generic embedded-Git
@@ -977,7 +977,7 @@ mod tests {
             other => panic!("expected ExternalRepositoryDetected, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // FSP-12: Ignored external/ is not automatically allowed/excluded.
@@ -1004,7 +1004,7 @@ mod tests {
             other => panic!("expected IgnoredTopLevelNotPolicyMatched, got {other:?}"),
         }
 
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1022,7 +1022,7 @@ mod tests {
             result.block_reason,
             Some(BlockReason::PolicyEntryContainsUnmatchedContent { ref path }) if path == ".sego/dev.toml"
         ));
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1038,7 +1038,7 @@ mod tests {
 
         assert_eq!(result.decision, PreflightDecision::Allow);
         assert!(result.exclusions.is_empty());
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1054,7 +1054,7 @@ mod tests {
             result.block_reason,
             Some(BlockReason::GitPathNotTracked { ref path }) if path == "notes.md"
         ));
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1070,7 +1070,7 @@ mod tests {
             result.block_reason,
             Some(BlockReason::UntrackedTopLevelEntry { ref entry_name }) if entry_name == "SEGO_SYNC_private.md"
         ));
-        fs::remove_dir_all(&root).expect("cleanup");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // Extra: PEP-004 prefix matching (SEGO_SYNC_*.txt, SEGO_TASK_*.md).
