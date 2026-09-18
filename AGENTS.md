@@ -37,10 +37,13 @@ A successful PR typically:
 - builds clean on `cargo build --workspace`
 - passes `cargo test --workspace` — note that this is also what compiles **every test target**. `cargo build` does not, so a change that breaks only test code (a struct literal in a test, for example) can still pass a build; run the tests
 - is formatted with `cargo fmt --all --check` — the `--all` matters, because `cargo fmt --check` alone can miss files
+- passes `cargo clippy --workspace --all-targets -- -D warnings` — the same command CI runs
 - updates the relevant section of `CHANGELOG.md` under `[Unreleased]`
 - keeps temporary or scratch files out of the worktree
 
-Clippy is **advisory today**: `cargo clippy --workspace --all-targets -- -D warnings` does not pass on `main` because of a pre-existing pedantic-warning baseline. A clippy failure is therefore not by itself evidence that your change is at fault — but please do not add new warnings. Clearing that baseline is tracked in [ROADMAP.md](ROADMAP.md).
+Clippy is a **gate**, the same as the tests: `cargo clippy --workspace --all-targets -- -D warnings` passes on `main`, and CI runs exactly that command. The workspace turns on `clippy::all` and `clippy::pedantic` through `[workspace.lints]` in `rust/Cargo.toml`, so a pedantic lint is a build failure like any other.
+
+When a lint is wrong about a specific line, say so where the code is — `#[allow(clippy::lint_name)]` on the narrowest item that works, with a comment giving the reason. An allow without a reason is indistinguishable from a suppression, and the next reader has no way to tell whether it still applies.
 
 For releases and packaging, see the workflows in `.github/workflows/`.
 

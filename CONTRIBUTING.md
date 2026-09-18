@@ -18,10 +18,10 @@ Thanks for your interest in contributing. Sego is a local-first code review and 
 cd rust
 cargo fmt --all --check       # Format check — gate
 cargo test --workspace        # All tests must pass — gate
-cargo clippy --workspace --all-targets -- -D warnings  # Lint — advisory
+cargo clippy --workspace --all-targets -- -D warnings  # Lint — gate
 ```
 
-`cargo fmt --all --check` and `cargo test --workspace` are gates. **Clippy is advisory today**: the command above does not pass on `main` because of a pre-existing pedantic-warning baseline, so a clippy failure is not by itself evidence that your change is at fault. Please do not add new warnings. Clearing that baseline is tracked in `ROADMAP.md`.
+All three are gates, and CI runs exactly these commands. The workspace enables `clippy::all` and `clippy::pedantic` through `[workspace.lints]`, so a pedantic lint fails the build too. If a lint is wrong about a particular line, add `#[allow(clippy::lint_name)]` on the narrowest item that works and say why in a comment.
 
 ### Commit style
 
