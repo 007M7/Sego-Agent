@@ -74,6 +74,12 @@ fn path_command(path: &Path) -> io::Result<Command> {
 }
 
 #[cfg(not(windows))]
+// The `Result` is the shared signature with the Windows arm below, which fails
+// on an unknown extension. This arm runs `sh <path>` for every input, so it
+// cannot fail at construction - but `plugin_command` calls both through one
+// path, and giving the two arms different return types would mean splitting
+// that call site by platform for no gain.
+#[allow(clippy::unnecessary_wraps)]
 fn path_command(path: &Path) -> io::Result<Command> {
     let mut process = Command::new("sh");
     process.arg(path);
