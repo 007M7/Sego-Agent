@@ -116,7 +116,12 @@ impl PromptCacheStats {
         let completion_cache_hit_rate_percent = if completion_cache_requests == 0 {
             0.0
         } else {
-            (self.completion_cache_hits as f64 / completion_cache_requests as f64) * 100.0
+            // A hit rate for a status line. The counts are event tallies, and
+            // losing precision past 2^53 events would change nothing anyone reads.
+            #[allow(clippy::cast_precision_loss)]
+            {
+                (self.completion_cache_hits as f64 / completion_cache_requests as f64) * 100.0
+            }
         };
         PromptCacheObservability {
             completion_cache_hits: self.completion_cache_hits,
@@ -506,6 +511,10 @@ fn stable_hash_bytes(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    // The hit-rate tests compare percentages exactly, on purpose: each expected
+    // value is a ratio of small whole numbers of hits and requests, so it is
+    // exact in binary, and an epsilon would accept a wrong number.
+    #![allow(clippy::float_cmp)]
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

@@ -470,7 +470,7 @@ mod tests {
         {
             assert_eq!(launcher.program, "unshare");
             assert!(launcher.args.iter().any(|arg| arg == "--mount"));
-            assert!(launcher.args.iter().any(|arg| arg == "--net") == status.network_active);
+            assert_eq!(launcher.args.iter().any(|arg| arg == "--net"), status.network_active);
         }
     }
 }

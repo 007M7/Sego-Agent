@@ -167,6 +167,19 @@ impl McpToolRegistry {
         }
     }
 
+    // The `MutexGuard` below is a `std::sync` guard, which is `!Send`, and it is
+    // held across awaits because `discover_tools`, `call_tool` and `shutdown`
+    // all need `&mut` access to the same manager.
+    //
+    // That is sound here for a reason worth stating, because the lint is right in
+    // general: the future runs on a `current_thread` runtime built for this one
+    // call, nothing else is ever spawned onto it, and `block_on` does not require
+    // `Send`. So there is no second task that could park while the lock is held.
+    //
+    // It stops being sound the moment either half changes: a `new_multi_thread`
+    // runtime, or a `tokio::spawn` on this one. If that happens the manager has to
+    // become a `tokio::sync::Mutex`, and this allow is the marker saying so.
+    #[allow(clippy::await_holding_lock)]
     fn spawn_tool_call(
         manager: Arc<Mutex<McpServerManager>>,
         qualified_tool_name: String,
@@ -194,8 +207,7 @@ impl McpToolRegistry {
 
                         match (response, shutdown) {
                             (Ok(response), Ok(())) => Ok(response),
-                            (Err(error), Ok(()) | Err(_)) => Err(error),
-                            (Ok(_), Err(error)) => Err(error),
+                            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
                         }
                     }?;
 

@@ -30,7 +30,10 @@ use std::path::{Path, PathBuf};
 use api::*;
 use runtime::*;
 
-use crate::*;
+use crate::{
+    detect_provider_kind, render_slash_command_help, TokenUsage, LATEST_SESSION_REFERENCE,
+    PRIMARY_SESSION_EXTENSION, UNIX_EPOCH,
+};
 
 // The four view types below are `pub(crate)` down to their fields because they
 // are built in `cli_context` and read here: a struct literal needs every field
@@ -762,8 +765,10 @@ mod tests {
         );
         assert!(empty.contains("Filesystem mode"), "{empty}");
 
-        let mut with_mounts = runtime::SandboxStatus::default();
-        with_mounts.allowed_mounts = vec!["/a".to_string(), "/b".to_string()];
+        let with_mounts = runtime::SandboxStatus {
+            allowed_mounts: vec!["/a".to_string(), "/b".to_string()],
+            ..runtime::SandboxStatus::default()
+        };
         let listed = format_sandbox_report(&with_mounts);
         assert!(listed.contains("/a, /b"), "mounts are joined, not dropped:\n{listed}");
     }

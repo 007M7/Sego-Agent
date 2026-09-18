@@ -197,15 +197,32 @@ const PEP_003_SEGO_CHILD_DIRS: &[&str] = &["reviews", "exports", "recovery"];
 const PEP_004_EXACT_ENTRIES: &[&str] = &[".claude", ".claw", "CLAUDE.md", "ZCODE.md"];
 const PEP_005_PREFIXES: &[&str] = &["AionUi", "Coolearn", "hermes"];
 
+/// Case-insensitive extension test. Sego writes these marker names itself, but
+/// these files also arrive from other tools and from case-insensitive
+/// filesystems, and missing one means reviewing Sego's own bookkeeping.
+#[must_use]
+pub(crate) fn has_extension(name: &str, extension: &str) -> bool {
+    // A suffix test rather than `Path::extension`, which reports no extension for
+    // a name like `.txt`; the original `ends_with(".txt")` accepted that, and so
+    // does this. Byte indexing is safe because it only reads a length the caller
+    // already checked, and `.` is ASCII, so a multi-byte name can never match it.
+    let dot_offset = extension.len() + 1;
+    name.len() >= dot_offset
+        && name.as_bytes()[name.len() - dot_offset] == b'.'
+        && name
+            .get(name.len() - extension.len()..)
+            .is_some_and(|end| end.eq_ignore_ascii_case(extension))
+}
+
 #[must_use]
 fn matches_pep_004(name: &str) -> bool {
     PEP_004_EXACT_ENTRIES.contains(&name)
         || name
             .strip_prefix("SEGO_SYNC_")
-            .is_some_and(|suffix| !suffix.is_empty() && suffix.ends_with(".txt"))
+            .is_some_and(|suffix| !suffix.is_empty() && has_extension(suffix, "txt"))
         || name
             .strip_prefix("SEGO_TASK_")
-            .is_some_and(|suffix| !suffix.is_empty() && suffix.ends_with(".md"))
+            .is_some_and(|suffix| !suffix.is_empty() && has_extension(suffix, "md"))
 }
 
 #[must_use]
@@ -334,8 +351,7 @@ pub fn is_git_worktree_at(cwd: &Path) -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
@@ -351,14 +367,12 @@ fn git_relative_path(git_root: &Path, path: &Path) -> Option<String> {
 
 fn has_git_tracked_content(git_root: &Path, relative_path: &str) -> bool {
     git_output(git_root, &["ls-files", "--", relative_path])
-        .map(|output| !output.trim().is_empty())
-        .unwrap_or(false)
+        .is_ok_and(|output| !output.trim().is_empty())
 }
 
 fn is_git_ignored(git_root: &Path, relative_path: &str) -> bool {
     git_output(git_root, &["check-ignore", "--", relative_path])
-        .map(|output| !output.trim().is_empty())
-        .unwrap_or(false)
+        .is_ok_and(|output| !output.trim().is_empty())
 }
 
 fn has_embedded_git(review_root: &Path, name: &str) -> bool {
@@ -389,6 +403,9 @@ fn sorted_direct_entries(review_root: &Path) -> Result<Vec<std::fs::DirEntry>, B
 /// Returns a `PreflightResult`. The caller must check `is_allow()` before
 /// starting snapshot collection. If `is_block()`, snapshot and model runtime
 /// must not be reached.
+// One linear preflight: resolve the target, decide whether it is inside the
+// repository, and record why not if it is not. The branches are the rules.
+#[allow(clippy::too_many_lines)]
 pub fn run_full_review_preflight(cwd: &Path, target: &Path) -> PreflightResult {
     let mut events: Vec<ClassificationEvent> = Vec::new();
     let resolved_raw = if target.is_absolute() { target.to_path_buf() } else { cwd.join(target) };
@@ -428,26 +445,21 @@ pub fn run_full_review_preflight(cwd: &Path, target: &Path) -> PreflightResult {
         return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events);
     }
 
-    let git_root = match git_toplevel(&resolved)
-        .map(|root| std::fs::canonicalize(&root).unwrap_or(root))
-    {
-        Some(root) => root,
-        None => {
-            return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events)
-        }
+    let Some(git_root) =
+        git_toplevel(&resolved).map(|root| std::fs::canonicalize(&root).unwrap_or(root))
+    else {
+        return PreflightResult::block(BlockReason::NonGitTarget, Some(resolved), None, events);
     };
-    let cwd_git_root =
-        match git_toplevel(cwd).map(|root| std::fs::canonicalize(&root).unwrap_or(root)) {
-            Some(root) => root,
-            None => {
-                return PreflightResult::block(
-                    BlockReason::OutsideWorktreeDriveTarget,
-                    Some(resolved),
-                    Some(git_root),
-                    events,
-                )
-            }
-        };
+    let Some(cwd_git_root) =
+        git_toplevel(cwd).map(|root| std::fs::canonicalize(&root).unwrap_or(root))
+    else {
+        return PreflightResult::block(
+            BlockReason::OutsideWorktreeDriveTarget,
+            Some(resolved),
+            Some(git_root),
+            events,
+        );
+    };
     if cwd_git_root != git_root {
         events.push(ClassificationEvent {
             event_type: "outside_worktree".to_string(),
@@ -580,11 +592,8 @@ pub fn run_git_path_preflight(cwd: &Path, path: &Path) -> PreflightResult {
         return PreflightResult::block(BlockReason::NonGitTarget, None, None, events);
     }
 
-    let git_root = match git_toplevel(cwd) {
-        Some(root) => root,
-        None => {
-            return PreflightResult::block(BlockReason::NonGitTarget, None, None, events);
-        }
+    let Some(git_root) = git_toplevel(cwd) else {
+        return PreflightResult::block(BlockReason::NonGitTarget, None, None, events);
     };
 
     // Canonicalize the git root so path comparisons use the same format as
@@ -615,17 +624,14 @@ pub fn run_git_path_preflight(cwd: &Path, path: &Path) -> PreflightResult {
     }
 
     // Canonicalize.
-    let resolved = match std::fs::canonicalize(&resolved_raw) {
-        Ok(p) => p,
-        Err(_) => {
-            let path_str = path.to_string_lossy().to_string();
-            return PreflightResult::block(
-                BlockReason::GitPathNotFound { path: path_str },
-                None,
-                Some(git_root),
-                events,
-            );
-        }
+    let Ok(resolved) = std::fs::canonicalize(&resolved_raw) else {
+        let path_str = path.to_string_lossy().to_string();
+        return PreflightResult::block(
+            BlockReason::GitPathNotFound { path: path_str },
+            None,
+            Some(git_root),
+            events,
+        );
     };
 
     // Check that resolved path is inside the Git root (FSP-06 variant).

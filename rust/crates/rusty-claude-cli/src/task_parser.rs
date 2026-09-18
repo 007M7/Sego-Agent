@@ -17,6 +17,9 @@ pub enum RequiredReviewResult {
 }
 
 /// Lightweight line-oriented parser. Does not use regex; no model calls.
+// A linear parse of one command line: each branch is a form the user can
+// write, and they are ordered by how specific they are.
+#[allow(clippy::too_many_lines)]
 pub fn parse_required_review_command(input: &str) -> RequiredReviewResult {
     let is_task_like = is_task_like_multiline(input);
     let has_required_marker = input.lines().any(|line| {
@@ -402,12 +405,7 @@ fn extract_command_after_marker(input: &str) -> Option<(usize, String)> {
 }
 
 fn next_non_empty_line<'a>(lines: &'a [&'a str], from: usize) -> Option<&'a str> {
-    for line in lines.iter().skip(from + 1) {
-        if !line.trim().is_empty() {
-            return Some(line);
-        }
-    }
-    None
+    lines.iter().skip(from + 1).find(|line| !line.trim().is_empty()).copied()
 }
 
 /// R8-1: detect negation/caution lead-ins for continuation review lines.
@@ -417,12 +415,6 @@ fn next_non_empty_line<'a>(lines: &'a [&'a str], from: usize) -> Option<&'a str>
 /// "don't run /review staged"). This is intentionally a small lexical
 /// guard, not a general natural-language parser.
 fn continuation_lead_in_negates_review(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    let marker_idx = lower.find("/review").or_else(|| lower.find("sego review"));
-    let Some(idx) = marker_idx else {
-        return false;
-    };
-    let lead = &lower[..idx];
     const NEGATION_TOKENS: &[&str] = &[
         "do not",
         "don't",
@@ -436,6 +428,13 @@ fn continuation_lead_in_negates_review(line: &str) -> bool {
         "please skip",
         "please avoid",
     ];
+
+    let lower = line.to_ascii_lowercase();
+    let marker_idx = lower.find("/review").or_else(|| lower.find("sego review"));
+    let Some(idx) = marker_idx else {
+        return false;
+    };
+    let lead = &lower[..idx];
     NEGATION_TOKENS.iter().any(|tok| lead.contains(tok))
 }
 
@@ -515,9 +514,9 @@ fn build_combined_guidance(cmd: &str) -> String {
     let lower = cmd.to_ascii_lowercase();
     if let (Some(cd_start), Some(rev_start)) = (lower.find("/cd"), lower.find("/review")) {
         // Extract "/cd <path>" up to the first "&&" or before /review.
-        let cd_end = cmd[cd_start..].find("&&").map(|i| cd_start + i).unwrap_or(rev_start);
+        let cd_end = cmd[cd_start..].find("&&").map_or(rev_start, |i| cd_start + i);
         let cd_part = cmd[cd_start..cd_end].trim().trim_end_matches('&').trim();
-        let rev_end = cmd[rev_start..].find("&&").map(|i| rev_start + i).unwrap_or(cmd.len());
+        let rev_end = cmd[rev_start..].find("&&").map_or(cmd.len(), |i| rev_start + i);
         let rev_part = cmd[rev_start..rev_end].trim();
         return format!(
             "Run {cd_part} first on its own line, then run {rev_part} on the next line."

@@ -79,7 +79,12 @@ impl Display for ApiError {
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Json(error) => write!(f, "json error: {error}"),
             Self::Api { status, error_type, message, body, .. } => {
-                let auth_hint = authentication_error_hint(*status, error_type, message, body);
+                let auth_hint = authentication_error_hint(
+                    *status,
+                    error_type.as_deref(),
+                    message.as_deref(),
+                    body,
+                );
                 match (error_type, message) {
                     (Some(error_type), Some(message)) => {
                         write!(f, "api returned {status} ({error_type}): {message}{auth_hint}")
@@ -112,18 +117,14 @@ fn credential_setup_hint(provider: &str, env_vars: &[&str]) -> String {
 
 fn authentication_error_hint(
     status: reqwest::StatusCode,
-    error_type: &Option<String>,
-    message: &Option<String>,
+    error_type: Option<&str>,
+    message: Option<&str>,
     body: &str,
 ) -> &'static str {
     let status_is_auth = matches!(status.as_u16(), 401 | 403);
-    let haystack = format!(
-        "{} {} {}",
-        error_type.as_deref().unwrap_or_default(),
-        message.as_deref().unwrap_or_default(),
-        body
-    )
-    .to_ascii_lowercase();
+    let haystack =
+        format!("{} {} {}", error_type.unwrap_or_default(), message.unwrap_or_default(), body)
+            .to_ascii_lowercase();
     let looks_like_auth_error = status_is_auth
         || haystack.contains("authentication")
         || haystack.contains("unauthorized")

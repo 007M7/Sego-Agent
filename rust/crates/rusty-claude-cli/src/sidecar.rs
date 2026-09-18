@@ -1,14 +1,14 @@
-//! Sidecar JSON interface for external skill / tool consumers (c9/c PoC).
+//! Sidecar JSON interface for external skill / tool consumers (c9/c `PoC`).
 //!
 //! Implements `sego sidecar review`: reads a JSON request from stdin, runs a
 //! code review, and writes a JSON response to stdout. stderr is reserved for
 //! diagnostic logs.
 //!
 //! Design decisions (Codex c9/c):
-//! - D-C-1: PermissionMode::ReadOnly (non-interactive, fail-safe on write/danger)
-//! - D-C-2: Reuses existing review components, does NOT modify run_review_target
+//! - D-C-1: `PermissionMode::ReadOnly` (non-interactive, fail-safe on write/danger)
+//! - D-C-2: Reuses existing review components, does NOT modify `run_review_target`
 //! - D-C-3: stdout always emits machine-readable JSON, even on error
-//! - Minimal PoC: only `review` action, no plugin marketplace / skill runtime
+//! - Minimal `PoC`: only `review` action, no plugin marketplace / skill runtime
 
 use std::io::{Read, Write};
 
@@ -67,7 +67,7 @@ fn invocation_id_is_valid(id: &str) -> bool {
 /// Endpoint Sego will use for a provider, taken from the same accessors the model
 /// clients use.
 ///
-/// Every provider Sego can route to now has an accessor (the OpenAI accessor closed
+/// Every provider Sego can route to now has an accessor (the `OpenAI` accessor closed
 /// PROV-M03), so this returns `Some` in practice. The `Option` is kept because the
 /// caller must still be able to record a *named* evidence gap rather than silently
 /// omitting the endpoint if a future provider arrives without one — omitting a field
@@ -254,9 +254,9 @@ pub fn run_sidecar_review_pipeline() -> i32 {
 
 /// Execute a single review and return a structured response.
 ///
-/// Reuses: collect_review_target, build_review_prompt, run_turn_capture_text,
-/// ReviewReport::from_model_output, persist_review_artifact.
-/// Does NOT modify existing run_review_target (D-C-2).
+/// Reuses: `collect_review_target`, `build_review_prompt`, `run_turn_capture_text`,
+/// `ReviewReport::from_model_output`, `persist_review_artifact`.
+/// Does NOT modify existing `run_review_target` (D-C-2).
 fn execute_review(
     request: &SidecarReviewRequest,
 ) -> Result<SidecarReviewResponse, Box<dyn std::error::Error>> {
@@ -467,7 +467,7 @@ pub struct SidecarReviewOptions {
 pub struct SidecarReviewContext {
     #[serde(default)]
     pub diff_hash: Option<String>,
-    /// Caller-minted invocation identity (for example an EgoPulse
+    /// Caller-minted invocation identity (for example an `EgoPulse`
     /// verification/checker execution id). Sego only bounds it and echoes it.
     #[serde(default)]
     pub invocation_id: Option<String>,

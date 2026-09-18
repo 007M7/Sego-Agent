@@ -12,16 +12,16 @@ use runtime::{
     StaleBranchPolicy,
 };
 
-/// stale_branch + policy_engine integration:
+/// `stale_branch` + `policy_engine` integration:
 /// When a branch is detected stale, does it correctly flow through
-/// PolicyCondition::StaleBranch to generate the expected action?
+/// `PolicyCondition::StaleBranch` to generate the expected action?
 #[test]
 fn stale_branch_detection_flows_into_policy_engine() {
     // given — a stale branch context (2 hours behind main, threshold is 1 hour)
     let stale_context = LaneContext::new(
         "stale-lane",
         0,
-        Duration::from_secs(2 * 60 * 60), // 2 hours stale
+        Duration::from_hours(2), // 2 hours stale
         LaneBlocker::None,
         ReviewStatus::Pending,
         DiffScope::Full,
@@ -42,13 +42,13 @@ fn stale_branch_detection_flows_into_policy_engine() {
     assert_eq!(actions, vec![PolicyAction::MergeForward]);
 }
 
-/// stale_branch + policy_engine: Fresh branch does NOT trigger stale rules
+/// `stale_branch` + `policy_engine`: Fresh branch does NOT trigger stale rules
 #[test]
 fn fresh_branch_does_not_trigger_stale_policy() {
     let fresh_context = LaneContext::new(
         "fresh-lane",
         0,
-        Duration::from_secs(30 * 60), // 30 min stale — under 1 hour threshold
+        Duration::from_mins(30), // 30 min stale — under 1 hour threshold
         LaneBlocker::None,
         ReviewStatus::Pending,
         DiffScope::Full,
@@ -66,7 +66,7 @@ fn fresh_branch_does_not_trigger_stale_policy() {
     assert!(actions.is_empty());
 }
 
-/// green_contract + policy_engine integration:
+/// `green_contract` + `policy_engine` integration:
 /// A lane that meets its green contract should be mergeable
 #[test]
 fn green_contract_satisfied_allows_merge() {
@@ -81,7 +81,7 @@ fn green_contract_satisfied_allows_merge() {
     assert!(!insufficient);
 }
 
-/// green_contract + policy_engine:
+/// `green_contract` + `policy_engine`:
 /// Lane with green level below contract requirement gets blocked
 #[test]
 fn green_contract_unsatisfied_blocks_merge() {
@@ -109,7 +109,7 @@ fn green_contract_unsatisfied_blocks_merge() {
     assert!(actions.is_empty()); // level 1 < 3, so no merge
 }
 
-/// reconciliation + policy_engine integration:
+/// reconciliation + `policy_engine` integration:
 /// A reconciled lane should be handled by reconcile rules, not generic closeout
 #[test]
 fn reconciled_lane_matches_reconcile_condition() {
@@ -142,7 +142,7 @@ fn reconciled_lane_matches_reconcile_condition() {
     );
 }
 
-/// stale_branch module: apply_policy generates correct actions
+/// `stale_branch` module: `apply_policy` generates correct actions
 #[test]
 fn stale_branch_apply_policy_produces_rebase_action() {
     let stale =
@@ -171,7 +171,7 @@ fn stale_branch_apply_policy_warn_only() {
             assert!(message.contains("2 commit(s) behind main"));
             assert!(message.contains("fix-456"));
         }
-        _ => panic!("expected Warn action, got {:?}", action),
+        _ => panic!("expected Warn action, got {action:?}"),
     }
 }
 
@@ -198,8 +198,8 @@ fn end_to_end_stale_lane_gets_merge_forward_action() {
     // when: build context and evaluate policy
     let context = LaneContext::new(
         "lane-9411",
-        3,                                // Workspace green
-        Duration::from_secs(5 * 60 * 60), // 5 hours stale, definitely over threshold
+        3,                       // Workspace green
+        Duration::from_hours(5), // 5 hours stale, definitely over threshold
         LaneBlocker::None,
         ReviewStatus::Approved,
         DiffScope::Scoped,
@@ -240,8 +240,8 @@ fn end_to_end_stale_lane_gets_merge_forward_action() {
 fn fresh_approved_lane_gets_merge_action() {
     let context = LaneContext::new(
         "fresh-approved-lane",
-        3,                            // Workspace green
-        Duration::from_secs(30 * 60), // 30 min — under 1 hour threshold = fresh
+        3,                       // Workspace green
+        Duration::from_mins(30), // 30 min — under 1 hour threshold = fresh
         LaneBlocker::None,
         ReviewStatus::Approved,
         DiffScope::Scoped,
@@ -263,7 +263,7 @@ fn fresh_approved_lane_gets_merge_action() {
     assert_eq!(actions, vec![PolicyAction::MergeToDev]);
 }
 
-/// worker_boot + recovery_recipes + policy_engine integration:
+/// `worker_boot` + `recovery_recipes` + `policy_engine` integration:
 /// When a session completes with a provider failure, does the worker
 /// status transition trigger the correct recovery recipe, and does
 /// the resulting recovery state feed into policy decisions?
@@ -324,7 +324,7 @@ fn worker_provider_failure_flows_through_recovery_to_policy() {
     // (Simulating the policy check that would happen after successful recovery)
     let recovery_success = matches!(result, RecoveryResult::Recovered { .. });
     let green_level = 3; // Workspace green
-    let not_stale = Duration::from_secs(30 * 60); // 30 min — fresh
+    let not_stale = Duration::from_mins(30); // 30 min — fresh
 
     let post_recovery_context = LaneContext::new(
         "recovered-lane",

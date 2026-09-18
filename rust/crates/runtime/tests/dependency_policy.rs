@@ -2,7 +2,7 @@
 //!
 //! The repository had no dependency audit: advisories, licences and dependency
 //! *sources* were all unreviewed. Advisories and licences need the network
-//! (`cargo-deny` fetches the RustSec database and crate metadata), so those run
+//! (`cargo-deny` fetches the `RustSec` database and crate metadata), so those run
 //! in the `dependency-audit` CI job. This file covers the part that can be
 //! decided from the repository alone, which means it is blocking on every
 //! `cargo test --workspace` rather than only on a scheduled audit:

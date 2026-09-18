@@ -595,10 +595,10 @@ impl ReviewReport {
                 raw_text,
                 parse_status: ReviewParseStatus::Structured,
                 parse_error: String::new(),
-                parse_repair: if extraction_source != ExtractionSource::Direct {
-                    Some(format!("{extraction_source:?}"))
-                } else {
+                parse_repair: if extraction_source == ExtractionSource::Direct {
                     None
+                } else {
+                    Some(format!("{extraction_source:?}"))
                 },
             },
             Err(e) => {
@@ -610,10 +610,10 @@ impl ReviewReport {
                         raw_text,
                         parse_status: ReviewParseStatus::ParseAttemptedButFailed,
                         parse_error: parse_err,
-                        parse_repair: if extraction_source != ExtractionSource::Direct {
-                            Some(format!("{extraction_source:?}"))
-                        } else {
+                        parse_repair: if extraction_source == ExtractionSource::Direct {
                             None
+                        } else {
+                            Some(format!("{extraction_source:?}"))
                         },
                     };
                 }
@@ -651,7 +651,7 @@ struct SegoReviewArtifact {
     /// C21: Sego engine version that wrote the artifact. Legacy artifacts default to empty.
     #[serde(default)]
     engine_version: String,
-    /// C21: review mode used to produce the artifact (for example, model_code_review).
+    /// C21: review mode used to produce the artifact (for example, `model_code_review`).
     #[serde(default)]
     review_mode: String,
     /// Governed plugin path only: the provider Sego resolved for the invocation
@@ -810,7 +810,7 @@ pub struct ReviewInvocationIdentity {
     /// (see `IDENTITY_GAP_NO_ENDPOINT_ACCESSOR`), never a silently omitted field.
     pub resolved_endpoint: Option<String>,
     /// Caller-minted persistent identity for the invocation that produced this
-    /// artifact (for example an EgoPulse verification/checker execution id).
+    /// artifact (for example an `EgoPulse` verification/checker execution id).
     /// Opaque to Sego: it is never parsed or interpreted, and never used to derive
     /// execution idempotency.
     pub invocation_id: Option<String>,
@@ -1069,6 +1069,10 @@ pub fn review_diff_hash(target: &ReviewTarget) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+// A single markdown document assembled section by section; the length is the
+// report format, and splitting it would put the shape of the output in two
+// places.
+#[allow(clippy::too_many_lines)]
 fn render_review_markdown(artifact: &SegoReviewArtifact, report: &ReviewReport) -> String {
     let mut output = String::new();
     output.push_str("# Sego Review Report\n\n");
@@ -1090,7 +1094,7 @@ fn render_review_markdown(artifact: &SegoReviewArtifact, report: &ReviewReport) 
     if !artifact.parse_error.is_empty() {
         let _ = writeln!(output, "- Parse error: `{}`", artifact.parse_error);
         if let Some(ref repair) = artifact.parse_repair {
-            let _ = writeln!(output, "- Parse repair: `{}`", repair);
+            let _ = writeln!(output, "- Parse repair: `{repair}`");
         }
     }
     if let Some(severity) = artifact.highest_severity {
@@ -1400,6 +1404,10 @@ mod tests {
     }
 
     #[test]
+    // The float comparison in here is exact on purpose: the value is written and
+    // read back through the artifact, so any drift is the bug this test exists to
+    // catch, and an epsilon would hide exactly that.
+    #[allow(clippy::float_cmp)]
     fn review_artifact_round_trips_through_json() {
         // Golden fixture: construct a SegoReviewArtifact with a finding, serialize,
         // deserialize, and verify every field survives the round-trip.

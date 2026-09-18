@@ -215,13 +215,13 @@ mod tests {
 
     #[test]
     fn blocked_and_failed_events_reuse_blocker_details() {
-        let blocker = LaneEventBlocker {
+        let surface = LaneEventBlocker {
             failure_class: LaneFailureClass::McpStartup,
             detail: "broken server".to_string(),
         };
 
-        let blocked = LaneEvent::blocked("2026-04-04T00:00:00Z", &blocker);
-        let failed = LaneEvent::failed("2026-04-04T00:00:01Z", &blocker);
+        let blocked = LaneEvent::blocked("2026-04-04T00:00:00Z", &surface);
+        let failed = LaneEvent::failed("2026-04-04T00:00:01Z", &surface);
 
         assert_eq!(blocked.event, LaneEventName::Blocked);
         assert_eq!(blocked.status, LaneEventStatus::Blocked);

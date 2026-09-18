@@ -70,7 +70,7 @@ impl SessionReport {
                 snapshot.started_at.as_deref(),
                 snapshot.finished_at.as_deref(),
             ),
-            total_events: snapshot.lane_events.len() as u32,
+            total_events: u32::try_from(snapshot.lane_events.len()).unwrap_or(u32::MAX),
             event_types,
             failures: snapshot.failure_count,
             recoveries: snapshot.recovery_stats.successes,
@@ -195,11 +195,11 @@ impl SessionReport {
 
 fn compute_duration_display(started_at: Option<&str>, finished_at: Option<&str>) -> String {
     match (started_at, finished_at) {
-        (Some(_start), Some(_end)) => {
+        (Some(start), Some(end)) => {
             // Simple display: use the timestamps directly
             // For a full implementation, parse ISO8601 and compute delta
             // For now, show the time range
-            format!("{_start} → {_end}")
+            format!("{start} → {end}")
         }
         (Some(start), None) => format!("started at {start} (ongoing)"),
         _ => "unknown".to_string(),

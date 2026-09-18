@@ -51,7 +51,9 @@ pub(crate) fn default_date() -> String {
         // Simple date calculation from Unix epoch
         let days_since_epoch = secs / 86400;
         // 1970-01-01 was a Thursday. Calculate year/month/day.
-        let mut days = days_since_epoch as i64;
+        // A clock so far out that the day count overflows i64 is not a date this
+        // function can render; saturating beats wrapping into a year before 1970.
+        let mut days = i64::try_from(days_since_epoch).unwrap_or(i64::MAX);
         let mut year = 1970i64;
         loop {
             let year_days = if is_leap(year) { 366 } else { 365 };
@@ -66,9 +68,9 @@ pub(crate) fn default_date() -> String {
         } else {
             [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         };
-        let mut month = 0i64;
-        while month < 12 && days >= month_days[month as usize] {
-            days -= month_days[month as usize];
+        let mut month = 0usize;
+        while month < 12 && days >= month_days[month] {
+            days -= month_days[month];
             month += 1;
         }
         format!("{:04}-{:02}-{:02}", year, month + 1, days + 1)
@@ -240,11 +242,11 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
             "--model" => {
                 let value =
                     args.get(index + 1).ok_or_else(|| "missing value for --model".to_string())?;
-                model = resolve_model_alias(value).to_string();
+                model.clone_from(&resolve_model_alias(value));
                 index += 2;
             }
             flag if flag.starts_with("--model=") => {
-                model = resolve_model_alias(&flag[8..]).to_string();
+                model.clone_from(&resolve_model_alias(&flag[8..]));
                 index += 1;
             }
             "--cwd" if rest.is_empty() => {
@@ -303,7 +305,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 apply_requested_cwd(requested_cwd.as_ref())?;
                 return Ok(CliAction::Prompt {
                     prompt,
-                    model: resolve_model_alias(&model).to_string(),
+                    model: resolve_model_alias(&model).clone(),
                     output_format,
                     allowed_tools: normalize_allowed_tools(&allowed_tool_values)?,
                     permission_mode: permission_mode_override
@@ -457,7 +459,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CliAction, String> {
             // legacy `/cd is REPL-only` error.
             let raw = rest.join(" ");
             let is_review_history = rest.first().map(String::as_str) == Some("/review")
-                && rest.get(1).map_or(false, |sub| {
+                && rest.get(1).is_some_and(|sub| {
                     matches!(
                         sub.as_str(),
                         "list"
@@ -978,12 +980,14 @@ impl RuntimeMcpState {
     }
 }
 
-pub(crate) fn build_runtime_mcp_state(
-    runtime_config: &runtime::RuntimeConfig,
-) -> Result<
+/// The MCP state a runtime builds, and the tool definitions discovered with it.
+/// `None` means no MCP server was configured.
+pub(crate) type RuntimeMcpBuild = Result<
     (Option<Arc<Mutex<RuntimeMcpState>>>, Vec<RuntimeToolDefinition>),
     Box<dyn std::error::Error>,
-> {
+>;
+
+pub(crate) fn build_runtime_mcp_state(runtime_config: &runtime::RuntimeConfig) -> RuntimeMcpBuild {
     let Some((mcp_state, discovery)) = RuntimeMcpState::new(runtime_config)? else {
         return Ok((None, Vec::new()));
     };
@@ -1294,7 +1298,7 @@ mod tests {
             match parse_args(&args(&[word])) {
                 Ok(_) => {}
                 Err(message) => {
-                    assert!(!message.trim().is_empty(), "{word} produced an empty error")
+                    assert!(!message.trim().is_empty(), "{word} produced an empty error");
                 }
             }
         }

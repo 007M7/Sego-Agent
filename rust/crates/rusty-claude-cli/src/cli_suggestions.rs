@@ -75,7 +75,7 @@ pub(crate) fn format_unknown_option(option: &str) -> String {
         message.push_str(suggestion);
         message.push('?');
     }
-    message.push_str(&format!("\nRun `{PROGRAM_NAME} --help` for usage."));
+    let _ = write!(message, "\nRun `{PROGRAM_NAME} --help` for usage.");
     message
 }
 
@@ -86,9 +86,10 @@ pub(crate) fn format_unknown_direct_slash_command(name: &str) -> String {
         message.push('\n');
         message.push_str(&suggestions);
     }
-    message.push_str(&format!(
+    let _ = write!(
+        message,
         "\nRun `{PROGRAM_NAME} --help` for CLI usage, or start `{PROGRAM_NAME}` and use /help."
-    ));
+    );
     message
 }
 
@@ -325,7 +326,7 @@ mod tests {
         // resume-supported split without naming which command is which.
         let mut checked = 0;
         for spec in slash_command_specs() {
-            let Some(guidance) = bare_slash_command_guidance(&spec.name) else {
+            let Some(guidance) = bare_slash_command_guidance(spec.name) else {
                 continue;
             };
             checked += 1;

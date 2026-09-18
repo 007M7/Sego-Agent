@@ -711,8 +711,8 @@ fn translate_message(message: &InputMessage, config: OpenAiCompatConfig) -> Vec<
                     InputContentBlock::Thinking { thinking, .. } if preserve_reasoning_content => {
                         reasoning_content.push_str(thinking);
                     }
-                    InputContentBlock::Thinking { .. } => {}
-                    InputContentBlock::ToolResult { .. }
+                    InputContentBlock::Thinking { .. }
+                    | InputContentBlock::ToolResult { .. }
                     | InputContentBlock::RedactedThinking { .. } => {}
                 }
             }

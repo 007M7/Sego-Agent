@@ -103,14 +103,14 @@ fn max_tokens_for_model(model: &str) -> u32 {
 }
 
 fn context_window_limit(model: &str) -> u32 {
+    // DeepSeek V4 is the only family here with a window wider than 128K. MiMo
+    // and the GPT models are both assumed to be 128K, which is also the
+    // conservative default for anything unrecognised - so there is one
+    // threshold, not four branches that happen to agree.
     if model.contains("deepseek") || model.contains("v4") {
-        1_000_000 // DeepSeek V4 supports 1M context
-    } else if model.contains("mimo") {
-        128_000 // MiMo supports 128K context
-    } else if model.starts_with("gpt") {
-        128_000 // GPT models 128K context
+        1_000_000
     } else {
-        128_000 // conservative default
+        128_000
     }
 }
 
@@ -194,6 +194,9 @@ fn maybe_pause_after_error() {
     let _ = io::stdin().read_line(&mut buffer);
 }
 
+// The dispatch table for every CLI action, kept in one place so the set of
+// actions and their argument shapes can be read together.
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let action = parse_args(&args)?;
@@ -377,7 +380,7 @@ fn filter_tool_specs(
 ) -> Vec<ToolDefinition> {
     // Token-saving: by default, only send essential tools (~15 instead of 54)
     // Use --allowedTools all for full toolset
-    if let Some(ref set) = allowed_tools {
+    if let Some(set) = allowed_tools {
         if set.contains("all") {
             return tool_registry.definitions(None);
         }
@@ -833,6 +836,9 @@ fn run_resume_command(
     }
 }
 
+// The interactive loop: reading input, the slash-command surface, and the
+// recovery bookkeeping around a turn are one state machine.
+#[allow(clippy::too_many_lines)]
 fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -989,7 +995,6 @@ fn run_repl(
                     Ok(()) => {}
                     Err(error) if is_turn_cancelled_error(error.as_ref()) => {
                         eprintln!("Sego cancelled the current task. You can continue.");
-                        continue;
                     }
                     Err(error) => return Err(error),
                 }
@@ -1979,7 +1984,7 @@ impl LiveCli {
             return Ok(false);
         };
 
-        let model = resolve_model_alias(&model).to_string();
+        let model = resolve_model_alias(&model).clone();
 
         if model == self.model {
             println!(
@@ -2184,18 +2189,15 @@ impl LiveCli {
         &self,
         requested_path: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let text = match latest_assistant_text(self.runtime.session()) {
-            Some(text) => text,
-            None => {
-                // C20.5-B: structured recovery hint for missing assistant response.
-                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                let target = requested_path.unwrap_or("(default)");
-                eprintln!(
-                    "Export\n  Result           failed\n  Reason           {NO_ASSISTANT_RESPONSE_EXPORT_REASON}\n  Target           {target}\n  Detail           target path was not written because there is no assistant response yet\n  Workspace        {}\n  Next step        Run a prompt first, or use /dir to see export commands.",
-                    cwd.display()
-                );
-                return Err(Box::new(NoAssistantResponseExportError));
-            }
+        let Some(text) = latest_assistant_text(self.runtime.session()) else {
+            // C20.5-B: structured recovery hint for missing assistant response.
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let target = requested_path.unwrap_or("(default)");
+            eprintln!(
+                "Export\n  Result           failed\n  Reason           {NO_ASSISTANT_RESPONSE_EXPORT_REASON}\n  Target           {target}\n  Detail           target path was not written because there is no assistant response yet\n  Workspace        {}\n  Next step        Run a prompt first, or use /dir to see export commands.",
+                cwd.display()
+            );
+            return Err(Box::new(NoAssistantResponseExportError));
         };
         let export_path = resolve_direct_export_path(requested_path, || {
             format!("sego-response-{}.md", default_date().replace('-', ""))
@@ -2538,10 +2540,10 @@ fn create_managed_session_handle(
 // 不用 Drop guard 写 graceful（fallible IO 不清晰，Codex 审查 §4.3）
 // ---------------------------------------------------------------------------
 
-/// 启动提示层：parse_args 后调用，只读 recovery JSON，不写、不扫描、不调模型。
+/// `启动提示层：parse_args` 后调用，只读 recovery JSON，不写、不扫描、不调模型。
 ///
 /// 仅对会创建/恢复可持久化 session 且可能执行模型/工具的动作触发提示
-/// （Repl / Prompt / CodeReview / ResumeSession）。对 Version/Help 等纯查询动作不触发。
+/// （Repl / Prompt / `CodeReview` / ResumeSession）。对 Version/Help 等纯查询动作不触发。
 fn maybe_print_recovery_notice(should_check: bool) {
     if !should_check {
         return;
@@ -2649,7 +2651,7 @@ fn persist_recovery_for_cli(
 /// 避免"registered but not yet implemented"的断裂体验。
 ///
 /// 路径语义：
-/// - 用户传 path → 尊重用户路径，不强制 .txt（区别于 /export 的 resolve_export_path）
+/// - 用户传 path → 尊重用户路径，不强制 .txt（区别于 /export 的 `resolve_export_path`）
 /// - 用户不传 path → 默认写到 .sego/recovery/recovery-summary.md
 fn write_recovery_export(
     requested_path: Option<&str>,
@@ -3722,10 +3724,21 @@ fn collect_staged_review_paths(cwd: &Path) -> Result<Vec<PathBuf>, Box<dyn std::
         run_git_diff_command_in(cwd, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
     Ok(output.lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).collect())
 }
+/// Files above this size are listed but not read into the snapshot.
+const MAX_SINGLE_FILE_BYTES: u64 = 1_000_000;
+
 /// C20+R1: Walk a repository directory, collect file tree, manifest contents,
 /// and bounded key source file sampling.
 /// Skips `.git`, `node_modules`, virtual envs, build artifacts, and cache dirs.
+// One pass that builds the whole snapshot document: tree, manifests, sampled
+// key files and the limits that were hit.
+#[allow(clippy::too_many_lines)]
 fn collect_full_repo_snapshot(repo_root: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    // The `as _` matters: the module already imports `std::io::Write` for the
+    // terminal writers, and bringing `std::fmt::Write` in by name would make
+    // the `writeln!` calls below ambiguous.
+    use std::fmt::Write as _;
+
     const SKIP_DIRS: &[&str] = &[
         ".git",
         "node_modules",
@@ -3849,12 +3862,10 @@ fn collect_full_repo_snapshot(repo_root: &Path) -> Result<String, Box<dyn std::e
 
     // R3: snapshot summary with limits info.
     output.push_str("## Snapshot limits\n");
-    output.push_str(&format!(
-        "Key content cap reached: {}\n",
-        if total_key_bytes >= MAX_SNAPSHOT_BYTES { "yes" } else { "no" }
-    ));
-    output.push_str(&format!("Skipped large files: {skipped_large}\n"));
-    output.push_str(&format!("Unreadable files: {unreadable}\n"));
+    let cap_reached = if total_key_bytes >= MAX_SNAPSHOT_BYTES { "yes" } else { "no" };
+    let _ = writeln!(output, "Key content cap reached: {cap_reached}");
+    let _ = writeln!(output, "Skipped large files: {skipped_large}");
+    let _ = writeln!(output, "Unreadable files: {unreadable}");
     output.push('\n');
 
     if !key_contents.is_empty() {
@@ -3871,6 +3882,10 @@ fn collect_full_repo_snapshot(repo_root: &Path) -> Result<String, Box<dyn std::e
 /// R2+R3: recursive directory walker with depth limit, symlink detection, stable ordering,
 /// aggregate byte cap, and unreadable-file tracking.
 #[allow(clippy::too_many_arguments)]
+// Recursive walk with a depth limit, an aggregate byte cap, symlink detection
+// and unreadable-file tracking, threading five accumulators through the
+// recursion; splitting it would mean passing the same bundle around twice.
+#[allow(clippy::too_many_lines)]
 fn walk_repo_dir_r2(
     current: &Path,
     repo_root: &Path,
@@ -3955,19 +3970,22 @@ fn walk_repo_dir_r2(
         || rel_str.ends_with("/Dockerfile");
 
     // R2: also match .yaml CI workflow files.
+    // The extension is matched case-insensitively: a workflow file named `.YML`
+    // is still a workflow file on a case-insensitive filesystem, and the cost of
+    // not recognising one is that it goes unreviewed.
     let is_ci_workflow = rel_str.contains(".github/workflows")
-        && (rel_str.ends_with(".yml") || rel_str.ends_with(".yaml"));
+        && (full_scope_preflight::has_extension(&rel_str, "yml")
+            || full_scope_preflight::has_extension(&rel_str, "yaml"));
     let is_readme = readme_files.contains(&file_name);
     let is_entry = entry_files.contains(&file_name);
 
     // R2: find the first matching key-source ancestor for the counter key.
     let counter_key = relative
         .components()
-        .filter_map(|c| {
+        .find_map(|c| {
             let s = c.as_os_str().to_string_lossy();
             key_source_dirs.contains(&s.as_ref()).then(|| s.to_string())
         })
-        .next()
         .unwrap_or_else(|| {
             relative
                 .parent()
@@ -3994,11 +4012,10 @@ fn walk_repo_dir_r2(
             return;
         }
         // R3: check file size before reading; skip very large files.
-        let file_size = current.metadata().map(|m| m.len()).unwrap_or(0);
-        const MAX_SINGLE_FILE_BYTES: u64 = 1_000_000;
+        let file_size = current.metadata().map_or(0, |m| m.len());
         if file_size > MAX_SINGLE_FILE_BYTES {
             *skipped_large += 1;
-            key_contents.push(format!("### {} [skipped: {} bytes]\n", rel_str, file_size));
+            key_contents.push(format!("### {rel_str} [skipped: {file_size} bytes]\n"));
             return;
         }
         match std::fs::read_to_string(current) {
@@ -4007,7 +4024,7 @@ fn walk_repo_dir_r2(
                 let truncated = truncate_file_content(&content, max_chars);
                 let status =
                     if content.chars().count() > max_chars { " [truncated]" } else { " [full]" };
-                let block = format!("### {}{}\n```\n{}\n```", rel_str, status, truncated);
+                let block = format!("### {rel_str}{status}\n```\n{truncated}\n```");
                 *total_key_bytes += block.len();
                 key_contents.push(block);
             }
@@ -4432,7 +4449,7 @@ fn build_code_review_summary_json(
     Ok(build_review_summary_json_value(
         id,
         entry,
-        review_finding_status_counts_for_summary(cwd, entry)?,
+        &review_finding_status_counts_for_summary(cwd, entry)?,
     ))
 }
 
@@ -4787,8 +4804,7 @@ fn is_git_worktree(cwd: &Path) -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 fn non_git_review_error(cwd: &Path) -> String {
@@ -5692,7 +5708,7 @@ impl ApiClient for SegoRuntimeClient {
                 ContentBlock::Thinking { thinking, .. } => thinking.len(),
             })
             .sum();
-        let estimated_tokens = (estimated_chars / 4) as u32;
+        let estimated_tokens = u32::try_from(estimated_chars / 4).unwrap_or(u32::MAX);
         let context_limit = context_window_limit(&self.model);
         let requested_max = max_tokens_for_model(&self.model);
         // Auto-reduce max_tokens if estimated input + requested output exceeds context window
@@ -6123,7 +6139,7 @@ static LITE_TOOLS: std::sync::LazyLock<AllowedToolSet> = std::sync::LazyLock::ne
         "ExitPlanMode",
     ]
     .iter()
-    .map(|s| s.to_string())
+    .map(std::string::ToString::to_string)
     .collect()
 });
 
@@ -6170,8 +6186,8 @@ fn first_visible_line(text: &str) -> &str {
 fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     use std::fmt::Write as _;
 
-    let exit_code = parsed.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
-    let status = if exit_code == 0 { "" } else { &" \x1b[38;5;203merror\x1b[0m" };
+    let exit_code = parsed.get("exitCode").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let status = if exit_code == 0 { "" } else { " \x1b[38;5;203merror\x1b[0m" };
     let mut header = format!("{icon} \x1b[38;5;245mbash\x1b[0m{status}");
 
     if let Some(task_id) = parsed.get("backgroundTaskId").and_then(|value| value.as_str()) {
@@ -6193,15 +6209,15 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
         let line_count = stdout.lines().count();
         if line_count <= 3 && trimmed.len() < 200 {
             // Short output: show inline
-            lines.push(format!("\x1b[2m{}\x1b[0m", trimmed));
+            lines.push(format!("\x1b[2m{trimmed}\x1b[0m"));
         } else if !preview.is_empty() {
-            lines.push(format!("\x1b[2m{}\x1b[0m", preview));
+            lines.push(format!("\x1b[2m{preview}\x1b[0m"));
         }
     }
 
     if !stderr.trim().is_empty() {
         let stderr_preview = truncate_for_summary(stderr.trim(), 80);
-        lines.push(format!("\x1b[38;5;203m{}\x1b[0m", stderr_preview));
+        lines.push(format!("\x1b[38;5;203m{stderr_preview}\x1b[0m"));
     }
 
     lines.join("\n")

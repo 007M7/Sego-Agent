@@ -258,7 +258,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Healthy,
-            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
+            capabilities: capabilities.iter().map(std::string::ToString::to_string).collect(),
             last_error: None,
         }
     }
@@ -267,7 +267,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Failed,
-            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
+            capabilities: capabilities.iter().map(std::string::ToString::to_string).collect(),
             last_error: Some(error.to_string()),
         }
     }
@@ -276,7 +276,7 @@ mod tests {
         ServerHealth {
             server_name: name.to_string(),
             status: ServerStatus::Degraded,
-            capabilities: capabilities.iter().map(|capability| capability.to_string()).collect(),
+            capabilities: capabilities.iter().map(std::string::ToString::to_string).collect(),
             last_error: Some(error.to_string()),
         }
     }

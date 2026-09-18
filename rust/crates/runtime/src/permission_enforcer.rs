@@ -264,7 +264,7 @@ fn argument_tokens(command: &str) -> Vec<String> {
         .split_whitespace()
         .skip(1)
         .flat_map(|token| token.split('='))
-        .map(|part| part.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -387,6 +387,11 @@ fn is_read_only_subcommand(tool: &str, command: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // The tests below match the outcome they expect and panic on anything
+    // else. The catch-all is deliberate: naming the remaining variants would
+    // have to be updated for every new one, and the panic already prints the
+    // value it got.
+    #![allow(clippy::match_wildcard_for_single_variants)]
     use super::*;
 
     fn make_enforcer(mode: PermissionMode) -> PermissionEnforcer {

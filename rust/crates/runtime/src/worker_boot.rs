@@ -114,6 +114,10 @@ pub struct WorkerEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// The bools are independent switches read at different points of the boot
+// sequence; folding them into a state machine would invent an ordering the
+// callers do not have.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Worker {
     pub worker_id: String,
     pub cwd: String,
@@ -193,6 +197,9 @@ impl WorkerRegistry {
         inner.workers.get(worker_id).cloned()
     }
 
+    // One pass over the screen text updating a worker, kept together so the
+    // precedence between the signals it looks for is readable in one place.
+    #[allow(clippy::too_many_lines)]
     pub fn observe(&self, worker_id: &str, screen_text: &str) -> Result<Worker, String> {
         let mut inner = self.inner.lock().expect("worker registry lock poisoned");
         let worker = inner
@@ -611,9 +618,7 @@ fn detect_prompt_misdelivery(
     prompt: Option<&str>,
     expected_cwd: &str,
 ) -> Option<PromptDeliveryObservation> {
-    let Some(prompt) = prompt else {
-        return None;
-    };
+    let prompt = prompt?;
 
     let prompt_snippet = prompt
         .lines()

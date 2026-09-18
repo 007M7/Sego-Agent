@@ -816,8 +816,8 @@ mod tests {
         // process never passed it. The assertion could not tell "we leaked it"
         // apart from "the shell created it", and failed on the Linux runner for
         // exactly that reason. A unique name has one possible source.
-        let _guard = crate::test_env_lock();
         const CANARY: &str = "SEGO_TEST_PARENT_ONLY_CANARY";
+        let _guard = crate::test_env_lock();
         assert!(
             !allowed_inherited_env_key(CANARY),
             "{CANARY} must not be on the allowlist, or this test proves nothing"

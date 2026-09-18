@@ -1,5 +1,5 @@
 //! Persistent active task state for crash recovery.
-//! Writes .sego/runtime/active_task.json for new-agent recovery.
+//! Writes .`sego/runtime/active_task.json` for new-agent recovery.
 //! Core of Sego's recoverable runtime.
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -96,7 +96,10 @@ impl From<serde_json::Error> for ActiveTaskError {
 fn now_iso() -> String {
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = ts.as_secs();
-    let days_since_epoch = (secs / 86400) as i64;
+    // A clock far enough in the future to overflow i64 days is not a
+    // calendar this function can render anyway; saturate instead of wrapping
+    // into a negative day count and printing a year in the past.
+    let days_since_epoch = i64::try_from(secs / 86400).unwrap_or(i64::MAX);
     let day_secs = (secs % 86400) as u32;
     let hours = day_secs / 3600;
     let mins = (day_secs % 3600) / 60;
@@ -116,9 +119,11 @@ fn now_iso() -> String {
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
-    let mut month = 0i64;
-    while month < 12 && days >= md[month as usize] {
-        days -= md[month as usize];
+    // `usize` rather than `i64`: the index is a month number, and the cast the
+    // old form needed on every use was only ever in range because of the guard.
+    let mut month = 0usize;
+    while month < 12 && days >= md[month] {
+        days -= md[month];
         month += 1;
     }
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month + 1, days + 1, hours, mins, srem)
@@ -514,8 +519,7 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
         format!("{nanos}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 

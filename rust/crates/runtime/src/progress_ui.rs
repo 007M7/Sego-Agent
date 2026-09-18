@@ -56,7 +56,7 @@ impl fmt::Display for PhaseStatus {
 }
 
 impl PhaseStatus {
-    fn ansi_icon(&self) -> String {
+    fn ansi_icon(self) -> String {
         match self {
             Self::Pending => " ".to_string(),
             Self::Running => format!("{CYAN}◷{RESET}"),
@@ -327,6 +327,11 @@ impl<W: Write> ProgressUI<W> {
 // ---------------------------------------------------------------------------
 // Bar drawing
 // ---------------------------------------------------------------------------
+// Geometry of a terminal bar: the ratio is a display fraction, `width` is a
+// column count, and every value here is bounded by the terminal and by the
+// number of steps. Precision is irrelevant and the truncation is the intended
+// rounding.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn draw_bar(completed: usize, total: usize, width: usize) -> String {
     let ratio = (completed as f64 / total.max(1) as f64).min(1.0);
     let filled = (ratio * width as f64) as usize;
@@ -380,6 +385,8 @@ mod tests {
     // -- Phase --------------------------------------------------------------
 
     #[test]
+    // Zero is exact, and "no time recorded yet" is the distinction under test.
+    #[allow(clippy::float_cmp)]
     fn phase_defaults() {
         let p = Phase::new("test");
         assert_eq!(p.status, PhaseStatus::Pending);
@@ -517,7 +524,7 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("1/2"));
         assert!(output.contains("Failed"));
-        assert!(output.contains("B"));
+        assert!(output.contains('B'));
     }
 
     // -- Log data extraction ------------------------------------------------

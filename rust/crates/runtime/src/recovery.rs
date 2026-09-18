@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(latest.session_path, absolute_session);
         assert_eq!(exit.session_path, absolute_session);
         assert_eq!(exit.last_user_goal.as_deref(), Some("finish crash recovery"));
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -538,7 +538,7 @@ mod tests {
         let assessment = assess_recovery_state(&root);
         assert_eq!(assessment.availability, RecoveryAvailability::Recoverable);
         assert_eq!(assessment.exit_state.expect("exit state").session_path, session_path);
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -562,7 +562,7 @@ mod tests {
 
         let assessment = assess_recovery_state(&root);
         assert_eq!(assessment.availability, RecoveryAvailability::CleanExit);
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
 
         let assessment = assess_recovery_state(&root);
         assert_eq!(assessment.availability, RecoveryAvailability::MissingSession);
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
         let assessment = assess_recovery_state(&root);
         assert_eq!(assessment.availability, RecoveryAvailability::UnreadableState);
         assert!(assessment.message.contains("invalid recovery JSON"));
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -627,7 +627,7 @@ mod tests {
 
         let summary_path = write_recovery_summary(&root, &assessment).expect("write summary");
         assert_eq!(summary_path, recovery_summary_path(&root));
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         let summary = render_recovery_summary(&assessment);
         assert!(summary.contains("artifact_path:"));
         assert!(summary.contains(&artifact.display().to_string()));
-        cleanup_temp_dir(root);
+        cleanup_temp_dir(&root);
     }
 
     #[test]
@@ -685,11 +685,13 @@ mod tests {
         path
     }
 
-    fn cleanup_temp_dir(path: PathBuf) {
-        if let Err(error) = fs::remove_dir_all(&path) {
-            if error.kind() != io::ErrorKind::NotFound {
-                panic!("failed to cleanup {}: {error}", path.display());
-            }
+    fn cleanup_temp_dir(path: &Path) {
+        if let Err(error) = fs::remove_dir_all(path) {
+            assert!(
+                error.kind() == io::ErrorKind::NotFound,
+                "failed to cleanup {}: {error}",
+                path.display()
+            );
         }
     }
 }
