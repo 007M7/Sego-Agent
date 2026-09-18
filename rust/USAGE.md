@@ -19,7 +19,7 @@ Set up API credentials:
 ```bash
 # DeepSeek (recommended)
 export DEEPSEEK_API_KEY="sk-..."
-export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_MODEL="deepseek-v4.1-flash"
 
 # Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."

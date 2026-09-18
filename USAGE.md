@@ -10,7 +10,10 @@ This guide covers the current Rust workspace under `rust/` and the `sego` CLI bi
   - `DEEPSEEK_API_KEY` for native DeepSeek access (recommended)
   - `ANTHROPIC_API_KEY` for Anthropic access
   - `sego login` for OAuth-based auth
-- Optional: `DEEPSEEK_MODEL` to override the default model (defaults to `deepseek-v4-flash`)
+- Optional: `DEEPSEEK_MODEL` to override the default model (defaults to `deepseek-chat`)
+- The model Sego has provider metadata for is `deepseek-v4.1-flash`, which it maps to the
+  provider's own alias. Any other `deepseek-*` name is passed to the provider unchanged, so a
+  name the provider does not serve fails there rather than in Sego.
 - Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
 
 ## Install for normal users

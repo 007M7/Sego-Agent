@@ -282,7 +282,7 @@ Sego supports DeepSeek and Anthropic models. Set the corresponding environment v
 
 ```powershell
 setx DEEPSEEK_API_KEY "your-key"
-setx DEEPSEEK_MODEL "deepseek-v4-flash"
+setx DEEPSEEK_MODEL "deepseek-v4.1-flash"
 
 # or Anthropic
 setx ANTHROPIC_API_KEY "your-key"
@@ -293,7 +293,7 @@ setx ANTHROPIC_API_KEY "your-key"
 ```bash
 # DeepSeek (recommended: cost-effective)
 export DEEPSEEK_API_KEY="your-key"
-export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_MODEL="deepseek-v4.1-flash"
 
 # or Anthropic
 export ANTHROPIC_API_KEY="your-key"
