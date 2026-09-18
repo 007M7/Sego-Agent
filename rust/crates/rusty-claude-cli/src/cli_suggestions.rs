@@ -12,6 +12,16 @@
 use std::fmt::Write as _;
 
 use commands::slash_command_specs;
+
+/// The program name every guidance message tells the user to run.
+///
+/// Every string that names a command must name the binary the user actually has.
+/// This was not always so: two of these messages said `claw` - a name no build
+/// produces - while their neighbours said `sego`, so the same failure path
+/// suggested a command that cannot run *and* contradicted itself inside a single
+/// sentence. One constant is what keeps the four of them from drifting apart
+/// again; `every_guidance_message_names_the_binary_the_user_runs` asserts it.
+const PROGRAM_NAME: &str = "sego";
 pub(crate) const CLI_OPTION_SUGGESTIONS: &[&str] = &[
     "--help",
     "-h",
@@ -48,11 +58,11 @@ pub(crate) fn bare_slash_command_guidance(command_name: &str) -> Option<String> 
     let slash_command = slash_command_specs().iter().find(|spec| spec.name == command_name)?;
     let guidance = if slash_command.resume_supported {
         format!(
-            "`claw {command_name}` is a slash command. Use `claw --resume SESSION.jsonl /{command_name}` or start `sego` and run `/{command_name}`."
+            "`{PROGRAM_NAME} {command_name}` is a slash command. Use `{PROGRAM_NAME} --resume SESSION.jsonl /{command_name}` or start `{PROGRAM_NAME}` and run `/{command_name}`."
         )
     } else {
         format!(
-            "`claw {command_name}` is a slash command. Start `claw` and run `/{command_name}` inside the REPL."
+            "`{PROGRAM_NAME} {command_name}` is a slash command. Start `{PROGRAM_NAME}` and run `/{command_name}` inside the REPL."
         )
     };
     Some(guidance)
@@ -65,7 +75,7 @@ pub(crate) fn format_unknown_option(option: &str) -> String {
         message.push_str(suggestion);
         message.push('?');
     }
-    message.push_str("\nRun `sego --help` for usage.");
+    message.push_str(&format!("\nRun `{PROGRAM_NAME} --help` for usage."));
     message
 }
 
@@ -76,7 +86,9 @@ pub(crate) fn format_unknown_direct_slash_command(name: &str) -> String {
         message.push('\n');
         message.push_str(&suggestions);
     }
-    message.push_str("\nRun `sego --help` for CLI usage, or start `sego` and use /help.");
+    message.push_str(&format!(
+        "\nRun `{PROGRAM_NAME} --help` for CLI usage, or start `{PROGRAM_NAME}` and use /help."
+    ));
     message
 }
 
@@ -302,5 +314,42 @@ mod tests {
         let guidance = bare_slash_command_guidance("status").expect("status has a slash form");
         assert!(guidance.contains("/status"), "{guidance}");
         assert_eq!(bare_slash_command_guidance("zzzzzzzzzz"), None);
+    }
+    #[test]
+    fn every_guidance_message_names_the_binary_the_user_runs() {
+        // These strings tell the user what to type, so naming a program that does
+        // not exist is worse than saying nothing. Two of them used to say `claw`
+        // while their neighbours said `sego` - one failure path suggesting a
+        // command that cannot run and contradicting itself inside a single
+        // sentence. Iterating the whole spec table covers both branches of the
+        // resume-supported split without naming which command is which.
+        let mut checked = 0;
+        for spec in slash_command_specs() {
+            let Some(guidance) = bare_slash_command_guidance(&spec.name) else {
+                continue;
+            };
+            checked += 1;
+            assert!(
+                guidance.contains(PROGRAM_NAME),
+                "the guidance for /{} must name the binary the user runs:\n{guidance}",
+                spec.name
+            );
+            assert!(
+                !guidance.contains("claw"),
+                "the guidance for /{} must not name a program that does not exist:\n{guidance}",
+                spec.name
+            );
+        }
+        assert!(
+            checked > 0,
+            "no guidance messages were produced, so the loop above proved nothing"
+        );
+
+        for message in
+            [format_unknown_option("--modle"), format_unknown_direct_slash_command("statuz")]
+        {
+            assert!(message.contains(PROGRAM_NAME), "{message}");
+            assert!(!message.contains("claw"), "{message}");
+        }
     }
 }
