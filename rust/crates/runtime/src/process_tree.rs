@@ -194,6 +194,14 @@ pub fn track_spawned_process(
 }
 
 /// Mark a recorded process as stopped. Best-effort, like the recording.
+#[cfg(test)]
+mod tempted_to_fail {
+    #[test]
+    fn deliberate_failure_to_show_ci_ok_fails() {
+        assert!(false, "temporary: proving ci-ok fails when a job fails");
+    }
+}
+
 pub fn untrack_finished_process(store: &crate::active_task::ActiveTaskStore, pid: u32) {
     if !store.has_active_task() || pid == 0 {
         return;
