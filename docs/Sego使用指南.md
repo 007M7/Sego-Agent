@@ -91,7 +91,7 @@ sego --version
 
 ```powershell
 setx DEEPSEEK_API_KEY "sk-你的key"
-setx DEEPSEEK_MODEL "deepseek-v4-flash"
+setx DEEPSEEK_MODEL "deepseek-v4.1-flash"
 ```
 
 设置后关闭旧窗口，重新打开 Sego 或 PowerShell。
@@ -100,7 +100,7 @@ setx DEEPSEEK_MODEL "deepseek-v4-flash"
 
 ```bash
 export DEEPSEEK_API_KEY="sk-你的key"
-export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_MODEL="deepseek-v4.1-flash"
 ```
 
 不要把 API Key 发到群里、截图里、公开仓库里。

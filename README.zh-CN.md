@@ -282,7 +282,7 @@ Sego 支持 DeepSeek 和 Anthropic 模型。设置对应的环境变量：
 
 ```powershell
 setx DEEPSEEK_API_KEY "your-key"
-setx DEEPSEEK_MODEL "deepseek-v4-flash"
+setx DEEPSEEK_MODEL "deepseek-v4.1-flash"
 
 # 或 Anthropic
 setx ANTHROPIC_API_KEY "your-key"
@@ -293,7 +293,7 @@ setx ANTHROPIC_API_KEY "your-key"
 ```bash
 # DeepSeek（推荐，性价比高）
 export DEEPSEEK_API_KEY="your-key"
-export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_MODEL="deepseek-v4.1-flash"
 
 # 或 Anthropic
 export ANTHROPIC_API_KEY="your-key"
