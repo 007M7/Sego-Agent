@@ -287,6 +287,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cli.model_name()),
                 Some(&prompt),
             );
+            // The run was launched to answer this prompt, so that is what it is for.
+            begin_run_task(cli.session_id(), &prompt);
             cli.run_turn_with_output(&prompt, output_format)?;
             persist_recovery_for_cli(
                 runtime::recovery::RecoveryExitState::Graceful,
@@ -295,6 +297,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cli.model_name()),
                 Some(&prompt),
             );
+            complete_run_task();
         }
         CliAction::CodeReview { scope, model, allowed_tools, permission_mode } => {
             run_code_review_cli(model, allowed_tools, permission_mode, scope.as_deref())?;
@@ -528,6 +531,9 @@ fn resume_session(session_path: &Path, commands: &[String]) {
         None,
         None,
     );
+    // The run was launched to continue this session, so the file it restored is
+    // what the ledger should name if the run is interrupted.
+    begin_run_task(&session.session_id, &format!("resume {}", resolved_path.display()));
 
     if commands.is_empty() {
         println!(
@@ -543,6 +549,7 @@ fn resume_session(session_path: &Path, commands: &[String]) {
             None,
             None,
         );
+        complete_run_task();
         return;
     }
 
@@ -581,6 +588,7 @@ fn resume_session(session_path: &Path, commands: &[String]) {
         None,
         None,
     );
+    complete_run_task();
 }
 
 #[derive(Debug, Clone)]
@@ -854,6 +862,10 @@ fn run_repl(
         Some(cli.model_name()),
         None,
     );
+    // A REPL has no goal at launch beyond being a REPL; the first input that
+    // reaches the model replaces this with the user's own words.
+    begin_run_task(cli.session_id(), "repl");
+    let mut goal_recorded = false;
 
     loop {
         editor.set_completions(cli.repl_completion_candidates().unwrap_or_default());
@@ -872,6 +884,7 @@ fn run_repl(
                         Some(cli.model_name()),
                         None,
                     );
+                    complete_run_task();
                     break;
                 }
                 // C20.6-C R5: narrow REPL pre-check for combined commands containing
@@ -965,6 +978,13 @@ fn run_repl(
                     println!("{}", render_nl_intent_miss(&miss));
                     continue;
                 }
+                if !goal_recorded {
+                    // Recorded here rather than at read time: a slash command is
+                    // not what the session is working on, so the goal is the first
+                    // input that actually reaches the model.
+                    note_run_goal(&trimmed);
+                    goal_recorded = true;
+                }
                 match cli.run_turn(&trimmed) {
                     Ok(()) => {}
                     Err(error) if is_turn_cancelled_error(error.as_ref()) => {
@@ -984,6 +1004,7 @@ fn run_repl(
                     Some(cli.model_name()),
                     None,
                 );
+                complete_run_task();
                 break;
             }
         }
@@ -2537,6 +2558,60 @@ fn maybe_print_recovery_notice(should_check: bool) {
     }
 }
 
+/// 台账层：在 session handle 已知后打开本次运行的 ledger 条目。
+///
+/// 粒度 = **一次 `sego` 运行**（Founder 裁定，`SEG-DEV-001` §1.33）：一次运行恰好创建一个
+/// session，所以 session id 就是 task id。goal 是"这次运行被启动来做什么"——带 `--prompt`
+/// 时就是那段文本，裸 REPL 先写动作名，用户真正说出的第一句由 `note_run_goal` 替换。
+///
+/// **这一层为什么非要补上**：`track_process` 走的是 `update_task`，而 `update_task` 需要条目
+/// 已经存在（否则 `NoTask`）。`mcp_stdio` 与 bash 工具早就在调 `record_spawn` /
+/// `record_exit`，但那些调用是 fire-and-forget，错误被丢弃——所以在打开条目之前，
+/// **整套进程记录一直是静默失败的**，而不是"记了但没人看"。
+fn begin_run_task(session_id: &str, goal: &str) {
+    let store = runtime::process_tree::workspace_task_store();
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let repo = find_git_root_in(&cwd).ok().map(|path| path.display().to_string());
+    let branch = resolve_git_branch_for(&cwd);
+    let commit = run_git_capture_in(&cwd, &["rev-parse", "HEAD"]).map(|out| out.trim().to_string());
+
+    // 两次都是尽力而为：台账是恢复的辅助物，打不开条目不应让用户真正要跑的那次运行失败。
+    if store
+        .start_task(
+            session_id,
+            goal,
+            repo.as_deref(),
+            branch.as_deref(),
+            commit.as_deref(),
+            Vec::new(),
+        )
+        .is_ok()
+    {
+        // `start_task` 只写 task 记录；恢复提示是**后来那次运行真正读的东西**，
+        // 所以必须在这里生成，而不是等第一次 `update_task` 顺带写出来。
+        let _ = store.write_recovery_prompt_public();
+    }
+}
+
+/// 用用户自己那句话替换本次运行的 goal，并重生成恢复提示。
+///
+/// `update_task` 会顺带重写 recovery prompt，所以后来那次运行读到的"在做什么"是用户的原话，
+/// 而不是启动标签。
+fn note_run_goal(goal: &str) {
+    let store = runtime::process_tree::workspace_task_store();
+    let _ = store.update_task(|task| task.current_goal = goal.to_string());
+}
+
+/// 干净退出时收口本次运行的 ledger 条目。
+///
+/// **没有这一步，台账就会说谎**：task 文件是"当前活跃任务"的单一记录，只开不关会让下一次
+/// 启动读到一个早已结束、却仍标为 running 的任务（还带着陈旧的进程列表），把"可恢复"
+/// 变成误报。收口与 `persist_recovery_for_cli(Graceful, …)` 成对出现。
+fn complete_run_task() {
+    let store = runtime::process_tree::workspace_task_store();
+    let _ = store.complete_task();
+}
+
 /// session 状态写入层：在 session handle 已知后调用，写入完整 recovery record。
 ///
 /// 错误路径（进程崩溃 / Ctrl+C / 窗口关闭）不会调用本函数写 graceful，
@@ -3989,6 +4064,7 @@ fn run_code_review_cli(
         Some(cli.model_name()),
         Some(scope.unwrap_or("code-review")),
     );
+    begin_run_task(cli.session_id(), &format!("code review: {}", scope.unwrap_or("workspace")));
     cli.run_review_target(target)?;
     persist_recovery_for_cli(
         runtime::recovery::RecoveryExitState::Graceful,
@@ -3997,6 +4073,7 @@ fn run_code_review_cli(
         Some(cli.model_name()),
         Some(scope.unwrap_or("code-review")),
     );
+    complete_run_task();
     Ok(())
 }
 
