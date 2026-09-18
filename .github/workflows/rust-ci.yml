@@ -11,33 +11,19 @@ on:
       - main
       - 'gaebal/**'
       - 'omx-issue-*'
-    paths:
-      - .github/workflows/**
-      - rust/**
-      - schema/**
-      - skills/**
-      - packaging/**
-      - install.ps1
-      - install.sh
-      - start-sego-windows.cmd
-      - AGENTS.md
-      - CONTRIBUTING.md
-      - CHANGELOG.md
+    # No `paths` filter, deliberately.
+    #
+    # A required status check is matched by name, and a workflow that does not
+    # run reports nothing at all: with a path filter, a pull request outside
+    # those paths waits forever on a check that will never arrive, and cannot
+    # merge. Documentation-only changes are common here.
+    #
+    # `DEV-QA-06` widened this list once for the same underlying reason - a
+    # change that does not run its gate is not gated. No list stays complete,
+    # and this repository is public, so the minutes are free.
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/**
-      - rust/**
-      - schema/**
-      - skills/**
-      - packaging/**
-      - install.ps1
-      - install.sh
-      - start-sego-windows.cmd
-      - AGENTS.md
-      - CONTRIBUTING.md
-      - CHANGELOG.md
   workflow_dispatch:
 
 concurrency:
@@ -245,3 +231,39 @@ jobs:
                   sys.exit(f"{path}: x-contract-revision must be an integer")
               print(f"{path}: {document['x-contract-id']} rev {document['x-contract-revision']}")
           PY
+
+  # The check branch protection requires.
+  #
+  # One stable name, so jobs can be added or removed without editing the branch
+  # protection settings, and `skipped` counts as success so a job that
+  # deliberately does not run cannot masquerade as a failure. If any job above
+  # did not succeed, this fails - which is what a merge is then blocked on.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs:
+      - fmt
+      - clippy
+      - test-workspace
+      - test-platforms
+      - dependency-audit
+      - coverage
+      - contracts
+    runs-on: ubuntu-latest
+    # The workflow defaults `run` to `rust/`, which does not exist here: this job
+    # reads the `needs` context and checks nothing out.
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          failed=$(echo "$RESULTS" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key')
+          if [ -n "$failed" ]; then
+            echo "::error::jobs that did not succeed: $(echo $failed | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "all required jobs succeeded or were skipped"
