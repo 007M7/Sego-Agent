@@ -423,8 +423,14 @@ fn is_likely_mutation(command: &str) -> bool {
         first,
         "npm" | "pnpm" | "yarn" | "pip" | "pip3" | "cargo" | "brew" | "apt" | "apt-get" | "choco"
     ) && (lower.contains("install") || lower.contains("add") || lower.contains("update") || lower.contains("upgrade"))
-    // Source edits
-    || matches!(first, "sed" | "awk" | "perl") && is_write_redirect(command)
+    // Source edits. An in-place edit (`sed -i`, `perl -i`) rewrites the file with
+    // no redirect, so a redirect check alone misses it - which is how it used to
+    // land in `UnknownAsk`: still asked, but not named as the mutation it is.
+    // Ported from the retired `bash_validation::validate_sed`, which knew this
+    // and was the only thing in that module the live classifier did not already
+    // do at least as well.
+    || matches!(first, "sed" | "awk" | "perl")
+        && (is_write_redirect(command) || has_in_place_edit(command))
     // File moves / copies into source tree
     || matches!(first, "mv" | "cp" | "copy") && !targets_sego_metadata(command)
     // Git mutations (commit, merge, rebase, etc.) that are not read-only
@@ -436,6 +442,21 @@ fn is_likely_mutation(command: &str) -> bool {
 /// Detect output redirection (`>`, `>>`, `tee`).
 fn is_write_redirect(command: &str) -> bool {
     command.contains('>') || command.contains("tee ")
+}
+
+/// Detect the in-place edit flag that rewrites a file without a redirect.
+///
+/// Only ever consulted for `sed` / `awk` / `perl`, so an unrelated `-i` (a
+/// case-insensitive `grep`, say) cannot reach it - and that matters, because this
+/// helper deliberately matches loosely: `-i`, `-i.bak`, `-i''`, `--in-place`.
+/// Anything it misses still falls through to `UnknownAsk`, which asks, so the
+/// failure mode is a less precise label rather than a wrong decision. That is
+/// also why it does not try to parse the flag properly: the two outcomes above
+/// it are both "ask".
+fn has_in_place_edit(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .any(|token| token == "-i" || token == "--in-place" || token.starts_with("-i."))
 }
 
 /// Git read-only subcommands.
@@ -591,6 +612,45 @@ mod tests {
         assert_eq!(classify_bash_command("cargo install ripgrep"), BashCommandRisk::AskMutation);
         assert_eq!(classify_bash_command("git commit -m msg"), BashCommandRisk::AskMutation);
         assert_eq!(classify_bash_command("git merge feat/x"), BashCommandRisk::AskMutation);
+    }
+
+    #[test]
+    fn in_place_edits_are_named_as_mutations_while_plain_edits_stay_unknown() {
+        // An in-place edit rewrites the file with no redirect, so it is the one
+        // shape a redirect check cannot see.
+        for command in [
+            "sed -i 's/a/b/' src/main.rs",
+            "sed -i.bak 's/a/b/' src/main.rs",
+            "sed --in-place 's/a/b/' src/main.rs",
+            "perl -i -pe 's/a/b/' src/main.rs",
+        ] {
+            assert_eq!(
+                classify_bash_command(command),
+                BashCommandRisk::AskMutation,
+                "{command} rewrites its file in place"
+            );
+        }
+
+        // The guard in the other direction: a filter that does *not* touch its
+        // input must not be promoted to a mutation just because it took a `-i`
+        // (case-insensitive) or a `-n`.
+        assert_eq!(
+            classify_bash_command("grep -i foo src/main.rs"),
+            BashCommandRisk::SafeReadonly,
+            "an unrelated -i must not reach the in-place check"
+        );
+        assert_eq!(
+            classify_bash_command("rg -i foo src"),
+            BashCommandRisk::SafeReadonly,
+            "an unrelated -i must not reach the in-place check"
+        );
+        // Passing through without writing is not a mutation. It stays `UnknownAsk`,
+        // which asks: the point of this change is the label, not the decision.
+        assert_eq!(
+            classify_bash_command("sed -n '1,10p' src/main.rs"),
+            BashCommandRisk::UnknownAsk,
+            "a stream edit that does not write must not be called a mutation"
+        );
     }
 
     #[test]
