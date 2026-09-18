@@ -238,17 +238,18 @@ form of the completeness list in `SEGO-BASELINE-ARCHITECTURE.md` §11.3.
 
 | Property | `sego.review.artifact/v1` (rev 2) | `sego.sidecar.envelope` (rev 1) | `sego.review.index-entry` (rev 1) |
 |---|---|---|---|
-| Version | declared (`schema_version`, `x-contract-revision`) | declared | declared |
-| Stable id | declared (`id`) | **absent** — a response has no request id to correlate on | declared (`id`) |
+| Version | declared (`schema_version`) | declared (`schema_version`) | **contract-level only**: the schema root carries `x-contract-revision`, but an index entry itself has no version field - a consumer reading a line cannot tell which revision wrote it |
+| Revision | declared (`x-contract-revision`), and it is the field a consumer must branch on when two revisions are in circulation - `schema_version` does **not** change for every contract revision | declared (`x-contract-revision`) | declared (`x-contract-revision`) |
+| Stable id | declared (`id`) | partial — a response carries `review_id` always and echoes `invocation_id` when the caller supplied one; the **request** has no server-minted id, so correlation exists only if the caller binds one | declared (`id`) |
 | Provenance | declared (`git_status`, `diff_hash`, engine metadata) | partial (`cwd`, `scope`, `context.diff_hash`) | declared (`json_path`, `markdown_path`) |
 | Idempotency | **not an idempotency key.** A repeat is refused with `artifact_id_conflict`, not deduplicated: same-second repeats for the same diff collide by design | **absent** — retrying a request is a new review, not a replay | **absent** |
 | Permission | enforced in implementation (sidecar forces ReadOnly), **not declared in the schema** | partially: the envelope is machine-only, but the schema states no permission | **absent** |
 | Audit | partial (`invocation_id` when the caller supplies it) | partial (`context.invocation_id` echoed) | **absent** — the index deliberately stays minimal (decision D-5) and carries no invocation id |
 | Expiry | **absent** — artifacts do not expire; they are deleted by the operator or not at all | n/a (request/response) | **absent** |
 | Failure semantics | partial (`parse_status`, `parse_error`, `parse_repair`) | **partial, and weaker than it looks**: `status: "error"` and `error.{code,message}` exist, but `code` is an open string with **no enumeration** and only `message` is required — so the implemented codes (`unknown_model`, `provider_model_conflict`, `invalid_request`, `unsupported_schema_version`, `artifact_id_conflict`, `review_failed`) are **implementation-only and may be absent from the payload**. `no_diff` *is* declared, but as a `parse_status` value rather than an error code | **absent** |
-| Recovery | **absent** — nothing in the contract describes resuming an interrupted review | **absent** | **absent** |
-| Compatibility | partial (`x-contract-revision` exists; no migration mechanism and no converter) | partial (same) | partial (same) |
-| Deprecation window | **absent** — no revision has been retired and no window is defined | **absent** | **absent** |
+| Recovery | **not a contract concern, by decision** — resuming an interrupted review is carried by the runtime (`.sego/recovery`, and the per-run ledger at `.sego/runtime/active_task.json`), not by the artifact. The artifact is written after the work, so there is nothing in it to resume from | same | **absent** — the index is append-only and holds no resumable state |
+| Compatibility | partial — `x-contract-revision` exists; the mechanism is **a revision bump plus a coordinated update on the consuming side, with a migration window written down before the bump** (see the note below). No converter is provided, and that is the policy rather than an omission: a converter that silently reshapes an old artifact would be a second implementation of this contract | partial (same) | partial (same) |
+| Deprecation window | **none is open, and the trigger is stated** — no revision has been retired, so no window is running. Retiring one requires the three things in the note below *before* the bump, not after | same | same |
 
 Two consequences a consumer should act on rather than discover:
 
@@ -269,3 +270,27 @@ Two consequences a consumer should act on rather than discover:
 Filling the **absent** entries is a contract change: it needs a revision bump
 here and a coordinated update on the consuming side, not a field added quietly in
 the implementation.
+
+### Revision bumps, migration windows and retirement
+
+This is the mechanism the Compatibility and Deprecation-window rows refer to.
+It is written here because it is a contract term, and leaving it implicit means
+each revision bump is improvised.
+
+1. **Classify the change before making it.** An additive optional field, a
+   tightened validation, the removal of an unimplemented field, an enum change
+   and a semantic change are five different things. A semantic change is
+   incompatible even when `schema_version` stays `1`, because a consumer cannot
+   see it from the version number.
+2. **Write the migration window down before the bump, not after.** It states
+   either which existing references need migrating and by when, or that there
+   are none and how that was checked. "No window was needed" is a conclusion
+   with evidence, not an omission - the empty window recorded for
+   `sego.review.artifact/v1` rev 2 was accepted on exactly that basis.
+3. **A retirement needs three things before it starts:** the list of consumers
+   affected, the result of migrating them, and an end date for the window. Until
+   all three exist, the revision is not retired and no window is open.
+4. **Do not provide a converter.** An old artifact is evidence of what was
+   reviewed under the contract that was in force; reshaping it into the current
+   shape makes it a second, unreviewed claim about the same work. Consumers that
+   must read both revisions should branch on `x-contract-revision` explicitly.

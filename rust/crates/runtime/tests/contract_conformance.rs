@@ -24,7 +24,7 @@
 //! actually produced (missing keys, undeclared keys, enum drift, stale
 //! examples, contract-id drift).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -444,4 +444,139 @@ fn contract_document_examples_conform_to_the_artifact_schema() {
         artifact_examples >= 1,
         "REVIEW_ARTIFACT_CONTRACT.md must keep at least one full artifact example"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The completeness matrix (DEV-CON-07).
+//
+// `docs/REVIEW_ARTIFACT_CONTRACT.md` §8 states, per contract, which of twelve
+// properties that contract actually carries. It exists because consumers were
+// left to infer it, and the honest answer differs per contract. Being
+// consumer-facing is exactly why it needs a check: a "declared" claim that the
+// schema does not support is worse than no claim at all, because someone will
+// build on it.
+//
+// The rule below is general rather than one assertion per cell: for every cell
+// that claims a contract *declares* something, each backticked identifier in
+// that claim must exist in that contract's schema. That is the drift that
+// actually happens - a field renamed or removed while the prose stays put.
+//
+// It also asserts all twelve property rows exist, because a row quietly deleted
+// is the other way this table stops being a completeness statement.
+// ---------------------------------------------------------------------------
+
+/// The twelve properties the completeness criterion names, in the order §8 uses.
+const COMPLETENESS_PROPERTIES: [&str; 12] = [
+    "Version",
+    "Revision",
+    "Stable id",
+    "Provenance",
+    "Idempotency",
+    "Permission",
+    "Audit",
+    "Expiry",
+    "Failure semantics",
+    "Recovery",
+    "Compatibility",
+    "Deprecation window",
+];
+
+/// The three contracts, in the column order §8 uses.
+const COMPLETENESS_CONTRACTS: [(&str, &str); 3] = [
+    ("sego.review.artifact/v1", "review-artifact"),
+    ("sego.sidecar.envelope", "sidecar-request-response"),
+    ("sego.review.index-entry", "review-index-entry"),
+];
+
+/// Every key name a schema declares anywhere, including the contract metadata
+/// that sits at the root rather than under `properties`.
+fn declared_names(schema: &Value) -> BTreeSet<String> {
+    fn walk(node: &Value, out: &mut BTreeSet<String>) {
+        match node {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    out.insert(key.clone());
+                    walk(value, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(schema, &mut out);
+    out
+}
+
+/// The `| Property | artifact | sidecar | index |` table from §8, keyed by
+/// property name, as three cells.
+fn completeness_matrix(document: &str) -> BTreeMap<String, Vec<String>> {
+    let mut rows = BTreeMap::new();
+    let mut inside = false;
+    for line in document.lines() {
+        if line.starts_with("## 8.") {
+            inside = true;
+            continue;
+        }
+        if inside && line.starts_with("## ") {
+            break;
+        }
+        if !inside || !line.starts_with("| ") {
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        if cells.len() != 4 || cells[0] == "Property" || cells[0].starts_with("---") {
+            continue;
+        }
+        rows.insert(cells[0].to_string(), cells[1..].iter().map(|c| (*c).to_string()).collect());
+    }
+    rows
+}
+
+fn backticked(text: &str) -> Vec<&str> {
+    text.split('`').skip(1).step_by(2).collect()
+}
+
+#[test]
+fn the_completeness_matrix_claims_only_what_the_schemas_declare() {
+    let path = repo_root().join("docs/REVIEW_ARTIFACT_CONTRACT.md");
+    let document = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    let matrix = completeness_matrix(&document);
+
+    for property in COMPLETENESS_PROPERTIES {
+        assert!(
+            matrix.contains_key(property),
+            "the completeness matrix must keep a row for `{property}`; a row removed is a claim withdrawn"
+        );
+    }
+
+    for (index, (contract, file)) in COMPLETENESS_CONTRACTS.iter().enumerate() {
+        let schema = schema(file);
+        let declared = declared_names(&schema);
+
+        for property in COMPLETENESS_PROPERTIES {
+            let Some(cells) = matrix.get(property) else { continue };
+            let cell = &cells[index];
+            if !cell.starts_with("declared") {
+                continue;
+            }
+            let named = backticked(cell);
+            assert!(
+                !named.is_empty(),
+                "{contract}: the `{property}` row says \"declared\" without naming what declares it"
+            );
+            for name in named {
+                assert!(
+                    declared.contains(name),
+                    "{contract} does not declare `{name}`, but the completeness matrix says it does \
+                     (row `{property}`: {cell})"
+                );
+            }
+        }
+    }
 }
