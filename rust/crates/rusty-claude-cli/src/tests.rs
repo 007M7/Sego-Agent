@@ -5,21 +5,22 @@
 //! `main.rs`, so nothing in the import list had to change.
 
 use super::{
-    bughunter_prompt, build_review_summary_json_value, build_runtime_plugin_state_with_loader,
-    build_runtime_with_plugin_state, create_managed_session_handle, default_model,
-    describe_tool_progress, display_path_for_user, filter_tool_specs, format_bughunter_report,
-    format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
-    format_cost_report, format_internal_prompt_progress_line, format_issue_report,
-    format_model_report, format_model_switch_report, format_permissions_report,
-    format_permissions_switch_report, format_pr_report, format_resume_report,
-    format_review_completion_summary, format_status_report, format_tool_call_start,
-    format_tool_result, format_ultraplan_report, format_unknown_slash_command,
-    format_unknown_slash_command_message, generate_review_card_for, is_git_worktree,
-    is_no_assistant_response_export_error, is_turn_cancelled_message, latest_review_index_entry,
-    non_git_review_error, normalize_permission_mode, parse_args, parse_git_status_branch,
-    parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy, print_help_to,
-    push_output_block, render_code_review_readiness_for, render_code_review_summary_for,
-    render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
+    begin_run_task, bughunter_prompt, build_review_summary_json_value,
+    build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state, complete_run_task,
+    create_managed_session_handle, default_model, describe_tool_progress, display_path_for_user,
+    filter_tool_specs, format_bughunter_report, format_commit_preflight_report,
+    format_commit_skipped_report, format_compact_report, format_cost_report,
+    format_internal_prompt_progress_line, format_issue_report, format_model_report,
+    format_model_switch_report, format_permissions_report, format_permissions_switch_report,
+    format_pr_report, format_resume_report, format_review_completion_summary, format_status_report,
+    format_tool_call_start, format_tool_result, format_ultraplan_report,
+    format_unknown_slash_command, format_unknown_slash_command_message, generate_review_card_for,
+    is_git_worktree, is_no_assistant_response_export_error, is_turn_cancelled_message,
+    latest_review_index_entry, non_git_review_error, normalize_permission_mode, note_run_goal,
+    parse_args, parse_git_status_branch, parse_git_status_metadata_for,
+    parse_git_workspace_summary, permission_policy, print_help_to, push_output_block,
+    render_code_review_readiness_for, render_code_review_summary_for, render_config_report,
+    render_diff_report, render_diff_report_for, render_memory_report,
     render_natural_language_directory, render_repl_help, render_resume_usage, resolve_model_alias,
     resolve_review_entry, resolve_session_reference, response_to_events,
     resume_supported_slash_commands, run_resume_command,
@@ -3593,4 +3594,110 @@ fn every_tool_in_the_default_set_actually_exists() {
         "the default tool set names tools the registry does not have: {missing:?}
          available: {available:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The run ledger: one entry per `sego` run (SEG-DEV-001 §1.33).
+//
+// These drive the three helpers the CLI calls, in an isolated workspace, so the
+// assertions are on the files a later run would actually read. No model and no
+// network are involved: the ledger is written before and after the work, not
+// during it.
+// ---------------------------------------------------------------------------
+
+fn read_ledger_task(root: &Path) -> serde_json::Value {
+    let path = root.join(".sego").join("runtime").join("active_task.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the run must write {}: {error}", path.display()));
+    serde_json::from_str(&text).expect("the ledger entry must be json")
+}
+
+fn read_recovery_prompt(root: &Path) -> String {
+    let path = root.join(".sego").join("runtime").join("recovery_prompt.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the run must write {}: {error}", path.display()))
+}
+
+#[test]
+fn a_run_opens_a_ledger_entry_and_says_what_it_is_for() {
+    with_isolated_workspace(|root| {
+        begin_run_task("session-under-test", "reproduce the flake");
+        let task = read_ledger_task(root);
+
+        assert_eq!(task["task_id"], "session-under-test");
+        assert_eq!(task["current_goal"], "reproduce the flake");
+        assert_eq!(task["status"], "running", "a run that just started is running: {task}");
+
+        // `start_task` writes only the task record, so the prompt - the thing a
+        // later run reads - has to be generated in the same breath. Without it the
+        // entry exists but nothing points at it.
+        let prompt = read_recovery_prompt(root);
+        assert!(
+            prompt.contains("Current goal: reproduce the flake"),
+            "the recovery prompt must name the goal:\n{prompt}"
+        );
+    });
+}
+
+#[test]
+fn the_goal_is_replaced_by_the_users_own_words_and_the_prompt_follows() {
+    with_isolated_workspace(|root| {
+        begin_run_task("s", "repl");
+        note_run_goal("make the failing test pass");
+
+        assert_eq!(read_ledger_task(root)["current_goal"], "make the failing test pass");
+        let prompt = read_recovery_prompt(root);
+        assert!(
+            prompt.contains("Current goal: make the failing test pass"),
+            "the prompt must follow the goal, not keep the launch label:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("Current goal: repl"),
+            "the launch label must not survive once the user has said what they want:\n{prompt}"
+        );
+    });
+}
+
+#[test]
+fn completing_a_run_marks_the_entry_done_rather_than_leaving_it_running() {
+    with_isolated_workspace(|root| {
+        begin_run_task("s", "g");
+        complete_run_task();
+        let task = read_ledger_task(root);
+
+        // Leaving it at `running` would make the next launch read a task that
+        // finished hours ago as still in flight - a recovery notice for something
+        // that is not there to recover.
+        assert_eq!(task["status"], "completed", "a finished run must not read as running: {task}");
+        assert!(
+            task["completed_at"].is_string(),
+            "a completed run has to say when it completed: {task}"
+        );
+    });
+}
+
+#[test]
+fn recording_a_process_needs_the_run_entry_to_exist_first() {
+    with_isolated_workspace(|root| {
+        let store = runtime::process_tree::workspace_task_store();
+
+        // This is why opening the entry is not cosmetic. `track_process` goes
+        // through `update_task`, which loads the entry and fails with `NoTask` when
+        // there is none - and every caller discards that result, so the spawn/exit
+        // recording that `mcp_stdio` and the bash tool already perform had been
+        // failing silently rather than recording anything.
+        assert!(
+            store.track_process(4242, "sleep 1", ".", None, "test").is_err(),
+            "recording a process before a run has opened its entry must fail loudly here, \
+             because in production the same call fails silently"
+        );
+
+        begin_run_task("s", "g");
+        store
+            .track_process(4242, "sleep 1", ".", None, "test")
+            .expect("with an entry open, a spawned process can be recorded");
+
+        let task = read_ledger_task(root);
+        assert_eq!(task["running_processes"][0]["pid"], 4242, "{task}");
+    });
 }
