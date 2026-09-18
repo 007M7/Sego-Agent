@@ -250,6 +250,11 @@ jobs:
       - coverage
       - contracts
     runs-on: ubuntu-latest
+    # The workflow defaults `run` to `rust/`, which does not exist here: this job
+    # reads the `needs` context and checks nothing out.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Every required job succeeded
         env:
