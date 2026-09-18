@@ -93,6 +93,11 @@ jobs:
   test-workspace:
     name: cargo test --workspace
     runs-on: ubuntu-latest
+    env:
+      # The Python-dependent tests must fail here rather than skip: this job
+      # provisions an interpreter on purpose, so a skip would mean the coverage
+      # recorded for this platform had silently gone away again (DEV-QA-07).
+      SEGO_REQUIRE_PYTHON: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -113,6 +118,11 @@ jobs:
     # platform-specific (sandboxing, PowerShell, path handling). A single
     # Ubuntu runner cannot see a Windows-only regression.
     runs-on: ${{ matrix.os }}
+    env:
+      # The Python-dependent tests must fail here rather than skip: this job
+      # provisions an interpreter on purpose, so a skip would mean the coverage
+      # recorded for this platform had silently gone away again (DEV-QA-07).
+      SEGO_REQUIRE_PYTHON: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -125,6 +135,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: rust -> target
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
       - name: Run all tests
         run: cargo test --workspace
 
@@ -165,6 +178,11 @@ jobs:
   coverage:
     name: coverage floor
     runs-on: ubuntu-latest
+    env:
+      # The Python-dependent tests must fail here rather than skip: this job
+      # provisions an interpreter on purpose, so a skip would mean the coverage
+      # recorded for this platform had silently gone away again (DEV-QA-07).
+      SEGO_REQUIRE_PYTHON: '1'
     defaults:
       run:
         working-directory: rust
@@ -177,6 +195,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: rust -> target
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
       - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2
         with:
           tool: cargo-llvm-cov

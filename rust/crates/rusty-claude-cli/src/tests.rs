@@ -185,31 +185,62 @@ impl Drop for EnvVarGuard {
     }
 }
 
-fn python_command() -> String {
-    std::env::var("PYTHON").unwrap_or_else(|_| {
-        if cfg!(windows) {
-            "python".to_string()
-        } else {
-            "python3".to_string()
+/// The interpreters to try, in the order the product tries them.
+///
+/// This list is not a local choice: `tools::resolve_repl_runtime` is the
+/// authority, and it tries `python`, `py`, `python3` on Windows and `python3`,
+/// `python` elsewhere. A probe that is *stricter* than the product does not
+/// protect anything - it loses coverage, by skipping on hosts where the product
+/// works. That was the case here, which tried a single name while the product
+/// tried three.
+fn python_candidates() -> Vec<String> {
+    if let Ok(explicit) = std::env::var("PYTHON") {
+        if !explicit.trim().is_empty() {
+            return vec![explicit];
         }
-    })
+    }
+    if cfg!(windows) {
+        ["python", "py", "python3"].iter().map(|name| (*name).to_string()).collect()
+    } else {
+        ["python3", "python"].iter().map(|name| (*name).to_string()).collect()
+    }
 }
 
-/// True when the interpreter this host would use actually runs.
+/// True when `candidate` actually runs.
 ///
-/// Resolving a name is not the same as having a working interpreter: on
-/// macOS `/usr/bin/python3` can be a shim that refuses to run, and on
-/// Windows the name may resolve only to the Store alias stub. Tests whose
-/// fixture is a Python script cannot tell that apart from the product
-/// failing to discover an MCP server, so they check first.
-fn python_is_usable() -> bool {
-    std::process::Command::new(python_command())
+/// Resolving a name is not the same as having a working interpreter: on macOS
+/// `/usr/bin/python3` can be a shim that refuses to run, and on Windows the name
+/// may resolve only to the Store alias stub - which is what this machine does
+/// for `python3`. Tests whose fixture is a Python script cannot tell that apart
+/// from the product failing to discover an MCP server, so they check first.
+fn python_runs(candidate: &str) -> bool {
+    std::process::Command::new(candidate)
         .args(["-c", "print(1)"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// The first interpreter that runs, or `None` when the host has none.
+fn usable_python() -> Option<String> {
+    python_candidates().into_iter().find(|candidate| python_runs(candidate))
+}
+
+/// Give up on a Python-dependent test, unless CI said an interpreter is required.
+///
+/// A skip in a green run is easy to miss, which is how a real coverage loss
+/// stays invisible; CI sets `SEGO_REQUIRE_PYTHON` on the jobs that provision an
+/// interpreter, so there it fails instead.
+fn skip_without_python(test_name: &str) {
+    let candidates = python_candidates();
+    assert!(
+        std::env::var("SEGO_REQUIRE_PYTHON").is_err(),
+        "{test_name} needs a Python interpreter and this job requires one, but none of \
+         {candidates:?} runs here"
+    );
+    eprintln!("skipping {test_name}: none of {candidates:?} is a working interpreter on this host");
 }
 
 #[test]
@@ -2824,14 +2855,12 @@ fn build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers()
     // interpreter to exist at all. Without the check, a host that only has
     // a non-running python shim reports "mcp tools should be allow-listable"
     // - a product defect - when the real situation is a missing fixture.
-    if !python_is_usable() {
-        eprintln!(
-                "skipping build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers: \
-                 `{}` is not a working interpreter on this host",
-                python_command()
-            );
+    let Some(python) = usable_python() else {
+        skip_without_python(
+            "build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers",
+        );
         return;
-    }
+    };
     let config_home = temp_dir();
     let workspace = temp_dir();
     fs::create_dir_all(&config_home).expect("config home");
@@ -2841,11 +2870,11 @@ fn build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers()
     let settings = json!({
         "mcpServers": {
             "alpha": {
-                "command": python_command(),
+                "command": python.clone(),
                 "args": [script_path.to_string_lossy()]
             },
             "broken": {
-                "command": python_command(),
+                "command": python.clone(),
                 "args": ["-c", "import sys; sys.exit(0)"]
             }
         }
