@@ -200,3 +200,47 @@ fn repl_runs_a_model_turn_and_renders_the_answer() {
     let state = workspace.exit_state().expect("the REPL must write its exit state");
     assert_eq!(state["state"], "graceful", "the turn must not disturb the exit record: {state}");
 }
+
+#[test]
+fn repl_bughunter_asks_the_model_about_the_scope_it_was_given() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+    let server =
+        runtime.block_on(MockAnthropicService::spawn()).expect("mock service should start");
+    let workspace = Workspace::create("bughunter");
+
+    // The scope goes into the instruction, and the mock answers the scenario named
+    // in it. So the answer coming back proves the whole path: `/bughunter` ->
+    // `run_internal_prompt_text` -> the endpoint, with the scope carried along.
+    let script = format!(
+        "/bughunter {SCENARIO_PREFIX}streaming_text
+/exit
+"
+    );
+    let output = run_repl_session(
+        &workspace,
+        &server.base_url(),
+        &script,
+        &["--permission-mode", "read-only"],
+    );
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("Mock streaming says hello from the parity harness."),
+        "`/bughunter` must reach the model and print its answer:
+{stdout}"
+    );
+    // The header still describes the command; the hunt is what follows it. Both
+    // are asserted because the regression this guards against is one of them
+    // replacing the other.
+    assert!(
+        stdout.contains("Bughunter"),
+        "the header must still be printed:
+{stdout}"
+    );
+    assert!(
+        stdout.contains("Scope"),
+        "the header must still name the scope:
+{stdout}"
+    );
+}

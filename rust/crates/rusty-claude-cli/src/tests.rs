@@ -5,7 +5,7 @@
 //! `main.rs`, so nothing in the import list had to change.
 
 use super::{
-    build_review_summary_json_value, build_runtime_plugin_state_with_loader,
+    bughunter_prompt, build_review_summary_json_value, build_runtime_plugin_state_with_loader,
     build_runtime_with_plugin_state, create_managed_session_handle, default_model,
     describe_tool_progress, display_path_for_user, filter_tool_specs, format_bughunter_report,
     format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
@@ -3550,4 +3550,47 @@ fn status_context_reports_the_workspace_and_carries_the_session_path() {
         assert_eq!((context.git_summary.changed_files, context.git_summary.staged_files), (0, 0));
         assert_eq!(context.git_branch, None, "no repository means no branch to name");
     });
+}
+
+#[test]
+fn bughunter_prompt_names_the_scope_and_asks_for_an_honest_empty_result() {
+    let default_scope = bughunter_prompt(None);
+    assert!(default_scope.contains("the current repository"), "{default_scope}");
+
+    let scoped = bughunter_prompt(Some("src/parser"));
+    assert!(scoped.contains("src/parser"), "the scope must reach the instruction: {scoped}");
+    assert!(
+        !scoped.contains("the current repository"),
+        "an explicit scope must replace the default rather than sit beside it: {scoped}"
+    );
+
+    // A bug hunt that must return findings will return invented ones, so the
+    // instruction has to make "nothing found" an allowed answer. This is the same
+    // distinction the review path draws when it refuses to render a failed parse
+    // as `Findings 0`.
+    assert!(scoped.contains("if you find none, say so plainly"), "{scoped}");
+    // And a finding nobody can locate is not actionable.
+    assert!(scoped.contains("file path"), "{scoped}");
+    assert!(scoped.contains("severity"), "{scoped}");
+}
+
+#[test]
+fn every_tool_in_the_default_set_actually_exists() {
+    // The default (no `--allowedTools`) set is filtered by exact name against the
+    // registry, and the registry's read/write/edit/search tools are named
+    // `read_file` / `write_file` / `edit_file` / `grep_search` / `glob_search`.
+    // The alias table that maps the short forms lives in `normalize_allowed_tools`
+    // and is *not* consulted here, so a short name in this set matches nothing and
+    // is silently dropped. This asserts the set against the registry so a dead
+    // entry cannot hide again.
+    let registry = crate::current_tool_registry().expect("tool registry");
+    let available: std::collections::BTreeSet<String> =
+        registry.definitions(None).into_iter().map(|spec| spec.name).collect();
+    let missing: Vec<&String> =
+        super::LITE_TOOLS.iter().filter(|name| !available.contains(*name)).collect();
+    assert!(
+        missing.is_empty(),
+        "the default tool set names tools the registry does not have: {missing:?}
+         available: {available:?}"
+    );
 }

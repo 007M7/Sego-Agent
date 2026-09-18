@@ -2356,8 +2356,14 @@ impl LiveCli {
         self.run_internal_prompt_text_with_progress(prompt, enable_tools, None)
     }
 
-    fn run_bughunter(&self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_bughunter(&mut self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", format_bughunter_report(scope));
+        // The header above describes the command; this is the command doing it.
+        // Before this, `/bughunter` printed only that description - a spec card
+        // for a bug hunt, with no hunt behind it.
+        println!();
+        let report = self.run_internal_prompt_text(&bughunter_prompt(scope), true)?;
+        println!("{report}");
         Ok(())
     }
 
@@ -4839,6 +4845,37 @@ fn format_bughunter_report(scope: Option<&str>) -> String {
     )
 }
 
+/// What `/bughunter` asks the model to do.
+///
+/// Separate from the report header on purpose: the header describes the command
+/// to the user, this is the instruction sent to the model, and keeping them apart
+/// means the instruction can be asserted without a model in the loop.
+///
+/// Two sentences here are load-bearing, and both came out of running the command
+/// against a real model rather than a fixture:
+///
+/// - **Use the file-reading tools rather than shell commands.** The first live
+///   run was in read-only mode, where the shell is refused: the model reached for
+///   `cat` through bash, was denied before it ran anything, and correctly replied
+///   that it would not guess at a file it had not read. The wiring was right and
+///   the command still could not do its job. Reading is exactly what read-only
+///   mode permits, so the instruction now points at the tool that works there.
+/// - **If you find none, say so plainly.** A model told to hunt bugs will produce
+///   some; allowing "nothing found" as an answer is what keeps a clean result
+///   readable as "nothing found" rather than as a report that ran out of room -
+///   the same distinction the review path draws when it refuses to render a failed
+///   parse as `Findings 0`.
+fn bughunter_prompt(scope: Option<&str>) -> String {
+    format!(
+        "Inspect {} for likely bugs and correctness issues. Use the file-reading tools to read \
+         what you need rather than shell commands, because the shell is not available in every \
+         permission mode. For each finding give the file path, the severity, what goes wrong, \
+         and a suggested fix. Report only defects you can point at in the code; if you find \
+         none, say so plainly instead of listing speculative concerns.",
+        scope.unwrap_or("the current repository")
+    )
+}
+
 fn format_ultraplan_report(task: Option<&str>) -> String {
     format!(
         "Ultraplan
@@ -5972,25 +6009,41 @@ const READ_DISPLAY_MAX_CHARS: usize = 3_000;
 const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 15;
 const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 1_500;
 
-/// Default token-saving tool set — only the 15 most-used tools
+/// Default token-saving tool set - the most-used tools, minus the long tail.
+///
+/// These must be the **registry's** names. They are matched by exact string in
+/// `GlobalToolRegistry::definitions`, and the short aliases (`read`, `write`, …)
+/// that users may type in `--allowedTools` are resolved only inside
+/// `normalize_allowed_tools` - never here. The set used to be written in those
+/// short aliases, so fifteen of its sixteen entries matched nothing and were
+/// silently filtered out: **the effective default tool set was `bash` alone**.
+/// With the default read-only permission mode refusing `bash`, that left the
+/// model unable to read a file at all. `every_tool_in_the_default_set_actually_exists`
+/// now asserts this list against the registry so a dead entry cannot hide again.
+///
+/// `task` mapped to `TaskCreate`. The registry has since split that tool into a
+/// family (`TaskCreate`, `TaskGet`, `TaskList`, `TaskStop`, `TaskUpdate`,
+/// `TaskOutput`, `RunTaskPacket`); `TaskCreate` is the entry point, and which of
+/// the rest belong in a *lite* set is a product choice rather than something to
+/// guess at here.
 static LITE_TOOLS: std::sync::LazyLock<AllowedToolSet> = std::sync::LazyLock::new(|| {
     [
         "bash",
-        "read",
-        "write",
-        "edit",
-        "grep",
-        "glob",
-        "web_search",
-        "web_fetch",
-        "agent",
-        "todo_write",
-        "task",
-        "ask_user_question",
-        "skill",
-        "notebook_edit",
-        "enter_plan_mode",
-        "exit_plan_mode",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "grep_search",
+        "glob_search",
+        "WebSearch",
+        "WebFetch",
+        "Agent",
+        "TodoWrite",
+        "TaskCreate",
+        "AskUserQuestion",
+        "Skill",
+        "NotebookEdit",
+        "EnterPlanMode",
+        "ExitPlanMode",
     ]
     .iter()
     .map(|s| s.to_string())
