@@ -215,7 +215,7 @@ jobs:
             ```bash
             # DeepSeek recommended
             export DEEPSEEK_API_KEY=sk-your-key
-            export DEEPSEEK_MODEL=deepseek-v4-flash
+            export DEEPSEEK_MODEL=deepseek-v4.1-flash
 
             # Or Anthropic
             export ANTHROPIC_API_KEY=sk-your-key
