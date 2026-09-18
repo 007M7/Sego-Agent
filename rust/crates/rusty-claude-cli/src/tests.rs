@@ -3584,16 +3584,26 @@ fn every_tool_in_the_default_set_actually_exists() {
     // and is *not* consulted here, so a short name in this set matches nothing and
     // is silently dropped. This asserts the set against the registry so a dead
     // entry cannot hide again.
-    let registry = crate::current_tool_registry().expect("tool registry");
-    let available: std::collections::BTreeSet<String> =
-        registry.definitions(None).into_iter().map(|spec| spec.name).collect();
-    let missing: Vec<&String> =
-        super::LITE_TOOLS.iter().filter(|name| !available.contains(*name)).collect();
-    assert!(
-        missing.is_empty(),
-        "the default tool set names tools the registry does not have: {missing:?}
-         available: {available:?}"
-    );
+    //
+    // `current_tool_registry` begins at `env::current_dir()`, and other tests in
+    // this file switch the process cwd to a temporary workspace while they run.
+    // Reading it without taking their lock means reading whichever directory they
+    // happened to be in - on Windows, one that had already been removed. Naming a
+    // directory that always exists, under the same lock, makes the read
+    // deterministic; nothing here depends on *which* directory it is.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    with_current_dir(&crate_dir, || {
+        let registry = crate::current_tool_registry().expect("tool registry");
+        let available: std::collections::BTreeSet<String> =
+            registry.definitions(None).into_iter().map(|spec| spec.name).collect();
+        let missing: Vec<&String> =
+            super::LITE_TOOLS.iter().filter(|name| !available.contains(*name)).collect();
+        assert!(
+            missing.is_empty(),
+            "the default tool set names tools the registry does not have: {missing:?}
+             available: {available:?}"
+        );
+    });
 }
 
 // ---------------------------------------------------------------------------
