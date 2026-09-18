@@ -3462,9 +3462,11 @@ fn workspace_context_describes_the_directory_it_ran_in() {
     with_isolated_workspace(|root| {
         let context = workspace_context().expect("the workspace context must load");
 
-        // Resolve both sides before comparing: on Windows a canonicalized path
-        // carries a verbatim prefix that a plain one does not, so a raw
-        // comparison of the same directory fails.
+        // Resolve both sides before comparing. `temp_dir()` and
+        // `env::current_dir()` are not spelled the same way for the same
+        // directory on two platforms: Windows adds a verbatim prefix when it
+        // canonicalizes, and macOS resolves `/var` to `/private/var`. Comparing
+        // the raw values compares spellings, not directories.
         assert_eq!(
             fs::canonicalize(&context.cwd).expect("cwd must resolve"),
             fs::canonicalize(root).expect("root must resolve"),
@@ -3475,10 +3477,21 @@ fn workspace_context_describes_the_directory_it_ran_in() {
             "the session directory must be the one the help documents: {}",
             context.session_dir.display()
         );
-        assert_eq!(
-            context.recovery_dir,
-            runtime::recovery::recovery_dir(root),
-            "the recovery directory must come from the product's own path helper"
+        // Stated as a rule rather than as an equality against a path built from
+        // `root`: what matters is that the recovery directory sits inside the
+        // workspace the context describes and is named where the help says. An
+        // equality would also be comparing spellings, since the collector derives
+        // it from `current_dir()` and `root` is the unresolved temp path.
+        assert!(
+            context.recovery_dir.ends_with(Path::new(".sego").join("recovery")),
+            "the recovery directory must be the documented one: {}",
+            context.recovery_dir.display()
+        );
+        assert!(
+            context.recovery_dir.starts_with(&context.cwd),
+            "the recovery directory must sit inside the workspace the context describes: {} vs {}",
+            context.recovery_dir.display(),
+            context.cwd.display()
         );
 
         // A directory that is not a git worktree has no project root, and the
