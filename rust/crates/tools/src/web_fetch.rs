@@ -178,6 +178,10 @@ fn blocked_fetch_host(host: &str, allow_loopback: bool) -> Option<&'static str> 
     if matches!(host.as_str(), "metadata" | "metadata.google.internal" | "instance-data") {
         return Some("cloud metadata endpoint");
     }
+    // `host` is a DNS name that was lower-cased a few lines above, so the
+    // case-insensitive comparison clippy asks for is already done. The lint
+    // reads any `.suffix` as a file extension.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if host.ends_with(".local") {
         return Some("mDNS host name");
     }
@@ -220,9 +224,7 @@ fn blocked_fetch_ipv4(address: std::net::Ipv4Addr, allow_loopback: bool) -> Opti
         Some("private address")
     } else if address.is_link_local() {
         Some("link-local address")
-    } else if address.is_unspecified() || address.is_broadcast() {
-        Some("reserved address")
-    } else if octets[0] == 0 {
+    } else if address.is_unspecified() || address.is_broadcast() || octets[0] == 0 {
         Some("reserved address")
     } else if octets[0] == 100 && (64..=127).contains(&octets[1]) {
         Some("carrier-grade NAT address")

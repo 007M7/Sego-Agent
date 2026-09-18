@@ -39,7 +39,7 @@ Quality and trust on top of the existing review workflow.
 - **Install verification and tag-pinned install guidance** — make it easier for new users to verify they installed a real Sego release and pin to a known version.
 - **Release provenance and signing** — improve integrity of release artifacts beyond the current checksum file.
 - **Windows / macOS CI matrix** — extend pre-merge CI coverage so platform-specific regressions are caught earlier.
-- **CI quality gate hardening** — turn currently advisory checks into blocking ones as the warning baseline becomes clean.
+- **CI quality gate hardening** — turn the remaining advisory checks into blocking ones. Clippy is done: the pedantic baseline is clear and the job blocks.
 - **Public docs cleanup** — keep README, USAGE, and the Chinese user guide aligned with the latest release behavior; avoid stale wording or internal vocabulary leaking into public docs.
 
 ---

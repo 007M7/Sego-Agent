@@ -261,7 +261,7 @@ fn pending_security_items_are_recorded_rather_than_assumed() {
 }
 
 /// The lines of one top-level job in a workflow, from its key to the next key.
-fn job_block<'a>(workflow: &'a str, job: &str) -> String {
+fn job_block(workflow: &str, job: &str) -> String {
     let lines: Vec<&str> = workflow.lines().collect();
     let key = format!("{job}:");
     let Some(start) = lines.iter().position(|line| line.trim_end() == format!("  {key}")) else {

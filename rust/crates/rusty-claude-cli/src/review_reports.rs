@@ -429,7 +429,7 @@ impl CodeReviewReadinessReport {
 pub(crate) fn build_review_summary_json_value(
     requested_id: &str,
     entry: &ReviewIndexEntry,
-    status_counts: ReviewFindingStatusCounts,
+    status_counts: &ReviewFindingStatusCounts,
 ) -> serde_json::Value {
     let highest_severity = entry.highest_severity.map(runtime::ReviewSeverity::label);
     let summary_kind =
@@ -734,7 +734,7 @@ mod tests {
             },
         );
         let counts = ReviewFindingStatusCounts::from_entries(&statuses);
-        let value = build_review_summary_json_value("latest", &index_entry(), counts);
+        let value = build_review_summary_json_value("latest", &index_entry(), &counts);
         assert_eq!(value["kind"], "sego_latest_review_summary");
         assert_eq!(value["review"]["id"], "review-1-abcdef");
         // The counts sit beside the review object, not inside it.

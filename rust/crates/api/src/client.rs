@@ -143,7 +143,7 @@ pub fn read_deepseek_base_url() -> String {
     openai_compat::read_base_url(OpenAiCompatConfig::deepseek())
 }
 
-/// Base URL the OpenAI-compatible client will use for the OpenAI provider.
+/// Base URL the OpenAI-compatible client will use for the `OpenAI` provider.
 ///
 /// Closes the accessor gap recorded as PROV-M03, so `resolved_endpoint` can be
 /// reported for every provider Sego routes to instead of being omitted with a

@@ -261,7 +261,9 @@ pub fn attempt_recovery(scenario: &FailureScenario, ctx: &mut RecoveryContext) -
             RecoveryResult::PartialRecovery { recovered: executed, remaining }
         }
     } else {
-        RecoveryResult::Recovered { steps_taken: recipe.steps.len() as u32 }
+        RecoveryResult::Recovered {
+            steps_taken: u32::try_from(recipe.steps.len()).unwrap_or(u32::MAX),
+        }
     };
 
     // Emit the attempt as structured event data.
@@ -304,13 +306,11 @@ mod tests {
             );
             assert!(
                 !recipe.steps.is_empty(),
-                "recipe for {} should have at least one step",
-                scenario
+                "recipe for {scenario} should have at least one step"
             );
             assert!(
                 recipe.max_attempts >= 1,
-                "recipe for {} should allow at least one attempt",
-                scenario
+                "recipe for {scenario} should allow at least one attempt"
             );
         }
     }

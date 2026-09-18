@@ -74,7 +74,7 @@ jobs:
         run: cargo fmt --all --check
 
   clippy:
-    name: cargo clippy (advisory)
+    name: cargo clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -86,10 +86,9 @@ jobs:
         with:
           workspaces: rust -> target
       - name: Lint workspace
-        # Advisory until the pre-existing pedantic-warning baseline is cleared;
-        # see AGENTS.md. Do not add new warnings.
-        run: cargo clippy --workspace --all-targets
-    continue-on-error: true
+        # A gate, like fmt and the tests. The workspace enables `clippy::all`
+        # and `clippy::pedantic` in `[workspace.lints]`, so this covers both.
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test-workspace:
     name: cargo test --workspace

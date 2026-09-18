@@ -171,7 +171,8 @@ impl CommunityLearning {
                 let enabled = parsed["enabled"].as_bool().unwrap_or(false);
                 let device_id = parsed["device_id"].as_str().unwrap_or("").to_string();
                 let device_id = if device_id.is_empty() { generate_device_id() } else { device_id };
-                let session_count = parsed["session_count"].as_u64().unwrap_or(0) as u32;
+                let session_count = u32::try_from(parsed["session_count"].as_u64().unwrap_or(0))
+                    .unwrap_or(u32::MAX);
                 (enabled, device_id, session_count)
             }
             Err(_) => (false, generate_device_id(), 0),
@@ -288,6 +289,8 @@ mod tests {
     }
 
     fn rand_id() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
     }
 }

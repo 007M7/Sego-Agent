@@ -20,7 +20,7 @@ pub enum LspAction {
 
 impl LspAction {
     #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "diagnostics" => Some(Self::Diagnostics),
             "hover" => Some(Self::Hover),
@@ -244,7 +244,7 @@ impl LspRegistry {
         _query: Option<&str>,
     ) -> Result<serde_json::Value, String> {
         let lsp_action =
-            LspAction::from_str(action).ok_or_else(|| format!("unknown LSP action: {action}"))?;
+            LspAction::parse(action).ok_or_else(|| format!("unknown LSP action: {action}"))?;
 
         // For diagnostics, we can check existing cached diagnostics
         if lsp_action == LspAction::Diagnostics {
@@ -437,7 +437,7 @@ mod tests {
         // when
         let resolved: Vec<_> = cases
             .into_iter()
-            .map(|(input, expected)| (input, LspAction::from_str(input), expected))
+            .map(|(input, expected)| (input, LspAction::parse(input), expected))
             .collect();
 
         // then

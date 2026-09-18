@@ -23,7 +23,7 @@ impl ReviewScope {
             "staged" | "--staged" | "cached" | "--cached" => Ok(Self::Staged),
             "unstaged" | "--unstaged" | "working" | "worktree" => Ok(Self::Unstaged),
             // --full [path]  → FullRepo audit (C20)
-            raw if raw == "--full" => Ok(Self::FullRepo(PathBuf::from("."))),
+            "--full" => Ok(Self::FullRepo(PathBuf::from("."))),
             raw if raw.starts_with("--full ") => {
                 let path = raw["--full ".len()..].trim();
                 if path.is_empty() {

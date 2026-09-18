@@ -107,9 +107,9 @@ impl WorkflowSnapshot {
                     }
                 }
             }
-            RecoveryEvent::RecoverySucceeded => {}
-            RecoveryEvent::RecoveryFailed => {}
-            RecoveryEvent::Escalated => {}
+            RecoveryEvent::RecoverySucceeded
+            | RecoveryEvent::RecoveryFailed
+            | RecoveryEvent::Escalated => {}
         }
     }
 

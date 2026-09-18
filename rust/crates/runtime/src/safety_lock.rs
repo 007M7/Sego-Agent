@@ -716,7 +716,8 @@ mod tests {
     #[test]
     fn warns_and_skips_large_files() {
         let root = temp_dir("large");
-        let content = "x".repeat(MAX_FILE_BYTES as usize + 1);
+        let content =
+            "x".repeat(usize::try_from(MAX_FILE_BYTES).unwrap_or(usize::MAX).saturating_add(1));
         write(&root.join("large.log"), &content);
 
         let report = build_safety_lock_report(&root).expect("safety report");

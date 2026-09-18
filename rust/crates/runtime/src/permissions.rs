@@ -514,6 +514,11 @@ fn extract_permission_subject(input: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    // The tests below match the outcome they expect and panic on anything
+    // else. The catch-all is deliberate: naming the remaining variants would
+    // have to be updated for every new one, and the panic already prints the
+    // value it got.
+    #![allow(clippy::match_wildcard_for_single_variants)]
     use super::{
         PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
         PermissionPromptDecision, PermissionPrompter, PermissionRequest,

@@ -152,9 +152,19 @@ impl WorkflowStore {
         trends.total_sessions += 1;
         trends.average_efficiency =
             (trends.average_efficiency * n + report.efficiency_score) / (n + 1.0);
-        trends.average_duration_seconds = ((trends.average_duration_seconds as f64 * n
-            + duration_seconds as f64)
-            / (n + 1.0)) as u64;
+        // A running mean of durations in whole seconds, for a trends file. The
+        // f64 round-trip is the arithmetic being asked for; seconds beyond 2^53
+        // are not a duration this program can produce.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        {
+            trends.average_duration_seconds = ((trends.average_duration_seconds as f64 * n
+                + duration_seconds as f64)
+                / (n + 1.0)) as u64;
+        }
         trends.total_failures += report.failure_count;
         trends.total_recoveries += report.recovery_successes;
         trends.improvement_rate = if trends.total_sessions > 1 {
@@ -353,10 +363,8 @@ mod tests {
 
     fn rand_id() -> String {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
+        let nanos =
+            SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_nanos());
         let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         format!("{}-{nanos}-{sequence}", std::process::id())
     }

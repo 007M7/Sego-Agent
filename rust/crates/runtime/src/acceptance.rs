@@ -241,13 +241,13 @@ fn aggregate_state(events: &[ReviewEvent]) -> (AcceptanceState, Vec<AcceptanceRe
         event.outcome == ReviewOutcome::Warning
             && matches!(
                 event.highest_severity,
-                None | Some(ReviewSeverity::Low) | Some(ReviewSeverity::Info)
+                None | Some(ReviewSeverity::Low | ReviewSeverity::Info)
             )
     }) {
         reasons.push(AcceptanceReasonCode::UnresolvedMediumRisk);
     }
 
-    reasons.sort_by_key(reason_rank);
+    reasons.sort_by_key(|reason| reason_rank(*reason));
     reasons.dedup();
     if reasons.is_empty() {
         (AcceptanceState::ReadyForNormalVerification, reasons)
@@ -287,7 +287,7 @@ fn evidence_links_for(events: &[ReviewEvent]) -> AcceptanceEvidenceLinks {
     }
 }
 
-const fn reason_rank(reason: &AcceptanceReasonCode) -> u8 {
+const fn reason_rank(reason: AcceptanceReasonCode) -> u8 {
     match reason {
         AcceptanceReasonCode::UnresolvedHighRisk => 0,
         AcceptanceReasonCode::FullReviewCoverageGap => 1,

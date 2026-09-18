@@ -872,6 +872,8 @@ fn multi_word_prompt_still_uses_shorthand_prompt_mode() {
 }
 
 #[test]
+// One table of slash-command examples; the length is the table.
+#[allow(clippy::too_many_lines)]
 fn parses_direct_agents_mcp_and_skills_slash_commands() {
     let _guard = env_lock();
     let env_root = temp_dir();
@@ -1086,7 +1088,7 @@ fn review_summary_json_contains_stable_summary_without_full_findings() {
     let summary = build_review_summary_json_value(
         "latest",
         &entry,
-        ReviewFindingStatusCounts {
+        &ReviewFindingStatusCounts {
             open: 2,
             acknowledged: 1,
             fixed: 0,
@@ -1127,7 +1129,7 @@ fn review_summary_json_counts_explicit_terminal_dispositions() {
     let summary = build_review_summary_json_value(
         "review-456",
         &entry,
-        ReviewFindingStatusCounts {
+        &ReviewFindingStatusCounts {
             open: 1,
             acknowledged: 0,
             fixed: 1,
@@ -2053,12 +2055,12 @@ fn review_completion_summary_includes_expected_sections() {
 
 #[test]
 fn review_completion_summary_shows_at_most_ten_terminal_findings() {
-    let findings: Vec<_> = (1..=11)
+    let findings: Vec<_> = (1..=11u32)
         .map(|i| runtime::ReviewFinding {
             id: format!("f{i}"),
             severity: runtime::ReviewSeverity::Low,
             file: format!("src/file{i}.rs"),
-            line: Some(i as u32 * 10),
+            line: Some(i * 10),
             title: format!("Finding number {i}"),
             evidence: "...".into(),
             risk: "low".into(),
@@ -3048,7 +3050,7 @@ const LIVE_CLI_TEST_DEEPSEEK_KEY: &str = "test-dummy-deepseek-key-for-live-cli-t
 /// This layer holds the environment setup for every test that needs a workspace,
 /// so there is one copy of it rather than several that can drift apart. Concrete
 /// credentials are injected because switching the model rebuilds the runtime for
-/// that model's provider: a test that changes to a DeepSeek model needs a DeepSeek
+/// that model's provider: a test that changes to a `DeepSeek` model needs a `DeepSeek`
 /// key, and taking that from a neighbour's leak made this file's outcome depend on
 /// thread scheduling. Nothing here reaches the network.
 fn with_isolated_workspace<T>(body: impl FnOnce(&Path) -> T) -> T {

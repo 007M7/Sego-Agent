@@ -285,6 +285,7 @@ fn is_dangerous(command: &str) -> bool {
 /// Shared interactive-command detector used by [`classify_bash_command`] and the
 /// tools-layer [`interactive_command_guard`].  Returns `true` when a command is
 /// likely to block waiting for user input (REPL, editor, pager, `copy con`).
+#[must_use]
 pub fn is_interactive_command(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     let tokens: Vec<&str> = lower.split_whitespace().collect();
@@ -373,18 +374,13 @@ fn is_safe_verify(command: &str) -> bool {
     if first == "cargo" {
         return matches!(
             second_token(&lower).as_deref(),
-            Some("test")
-                | Some("build")
-                | Some("check")
-                | Some("clippy")
-                | Some("fmt")
-                | Some("verify")
+            Some("test" | "build" | "check" | "clippy" | "fmt" | "verify")
         );
     }
     // Node
     if first == "npm" {
         let second = second_token(&lower);
-        return matches!(second.as_deref(), Some("test") | Some("ci"))
+        return matches!(second.as_deref(), Some("test" | "ci"))
             || lower.starts_with("npm run test")
             || lower.starts_with("npm run lint")
             || lower.starts_with("npm run build");
@@ -403,10 +399,7 @@ fn is_safe_verify(command: &str) -> bool {
     }
     // Go
     if first == "go" {
-        return matches!(
-            second_token(&lower).as_deref(),
-            Some("test") | Some("build") | Some("vet")
-        );
+        return matches!(second_token(&lower).as_deref(), Some("test" | "build" | "vet"));
     }
     // Generic lint/test wrappers
     matches!(first, "make")
@@ -713,15 +706,15 @@ mod tests {
         assert_eq!(classify_bash_command("cmd /k echo hello"), BashCommandRisk::DenyInteractive);
         // Safe non-interactive variants (using raw string literals)
         assert_ne!(
-            classify_bash_command(r###"powershell -Command "Get-Date""###),
+            classify_bash_command(r#"powershell -Command "Get-Date""#),
             BashCommandRisk::DenyInteractive
         );
         assert_ne!(
-            classify_bash_command(r###"cmd /c "echo hello""###),
+            classify_bash_command(r#"cmd /c "echo hello""#),
             BashCommandRisk::DenyInteractive
         );
         assert_ne!(
-            classify_bash_command(r###"python -c "print(1)""###),
+            classify_bash_command(r#"python -c "print(1)""#),
             BashCommandRisk::DenyInteractive
         );
         assert_ne!(
