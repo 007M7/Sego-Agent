@@ -3037,7 +3037,13 @@ const LIVE_CLI_TEST_API_KEY: &str = "test-dummy-key-for-live-cli-tests";
 const LIVE_CLI_TEST_AUTH_TOKEN: &str = "test-dummy-token-for-live-cli-tests";
 const LIVE_CLI_TEST_DEEPSEEK_KEY: &str = "test-dummy-deepseek-key-for-live-cli-tests";
 
-/// Run `body` against a `LiveCli` built inside an isolated workspace.
+/// Run `body` against a `LiveCli` built inside an isolated workspace, handing
+/// over ownership.
+///
+/// The consuming builder methods (`with_machine_output`) cannot be reached
+/// through a `&mut` borrow, so the isolation lives here and `with_live_cli` is a
+/// thin borrow-shaped wrapper over it - one setup path rather than two that can
+/// drift apart.
 ///
 /// This is the class-B recipe §1.23 names: `env_lock` keeps other tests out of
 /// the process-global environment, `EnvRestore::isolate` redirects HOME and the
@@ -3049,7 +3055,7 @@ const LIVE_CLI_TEST_DEEPSEEK_KEY: &str = "test-dummy-deepseek-key-for-live-cli-t
 /// for that model's provider, so a test that changes to a DeepSeek model needs a
 /// DeepSeek key, and taking that from a neighbour's leak made this file's
 /// outcome depend on thread scheduling. Nothing here reaches the network.
-fn with_live_cli<T>(body: impl FnOnce(&mut LiveCli, &Path) -> T) -> T {
+fn with_owned_live_cli<T>(body: impl FnOnce(LiveCli, &Path) -> T) -> T {
     let _env_guard = env_lock();
     let env_root = temp_dir();
     let _env = EnvRestore::isolate(&env_root);
@@ -3060,19 +3066,24 @@ fn with_live_cli<T>(body: impl FnOnce(&mut LiveCli, &Path) -> T) -> T {
     let root = temp_dir();
     fs::create_dir_all(&root).expect("workspace root");
     let result = with_current_dir(&root, || {
-        let mut cli = LiveCli::new(
+        let cli = LiveCli::new(
             "claude-sonnet-4-6".to_string(),
             true,
             None,
             PermissionMode::DangerFullAccess,
         )
         .expect("cli should initialize");
-        body(&mut cli, &root)
+        body(cli, &root)
     });
     // Cleanup may fail while a handle is still closing; that must not manufacture
     // a failure in a test that already passed.
     let _ = fs::remove_dir_all(&root);
     result
+}
+
+/// Run `body` against a `LiveCli` built in an isolated workspace, by reference.
+fn with_live_cli<T>(body: impl FnOnce(&mut LiveCli, &Path) -> T) -> T {
+    with_owned_live_cli(|mut cli, root| body(&mut cli, root))
 }
 
 #[test]
@@ -3334,6 +3345,102 @@ fn switching_to_a_different_workspace_reports_the_change_and_moves() {
         assert!(
             cli.session_path().is_file(),
             "the new workspace gets its own session file, written before the move completes"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// §1.23 class A: the pure-logic surface of `LiveCli` - the accessors, the
+// consuming builder, and the banner. No network, and the only I/O is the
+// session file `LiveCli::new` writes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn accessors_report_the_identity_the_constructor_established() {
+    with_live_cli(|cli, _root| {
+        assert_eq!(cli.model_name(), "claude-sonnet-4-6");
+        assert!(
+            !cli.session_id().is_empty(),
+            "an empty id would make the `contains(id)` checks below vacuous"
+        );
+
+        let path = cli.session_path();
+        assert!(
+            path.is_absolute(),
+            "this accessor is the path the recovery record and /resume use, so it must be \
+             absolute: {}",
+            path.display()
+        );
+
+        // `render_resume_usage` and the REPL help both promise this layout, and
+        // `/resume <session-id>` resolves through it - so the promise and the
+        // behaviour must not drift. Comparing components also keeps this
+        // platform-neutral, which a string comparison would not.
+        let documented =
+            Path::new(".claw").join("sessions").join(format!("{}.jsonl", cli.session_id()));
+        assert!(
+            path.ends_with(&documented),
+            "a managed session must live where the help says it does: {} should end with {}",
+            path.display(),
+            documented.display()
+        );
+    });
+}
+
+#[test]
+fn startup_banner_states_the_identity_and_a_workspace_relative_session_path() {
+    with_live_cli(|cli, _root| {
+        let banner = cli.startup_banner();
+
+        // The banner is the first thing a user reads, and it states the model
+        // and the permission mode. A stale permission mode here would mislead
+        // the user about what the agent is allowed to do.
+        assert!(banner.contains("claude-sonnet-4-6"), "the model must be stated:\n{banner}");
+        assert!(
+            banner.contains("danger-full-access"),
+            "the permission mode must be stated, because it is what the agent may do:\n{banner}"
+        );
+        assert!(banner.contains("Permissions"), "{banner}");
+        assert!(banner.contains("Auto-save"), "{banner}");
+
+        assert!(banner.contains(cli.session_id()), "the session id must be stated:\n{banner}");
+        assert!(banner.contains(".claw"), "the auto-save location must be stated:\n{banner}");
+
+        // The banner prints the path relative to the workspace - it strips the
+        // directory it just printed one line above - while the accessor returns
+        // the absolute form. The two differ on purpose, and if the strip ever
+        // stopped working the banner would repeat a long absolute path on every
+        // line that mentions the session.
+        let absolute = cli.session_path().display().to_string();
+        assert!(
+            !banner.contains(&absolute),
+            "the session path in the banner must be relative to the workspace, so the \
+             absolute form must not appear:\n{banner}"
+        );
+    });
+}
+
+#[test]
+fn with_machine_output_keeps_the_identity_it_was_built_with() {
+    with_owned_live_cli(|cli, _root| {
+        let id = cli.session_id().to_string();
+        let path = cli.session_path().to_path_buf();
+        let model = cli.model_name().to_string();
+
+        let machine = cli.with_machine_output();
+
+        // A consuming builder must not disturb what it carries. The
+        // machine-output CLI is the same session, at the same file, on the same
+        // model: the governed sidecar path persists its review under exactly
+        // this identity, so a builder that quietly replaced any part of it would
+        // write the result somewhere the caller is not looking.
+        assert_eq!(machine.session_id(), id);
+        assert_eq!(machine.session_path(), path);
+        assert_eq!(machine.model_name(), model);
+        assert!(
+            machine.session_path().is_file(),
+            "the builder must not disturb the session file either: {}",
+            machine.session_path().display()
         );
     });
 }
