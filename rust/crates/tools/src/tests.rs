@@ -2009,6 +2009,14 @@ fn repl_executes_python_code() {
     // found only the Store alias stub. Say so instead of reporting a
     // product defect.
     if !python_is_usable() {
+        // A skip in a green run is easy to miss, which is how a real coverage
+        // loss stays invisible; CI sets this on the jobs that provision an
+        // interpreter, so there it fails instead (DEV-QA-07).
+        assert!(
+            std::env::var("SEGO_REQUIRE_PYTHON").is_err(),
+            "repl_executes_python_code needs a Python interpreter and this job requires one, \
+             but none of the candidates runs here"
+        );
         eprintln!("skipping repl_executes_python_code: no usable Python interpreter on this host");
         return;
     }
