@@ -130,7 +130,7 @@ mod tests {
         assert!(registry.release("src/auth", "agent-1"));
         assert!(!registry.is_locked("src/auth"));
 
-        fs::remove_dir_all(registry.lock_dir).expect("cleanup");
+        let _ = fs::remove_dir_all(registry.lock_dir);
     }
 
     #[test]
@@ -144,7 +144,7 @@ mod tests {
         // Same agent can re-acquire
         assert!(registry.try_acquire("src/auth", "agent-1"));
 
-        fs::remove_dir_all(registry.lock_dir).expect("cleanup");
+        let _ = fs::remove_dir_all(registry.lock_dir);
     }
 
     #[test]
@@ -157,7 +157,7 @@ mod tests {
 
         assert_eq!(registry.active_locks().len(), 2);
 
-        fs::remove_dir_all(registry.lock_dir).expect("cleanup");
+        let _ = fs::remove_dir_all(registry.lock_dir);
     }
 
     fn rand_id() -> u64 {

@@ -1816,12 +1816,14 @@ mod tests {
     }
 
     fn cleanup_script(script_path: &Path) {
-        if let Err(error) = fs::remove_file(script_path) {
-            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "cleanup script: {error}");
-        }
-        if let Err(error) = fs::remove_dir_all(script_path.parent().expect("script parent")) {
-            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "cleanup dir: {error}");
-        }
+        // Best effort, deliberately. The old form asserted that the only
+        // acceptable error was `NotFound`, which turns a *cleanup* failure into a
+        // test failure: on Windows a temp root can still be held open while a
+        // child process finishes closing its handles, and that surfaces here as a
+        // sharing violation rather than as `NotFound`. A cleanup must not be able
+        // to manufacture a failure in a test that already passed.
+        let _ = fs::remove_file(script_path);
+        let _ = fs::remove_dir_all(script_path.parent().expect("script parent"));
     }
 
     fn manager_server_config(
