@@ -35,6 +35,40 @@ jobs:
       - name: Run all tests
         run: cargo test --workspace
         working-directory: rust
+      # The tag and the binary's own version are used as if they were the same
+      # thing, and nothing checked that they are:
+      #
+      #   * the release body is headed with the tag (`github.ref_name`) while
+      #     `sego --version` prints `CARGO_PKG_VERSION`;
+      #   * `is_newer_version` decides whether an update exists by comparing a
+      #     release's tag against that same version.
+      #
+      # A tag that does not match therefore produces a release announcing a
+      # version its own binary does not report, and makes the update check wrong
+      # in the same breath. A rehearsal of this workflow on 2026-09-19 built
+      # `0.1.9` and produced a body headed with the tag; the two agree today, and
+      # nothing was holding them together.
+      - name: The tag and the workspace version must agree
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          version=$(awk '
+            /^\[workspace\.package\]/ { inside = 1; next }
+            /^\[/ { inside = 0 }
+            inside && /^version[[:space:]]*=/ {
+              gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); print; exit
+            }
+          ' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::could not read the workspace version from rust/Cargo.toml"
+            exit 1
+          fi
+          tag="${{ github.ref_name }}"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag '$tag' does not match the workspace version '$version' (expected 'v$version')"
+            exit 1
+          fi
+          echo "tag '$tag' matches the workspace version '$version'"
 
   build-windows:
     name: Build Windows binary
