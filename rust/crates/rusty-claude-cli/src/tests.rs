@@ -24,8 +24,8 @@ use super::{
     resolve_review_entry, resolve_session_reference, response_to_events,
     resume_supported_slash_commands, run_resume_command,
     slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-    write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-    InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
+    workspace_context, write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
+    GitWorkspaceSummary, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
     NoAssistantResponseExportError, ReviewFindingStatusCounts, SafetyReviewScope, SlashCommand,
     StatusUsage, TURN_CANCELLED_MESSAGE,
 };
@@ -3037,25 +3037,20 @@ const LIVE_CLI_TEST_API_KEY: &str = "test-dummy-key-for-live-cli-tests";
 const LIVE_CLI_TEST_AUTH_TOKEN: &str = "test-dummy-token-for-live-cli-tests";
 const LIVE_CLI_TEST_DEEPSEEK_KEY: &str = "test-dummy-deepseek-key-for-live-cli-tests";
 
-/// Run `body` against a `LiveCli` built inside an isolated workspace, handing
-/// over ownership.
+/// Run `body` inside a fresh, isolated workspace directory.
 ///
-/// The consuming builder methods (`with_machine_output`) cannot be reached
-/// through a `&mut` borrow, so the isolation lives here and `with_live_cli` is a
-/// thin borrow-shaped wrapper over it - one setup path rather than two that can
-/// drift apart.
+/// The isolation recipe: `env_lock` keeps other tests out of the process-global
+/// environment, `EnvRestore::isolate` redirects HOME and the config home into a
+/// temp root, and `with_current_dir` makes the temp root the working directory -
+/// which is what both `LiveCli::new` and the `cli_context` collectors read.
 ///
-/// This is the class-B recipe §1.23 names: `env_lock` keeps other tests out of
-/// the process-global environment, `EnvRestore::isolate` redirects HOME and the
-/// config home into a temp root, and `with_current_dir` supplies the working
-/// directory that `LiveCli::new` writes its session file under.
-///
-/// All three keys are injected here rather than borrowed from whatever the rest
-/// of the suite happened to leave set: switching the model rebuilds the runtime
-/// for that model's provider, so a test that changes to a DeepSeek model needs a
-/// DeepSeek key, and taking that from a neighbour's leak made this file's
-/// outcome depend on thread scheduling. Nothing here reaches the network.
-fn with_owned_live_cli<T>(body: impl FnOnce(LiveCli, &Path) -> T) -> T {
+/// This layer holds the environment setup for every test that needs a workspace,
+/// so there is one copy of it rather than several that can drift apart. Concrete
+/// credentials are injected because switching the model rebuilds the runtime for
+/// that model's provider: a test that changes to a DeepSeek model needs a DeepSeek
+/// key, and taking that from a neighbour's leak made this file's outcome depend on
+/// thread scheduling. Nothing here reaches the network.
+fn with_isolated_workspace<T>(body: impl FnOnce(&Path) -> T) -> T {
     let _env_guard = env_lock();
     let env_root = temp_dir();
     let _env = EnvRestore::isolate(&env_root);
@@ -3065,7 +3060,21 @@ fn with_owned_live_cli<T>(body: impl FnOnce(LiveCli, &Path) -> T) -> T {
 
     let root = temp_dir();
     fs::create_dir_all(&root).expect("workspace root");
-    let result = with_current_dir(&root, || {
+    let result = with_current_dir(&root, || body(&root));
+    // Cleanup may fail while a handle is still closing; that must not manufacture
+    // a failure in a test that already passed.
+    let _ = fs::remove_dir_all(&root);
+    result
+}
+
+/// Run `body` against a `LiveCli` built inside an isolated workspace, handing
+/// over ownership.
+///
+/// The consuming builder methods (`with_machine_output`) cannot be reached
+/// through a `&mut` borrow, so the setup hands the value over and `with_live_cli`
+/// is a thin borrow-shaped wrapper over it.
+fn with_owned_live_cli<T>(body: impl FnOnce(LiveCli, &Path) -> T) -> T {
+    with_isolated_workspace(|root| {
         let cli = LiveCli::new(
             "claude-sonnet-4-6".to_string(),
             true,
@@ -3073,12 +3082,8 @@ fn with_owned_live_cli<T>(body: impl FnOnce(LiveCli, &Path) -> T) -> T {
             PermissionMode::DangerFullAccess,
         )
         .expect("cli should initialize");
-        body(cli, &root)
-    });
-    // Cleanup may fail while a handle is still closing; that must not manufacture
-    // a failure in a test that already passed.
-    let _ = fs::remove_dir_all(&root);
-    result
+        body(cli, root)
+    })
 }
 
 /// Run `body` against a `LiveCli` built in an isolated workspace, by reference.
@@ -3442,5 +3447,94 @@ fn with_machine_output_keeps_the_identity_it_was_built_with() {
             "the builder must not disturb the session file either: {}",
             machine.session_path().display()
         );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The `cli_context` collectors: they build the view types that `cli_reports`
+// formats. These run them for real - against a workspace the test owns - rather
+// than against the machine the suite happens to be on, which is the only way to
+// assert what they report without asserting this developer's git state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workspace_context_describes_the_directory_it_ran_in() {
+    with_isolated_workspace(|root| {
+        let context = workspace_context().expect("the workspace context must load");
+
+        // Resolve both sides before comparing: on Windows a canonicalized path
+        // carries a verbatim prefix that a plain one does not, so a raw
+        // comparison of the same directory fails.
+        assert_eq!(
+            fs::canonicalize(&context.cwd).expect("cwd must resolve"),
+            fs::canonicalize(root).expect("root must resolve"),
+            "the context must describe the directory the command ran in"
+        );
+        assert!(
+            context.session_dir.ends_with(Path::new(".claw").join("sessions")),
+            "the session directory must be the one the help documents: {}",
+            context.session_dir.display()
+        );
+        assert_eq!(
+            context.recovery_dir,
+            runtime::recovery::recovery_dir(root),
+            "the recovery directory must come from the product's own path helper"
+        );
+
+        // A directory that is not a git worktree has no project root, and the
+        // collector must say so rather than inventing one - `/workspace` prints
+        // exactly this value.
+        assert!(
+            context.project_root.is_none(),
+            "a non-git workspace must report no project root, got {:?}",
+            context.project_root
+        );
+    });
+}
+
+#[test]
+fn status_context_reports_the_workspace_and_carries_the_session_path() {
+    with_isolated_workspace(|root| {
+        let session = root.join(".claw").join("sessions").join("carried.jsonl");
+
+        let context = status_context(Some(&session)).expect("the status context must load");
+
+        assert_eq!(
+            fs::canonicalize(&context.cwd).expect("cwd must resolve"),
+            fs::canonicalize(root).expect("root must resolve")
+        );
+
+        // Whatever path it is handed must come back unchanged: that is the value
+        // `/status` prints under `Session`, so dropping it would leave the report
+        // claiming the live-REPL placeholder for a session that has a file.
+        assert_eq!(
+            context.session_path.as_deref(),
+            Some(session.as_path()),
+            "the session path must be carried through untouched"
+        );
+
+        // The two config counters answer different questions, and conflating them
+        // is easy: `discover` is the list of locations the loader *looks at*
+        // (two user, two project, one local) and does not depend on whether any
+        // of them exist, while `loaded` counts the ones that did. In an empty
+        // workspace nothing loads, so the numbers differ - and `/status` prints
+        // them as `loaded N/M`, which reads as "N of the M places checked".
+        assert_eq!(
+            context.discovered_config_files, 5,
+            "the candidate set is fixed: two user locations, two project, one local"
+        );
+        assert_eq!(
+            context.loaded_config_files, 0,
+            "an empty workspace must load nothing, whatever it looks at"
+        );
+        assert_eq!(context.memory_file_count, 0, "an empty workspace has no memory files");
+
+        // No git status was available, so every count is zero. Note what that
+        // means for the report: `GitWorkspaceSummary::is_clean` is
+        // `changed_files == 0`, so a non-git directory is reported as `clean`.
+        // That reading is pre-existing behaviour and this test pins the counts,
+        // not a claim that "clean" is the right word for "not a repository".
+        assert_eq!((context.git_summary.changed_files, context.git_summary.staged_files), (0, 0));
+        assert_eq!(context.git_branch, None, "no repository means no branch to name");
     });
 }
