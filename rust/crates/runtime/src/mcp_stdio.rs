@@ -2341,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn given_child_exits_after_discovery_when_calling_twice_then_second_call_succeeds_after_reset()
+    fn given_child_exits_after_discovery_when_the_exit_is_observed_then_the_next_call_restarts_it()
     {
         let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
         runtime.block_on(async {
@@ -2360,24 +2360,26 @@ mod tests {
             let mut manager = McpServerManager::from_servers(&servers);
 
             manager.discover_tools().await.expect("discover tools");
-            let first_error = manager
-                .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "reconnect"})))
-                .await
-                .expect_err("first call should fail after transport drops");
 
-            match first_error {
-                McpServerManagerError::Transport { server_name, method, source } => {
-                    assert_eq!(server_name, "alpha");
-                    assert_eq!(method, "tools/call");
-                    assert_eq!(source.kind(), ErrorKind::UnexpectedEof);
-                }
-                other => panic!("expected transport error, got {other:?}"),
-            }
+            // The fixture exits after answering `tools/list`, but "the child has
+            // exited" and "the manager has observed it" are two different
+            // moments, and the manager behaves differently in each: while the
+            // exit is unobserved the next request goes into a dying pipe and
+            // surfaces a transport error, and once it is observed
+            // `ensure_server_ready` restarts the server and the call succeeds.
+            // Both are correct behaviour, so this test waits for the observed
+            // state instead of racing into whichever one it happens to hit.
+            // Asserting the unobserved one is what made this flaky: a loaded
+            // machine reaches the observed state before the call is written.
+            // The transport-error half is pinned deterministically by
+            // `given_tool_call_disconnects_once_when_calling_twice_then_manager_resets_and_next_call_succeeds`,
+            // which makes the child die in flight rather than beforehand.
+            wait_until_observed_exit(&mut manager, "alpha").await;
 
             let response = manager
                 .call_tool(&mcp_tool_name("alpha", "echo"), Some(json!({"text": "reconnect"})))
                 .await
-                .expect("second tool call should succeed after reset");
+                .expect("a call after an observed exit must restart the server, not fail");
 
             assert_eq!(
                 response
@@ -2390,12 +2392,27 @@ mod tests {
             let log = fs::read_to_string(&log_path).expect("read log");
             assert_eq!(
                 log.lines().collect::<Vec<_>>(),
-                vec!["initialize", "tools/list", "initialize", "tools/call"]
+                vec!["initialize", "tools/list", "initialize", "tools/call"],
+                "the second initialize is the restart, and a restart must not re-run discovery"
             );
 
             manager.shutdown().await.expect("shutdown");
             cleanup_script(&script_path);
         });
+    }
+
+    /// Wait until the manager itself reports the server's process as exited.
+    ///
+    /// Polling the manager - rather than sleeping a guessed interval - is what
+    /// makes the test above deterministic: the state it asserts is the state the
+    /// manager has actually reached, not one it is about to reach.
+    async fn wait_until_observed_exit(manager: &mut McpServerManager, server_name: &str) {
+        let mut waited_ms = 0_u64;
+        while !manager.server_process_exited(server_name).expect("exit probe must not fail") {
+            assert!(waited_ms < 5_000, "the child never became observably exited");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            waited_ms += 10;
+        }
     }
 
     #[test]
