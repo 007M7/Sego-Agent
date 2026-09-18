@@ -2267,6 +2267,13 @@ impl TestServer {
         let addr = listener.local_addr().expect("local addr");
         let (tx, rx) = std::sync::mpsc::channel::<()>();
 
+        // The fixture thread is total: nothing it does may panic. A panicked
+        // fixture thread used to be lethal, because `Drop` below joins it and
+        // treated the `Err` as fatal - and a panic raised while a test is already
+        // unwinding aborts the process (STATUS_STACK_BUFFER_OVERRUN on Windows),
+        // taking every failure report with it. Errors reach the test through the
+        // client instead: a request the fixture refuses gets no valid response,
+        // and the calling test fails on its own assertion.
         let handle = thread::spawn(move || loop {
             if rx.try_recv().is_ok() {
                 break;
@@ -2274,17 +2281,52 @@ impl TestServer {
 
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    let mut request = Vec::new();
                     let mut buffer = [0_u8; 4096];
-                    let size = stream.read(&mut buffer).expect("read request");
-                    let request = String::from_utf8_lossy(&buffer[..size]).into_owned();
+                    // Two facts about this socket drive the loop, and treating
+                    // either as an error is what made this fixture able to abort
+                    // the whole test binary (DEV-QA-08).
+                    //
+                    // The accept inherits the listener's nonblocking mode, so a
+                    // read can return `WouldBlock` simply because the request is
+                    // still in flight - observed on Windows, where the tests used
+                    // to fail under load and pass on a re-run. And a `read`
+                    // returns what has arrived, not what was sent, so one call can
+                    // hand back half a request line.
+                    //
+                    // So: read until the headers end, retrying while the socket
+                    // says "not yet", and give up after a bounded wait rather than
+                    // blocking forever on a peer that never sends.
+                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    loop {
+                        match stream.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(size) => {
+                                request.extend_from_slice(&buffer[..size]);
+                                if request.windows(4).any(|w| w == b"\r\n\r\n")
+                                    || request.len() >= 4096
+                                {
+                                    break;
+                                }
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                if std::time::Instant::now() >= deadline {
+                                    break;
+                                }
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request).into_owned();
                     let request_line = request.lines().next().unwrap_or_default().to_string();
                     let response = handler(&request_line);
-                    stream.write_all(response.to_bytes().as_slice()).expect("write response");
+                    let _ = stream.write_all(response.to_bytes().as_slice());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }
-                Err(error) => panic!("server accept failed: {error}"),
+                Err(_) => break,
             }
         });
 
@@ -2302,7 +2344,13 @@ impl Drop for TestServer {
             let _ = tx.send(());
         }
         if let Some(handle) = self.handle.take() {
-            handle.join().expect("join test server");
+            // Deliberately not `.expect("join test server")`. A `Drop` can run
+            // while the test is already unwinding, and panicking a second time
+            // aborts the process instead of reporting the failure that started
+            // it. If the fixture thread died, the test that used it already fails
+            // on the response it never received, which is the useful report; this
+            // one would only replace it with an exit code.
+            let _ = handle.join();
         }
     }
 }
@@ -2365,4 +2413,69 @@ impl HttpResponse {
             )
             .into_bytes()
     }
+}
+
+// ---------------------------------------------------------------------------
+// DEV-QA-08: a request split across reads must still be served.
+//
+// The fixture used to read the request with a single `read` and treat the result
+// as the whole thing. On Windows the accepted socket inherits the listener's
+// nonblocking mode, so that read returns `WouldBlock` whenever the request has
+// not arrived yet, and the `expect` on it panicked on the fixture thread. A dead
+// fixture thread is what let the failure escalate: `TestServer::drop` joined it
+// with `.expect`, and a panic raised while a test is already unwinding aborts the
+// process (STATUS_STACK_BUFFER_OVERRUN), taking the failure report with it.
+//
+// This keeps the fixture honest about partial reads. It fails like an ordinary
+// test if the fixture regresses.
+// ---------------------------------------------------------------------------
+#[test]
+fn a_request_split_across_reads_is_still_served_whole() {
+    let server = TestServer::spawn(Arc::new(|request_line: &str| {
+        // The whole request line, not the prefix the first read returned.
+        assert!(
+            request_line == "GET /split?q=whole HTTP/1.1",
+            "the fixture must reassemble the request before handing it over: {request_line:?}"
+        );
+        HttpResponse::text(200, "OK", "assembled")
+    }));
+
+    let mut stream = std::net::TcpStream::connect(server.addr()).expect("connect");
+    stream.write_all(b"GET /split?q=wh").expect("write the first piece");
+    stream.flush().expect("flush the first piece");
+    thread::sleep(Duration::from_millis(150));
+    stream
+        .write_all(b"ole HTTP/1.1\r\nHost: fixture\r\nConnection: close\r\n\r\n")
+        .expect("write the rest");
+
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 512];
+    // Bounded, so a fixture that never answers fails this test instead of
+    // hanging the binary until the job times out.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fixture never answered a request that arrived in pieces"
+        );
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(size) => {
+                response.extend_from_slice(&buffer[..size]);
+                if response.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("client read failed: {error}"),
+        }
+    }
+
+    let response = String::from_utf8_lossy(&response);
+    assert!(
+        response.contains("200 OK") && response.ends_with("assembled"),
+        "the fixture must answer a request that arrived in pieces: {response:?}"
+    );
 }
