@@ -18,23 +18,39 @@ use crate::mcp_lifecycle_hardened::{
     McpDegradedReport, McpErrorSurface, McpFailedServer, McpLifecyclePhase,
 };
 
-// Keep test timeouts short, but not so tight that CI Python cold-start jitter
-// turns MCP lifecycle tests into release-blocking flakes.
+// This budget has to fit a Python cold start plus the MCP handshake on a shared
+// runner whose load is not ours to control. It has been raised twice for the
+// same reason, so the history and the arithmetic are worth keeping.
 //
-// One second was too tight in practice: `given_initialize_hangs_once...` failed
-// on a Windows runner with `Timeout { server_name: "alpha", method:
-// "initialize", timeout_ms: 1000 }` on the attempt that was supposed to
-// succeed. The runner was merely busy - the same test passes when run alone -
-// and Python cold start plus the MCP handshake is what has to fit inside this
-// budget. Five seconds keeps the test fast in wall-clock terms and stops it
-// depending on runner load.
+//   * 1s -> 5s after `given_initialize_hangs_once...` failed on a Windows runner
+//     with `timeout_ms: 1000` on the attempt that was meant to succeed.
+//   * 5s -> the values below after three tests failed with `timeout_ms: 5000` in
+//     one Windows push run, on a commit that had passed the Windows PR job
+//     minutes earlier - so the difference was the runner, not the commit.
+//
+// What the sizes are based on, measured rather than guessed: the tests that lost
+// to that 5s budget normally finish in 0.46s and 0.65s when run alone, so the
+// runner was at least ten times slower than normal. 20s is roughly forty times
+// their normal duration, a fourfold margin over the worst slowdown actually
+// observed.
+//
+// These are timeouts, not sleeps, which is why raising them is close to free:
+// a test that passes returns the moment the handshake completes. The exception
+// is `given_initialize_hangs_once...`, which hangs the fixture once and so waits
+// the whole budget out on purpose - measured at 30.6s against a 30s budget. That
+// test is why the initialize budget is 20s and not 30s, and why the list-tools
+// budget, which no test deliberately exceeds, can be the full 30s.
+//
+// If 20s turns out to be too tight as well, the next step is a per-server
+// override in the config, like `toolCallTimeoutMs`, rather than a fourth raise:
+// the cost of a blanket increase lands entirely on the test above.
 #[cfg(test)]
-const MCP_INITIALIZE_TIMEOUT_MS: u64 = 5_000;
+const MCP_INITIALIZE_TIMEOUT_MS: u64 = 20_000;
 #[cfg(not(test))]
 const MCP_INITIALIZE_TIMEOUT_MS: u64 = 10_000;
 
 #[cfg(test)]
-const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 5_000;
+const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 30_000;
 #[cfg(not(test))]
 const MCP_LIST_TOOLS_TIMEOUT_MS: u64 = 30_000;
 
