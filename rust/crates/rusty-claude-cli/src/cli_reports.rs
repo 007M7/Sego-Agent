@@ -16,8 +16,11 @@
 //! Two of the items the corrected closure named stay at the crate root on
 //! purpose: `PRIMARY_SESSION_EXTENSION` and `LATEST_SESSION_REFERENCE` are
 //! session-layout facts, not report facts, and the session-resolution code in
-//! `main.rs` is where they belong. They reach this module through `use
-//! crate::*`, together with the collectors that build the view types below.
+//! `main.rs` is where they belong. They reach this module through `use crate::*`.
+//!
+//! The collectors that build the view types below live in `cli_context`, which
+//! is the I/O half of this split: it runs `git`, reads config and looks at the
+//! filesystem, while everything here is pure.
 //!
 //! The `print_*` methods that write to the terminal stay in `main.rs` and are
 //! one line each; that split is the whole point of the class.
@@ -29,12 +32,12 @@ use runtime::*;
 
 use crate::*;
 
-// The four view types below are `pub(crate)` down to their fields because the
-// collectors that build them still live in `main.rs`: a struct literal needs
-// every field visible from where it is written, so a boundary that moves the
-// formatter and not the collector has to widen the fields. Moving the
-// collectors is a later slice; until then this is the honest cost of the split,
-// not an oversight.
+// The four view types below are `pub(crate)` down to their fields because they
+// are built in `cli_context` and read here: a struct literal needs every field
+// visible from where it is written, so a boundary that puts the collector and the
+// formatter in different modules has to widen the fields. That is the honest cost
+// of the split, not an oversight - and it is why moving the collectors did not let
+// the fields be narrowed again.
 #[derive(Debug, Clone)]
 pub(crate) struct StatusContext {
     pub(crate) cwd: PathBuf,
