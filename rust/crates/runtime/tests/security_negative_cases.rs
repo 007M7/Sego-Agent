@@ -12,6 +12,21 @@
 //! if the *evidence for an item disappears*, and it fails if CI stops running
 //! the suite as a blocking gate. An item with no case yet is listed separately
 //! and explicitly, so "not covered" is visible instead of implied.
+//!
+//! ## What this net does not check, and got wrong once
+//!
+//! It matches test **names**, which means the evidence it insists on can be a
+//! test of code that never runs. `DEV-SEC-08` was in exactly that state: its
+//! required case `workspace_write_blocks_system_paths` lived in
+//! `bash_validation`, a module with no caller, so the item was recorded as fixed
+//! on the strength of a *dormant* validator's verdict - and this net, which was
+//! built to catch evidence going missing, happily held that name for as long as
+//! the module existed. Retiring the module is what exposed it, not this check.
+//!
+//! So: a name here proves that someone wrote a case, not that the case covers the
+//! path that runs. When an item's evidence lives near a boundary like that, the
+//! requirement should name a test that drives the live code - which is what
+//! `DEV-SEC-08` now does (see its entry below).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -129,7 +144,17 @@ const REQUIRED_CASES: &[(&str, &[&str])] = &[
     ),
     (
         "DEV-SEC-08 a system-path write is blocked, not merely warned",
-        &["workspace_write_blocks_system_paths"],
+        // Was `workspace_write_blocks_system_paths`, which lived in
+        // `bash_validation` - a module with no caller at all. That test asserted
+        // the verdict of a *dormant* validator, so it proved the intent without
+        // proving that anything enforced it; the item was recorded as fixed on
+        // the strength of code that never ran. Retiring that module exposed it.
+        //
+        // `workspace_write_denies_outside_workspace` is the stronger evidence and
+        // the right one: it drives the live enforcer and asserts
+        // `EnforcementResult::Denied` for `check_file_write("/etc/passwd", ...)`
+        // in workspace-write mode - a deny on the path that runs, not a warn.
+        &["workspace_write_denies_outside_workspace"],
     ),
     (
         "DEV-SEC-09 a chained or out-of-tree command is not Sego metadata",

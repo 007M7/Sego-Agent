@@ -8,7 +8,6 @@ pub mod acceptance;
 pub mod active_task;
 mod bash;
 pub mod bash_command_classifier;
-pub mod bash_validation;
 mod bootstrap;
 pub mod branch_lock;
 pub mod code_review;
