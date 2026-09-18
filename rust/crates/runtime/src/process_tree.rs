@@ -170,10 +170,16 @@ pub fn workspace_task_store() -> crate::active_task::ActiveTaskStore {
 /// ignored - the ledger is bookkeeping, never a gate on the work.
 ///
 /// **A task is only active if something called `ActiveTaskStore::start_task`.**
-/// Nothing in the product does that yet, so today this records nothing outside
-/// tests; the wiring exists so that the spawn and exit paths are already
-/// correct when an entry point is chosen. See the note at the end of this
-/// module's documentation in the issue list (`DEV-CON-08`).
+/// `rusty-claude-cli` does that at the start of every run-shaped path - the REPL,
+/// `--prompt`, `--resume` and code review - so this records for the duration of a
+/// run and stays inert in a workspace where no run is in progress. That is the
+/// intended shape: the ledger exists to make an interrupted run recoverable, not
+/// to accumulate bookkeeping for tool calls made outside one.
+///
+/// Before that wiring existed, `has_active_task()` was always false here and
+/// every call returned early - the spawn and exit recording that `mcp_stdio` and
+/// the bash tool had been doing was failing silently rather than recording
+/// anything. See `DEV-CON-08` in the issue list.
 pub fn track_spawned_process(
     store: &crate::active_task::ActiveTaskStore,
     pid: u32,
