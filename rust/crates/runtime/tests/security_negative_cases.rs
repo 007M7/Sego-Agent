@@ -315,15 +315,42 @@ fn ci_runs_the_suite_without_an_escape_hatch() {
     // result rather than blocking anything. See DEV-GOV-05.
 }
 
+/// The lines of the workflow's `on:` block, which is where a trigger is narrowed.
+fn trigger_block(workflow: &str) -> String {
+    let lines: Vec<&str> = workflow.lines().collect();
+    let Some(start) = lines.iter().position(|line| line.trim_end() == "on:") else {
+        return String::new();
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| !line.starts_with(' ') && !line.is_empty() && !line.starts_with('#'))
+        .map_or(lines.len(), |(index, _)| index);
+    lines[start..end].join("\n")
+}
+
 #[test]
-fn the_path_filter_still_covers_the_crates_that_hold_the_cases() {
-    // If a change to a crate containing a negative case stopped triggering CI,
-    // the case would exist but never run on a pull request.
+fn no_change_can_fall_outside_the_crates_that_hold_the_cases() {
+    // This used to assert that the `paths` filter still listed `rust/**`, because
+    // a change to a crate holding a negative case that stopped triggering CI
+    // would leave the case existing but never running on a pull request.
+    //
+    // The filter is gone, so that concern is now covered more strongly: with no
+    // filter there is no change that can fall outside. The guard is kept rather
+    // than deleted, because re-adding one would reintroduce two problems at once
+    // - changes that run nothing, and, while a check is required for merging, a
+    // pull request waiting forever on a check that never reports.
     let workflow = repo_root().join(".github/workflows/rust-ci.yml");
     let text = fs::read_to_string(&workflow).expect("read workflow");
-    assert!(text.contains("- rust/**"), "the path filter must keep covering the Rust workspace");
-    assert!(
-        text.contains(".github/workflows/**"),
-        "a change to the workflow itself must trigger the workflow"
-    );
+    let triggers = trigger_block(&text);
+    assert!(!triggers.is_empty(), "the workflow must still declare triggers:\n{text}");
+    for narrowing in ["paths:", "paths-ignore:"] {
+        assert!(
+            !triggers.contains(narrowing),
+            "a `{narrowing}` entry would let a change run nothing, and would leave a required \
+             check permanently unreported; if one is genuinely wanted, this guard and the branch \
+             protection settings have to be reconsidered together:\n{triggers}"
+        );
+    }
 }
