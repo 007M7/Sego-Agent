@@ -29,6 +29,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use runtime::code_review::{COMPUTE_BOUNDARY_ALL_LABELS, DATA_EGRESS_ALL_LABELS};
 use runtime::{
     persist_review_artifact, EvidenceStatus, ReviewFindingStatus, ReviewParseStatus, ReviewReport,
     ReviewScope, ReviewSeverity, ReviewTarget,
@@ -102,8 +103,12 @@ fn temp_root(name: &str) -> PathBuf {
 
 #[test]
 fn contract_metadata_matches_the_recorded_identity() {
+    // `review-artifact` moved to revision 3 when `data_egress_class`,
+    // `compute_boundary` and `budget` were declared (SEG-ADR-004). The revision
+    // is pinned here on purpose: a bump is a contract change, and this line is
+    // where that change becomes deliberate rather than incidental.
     let cases = [
-        ("review-artifact", "sego.review.artifact/v1", 2),
+        ("review-artifact", "sego.review.artifact/v1", 3),
         ("review-index-entry", "sego.review.index-entry", 1),
         ("sidecar-request-response", "sego.sidecar.envelope", 1),
     ];
@@ -295,6 +300,28 @@ fn rust_enums_equal_the_schema_enums_in_both_directions() {
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
         "finding_status: schema and implementation disagree"
+    );
+
+    // Revision 3's two enums, pinned the same way. They were declared without
+    // this check, which meant either side could have drifted alone and nothing
+    // would have said so.
+    let egress: BTreeSet<&str> = DATA_EGRESS_ALL_LABELS.iter().copied().collect();
+    assert_eq!(
+        egress,
+        enum_of(&artifact_schema, "data_egress_class")
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "data_egress_class: schema and implementation disagree"
+    );
+    let compute: BTreeSet<&str> = COMPUTE_BOUNDARY_ALL_LABELS.iter().copied().collect();
+    assert_eq!(
+        compute,
+        enum_of(&artifact_schema, "compute_boundary")
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "compute_boundary: schema and implementation disagree"
     );
 
     // The envelope owns exactly one extra parse_status value.

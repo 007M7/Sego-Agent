@@ -60,6 +60,26 @@ fn apply_platform_process_env(command: &mut Command) {
     }
 }
 
+/// Contract revision 3 (`SEG-ADR-004`): the artifact records where this run's data
+/// went and where it ran, and it takes both from the run.
+///
+/// The mock provider is served on loopback, so this review's honest classification
+/// is `none` / `local` — the same code path reports `provider` / `remote` against a
+/// hosted provider. Asserting the loopback answer is what makes the claim
+/// falsifiable: a value hardcoded to `provider` fails on the first assertion.
+fn assert_observed_egress_is_recorded(artifact: &Value, base_url: &str) {
+    assert_eq!(
+        artifact["resolved_endpoint"].as_str(),
+        Some(base_url),
+        "the artifact should name the endpoint this run dialled: {artifact}"
+    );
+    assert_eq!(artifact["data_egress_class"], "none", "{artifact}");
+    assert_eq!(artifact["compute_boundary"], "local", "{artifact}");
+    // The caller declared no ceiling, so no budget object is written: half of one
+    // would invite a question the artifact cannot answer.
+    assert!(artifact.get("budget").is_none(), "{artifact}");
+}
+
 /// A workspace with one staged change: line 2 of `src/lib.rs` is the line the
 /// mock's findings document cites.
 fn staged_workspace(root: &Path) {
@@ -180,6 +200,9 @@ fn sidecar_review_runs_the_whole_pipeline_against_a_mock_endpoint() {
     assert_eq!(artifact["diff_hash"], response["diff_hash"], "artifact and response disagree");
     assert_eq!(artifact["invocation_id"], "inv-e2e-001");
     assert_eq!(artifact["id"], response["review_id"]);
+
+    // Contract revision 3: the artifact carries the run's own egress record.
+    assert_observed_egress_is_recorded(&artifact, &base_url);
 
     // Stage 4: the evidence gate ran and recorded what it could and could not
     // capture, and each finding carries a status rather than being dropped.

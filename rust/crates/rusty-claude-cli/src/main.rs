@@ -1540,6 +1540,22 @@ impl LiveCli {
         input: &str,
         emit_output: bool,
     ) -> Result<String, Box<dyn std::error::Error>> {
+        self.run_turn_capture_observed(input, emit_output).map(|(text, _)| text)
+    }
+
+    /// Same as [`Self::run_turn_capture_text`], and additionally returns what the
+    /// turn observed about itself, so the caller can record it in a review
+    /// artifact.
+    ///
+    /// `SEG-ADR-004` requires the egress and compute values to come from the run
+    /// rather than from configuration. The run is exactly what this returns, and
+    /// the only place the numbers exist.
+    fn run_turn_capture_observed(
+        &mut self,
+        input: &str,
+        emit_output: bool,
+    ) -> Result<(String, runtime::code_review::ReviewEgressObservation), Box<dyn std::error::Error>>
+    {
         let machine = self.machine_output;
         // C-light (D-IDE-1): machine mode uses emit_output=false to suppress
         // conversation runtime rendering, and a fail-closed prompter that never
@@ -1553,9 +1569,10 @@ impl LiveCli {
             match result {
                 Ok(summary) => {
                     let text = final_assistant_text(&summary);
+                    let observation = observed_turn(&summary);
                     self.replace_runtime(runtime)?;
                     self.persist_session()?;
-                    Ok(text)
+                    Ok((text, observation))
                 }
                 Err(error) => {
                     runtime.shutdown_plugins()?;
@@ -1579,6 +1596,7 @@ impl LiveCli {
             match result {
                 Ok(summary) => {
                     let text = final_assistant_text(&summary);
+                    let observation = observed_turn(&summary);
                     self.replace_runtime(runtime)?;
                     ui.finish("Done")?;
                     println!();
@@ -1591,7 +1609,7 @@ impl LiveCli {
                         default_date(),
                     ));
                     self.persist_session()?;
-                    Ok(text)
+                    Ok((text, observation))
                 }
                 Err(error) => {
                     runtime.shutdown_plugins()?;
@@ -5893,6 +5911,39 @@ fn final_assistant_text(summary: &runtime::TurnSummary) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+/// What a completed turn observed about itself, for the review artifact's egress
+/// record (`SEG-ADR-004`).
+///
+/// Every value is taken from the run rather than from configuration: the request
+/// count is the loop's own iteration count, the tool names are the tools that
+/// actually returned, and the token count is what the provider reported. A review
+/// that ran against a locally served model while the configuration still named a
+/// remote one must not be recorded as having sent nothing anywhere, and the only
+/// way to be sure of that is to not look at the configuration at all.
+fn observed_turn(summary: &runtime::TurnSummary) -> runtime::code_review::ReviewEgressObservation {
+    let usage = summary.usage;
+    // An all-zero usage sample means the provider reported nothing, not that the
+    // review consumed nothing: the prompt alone is never zero tokens. Writing `0`
+    // would turn a gap into a claim, so the gap is carried as one.
+    let reported_nothing = usage.input_tokens == 0
+        && usage.output_tokens == 0
+        && usage.cache_creation_input_tokens == 0
+        && usage.cache_read_input_tokens == 0;
+    runtime::code_review::ReviewEgressObservation {
+        provider_calls: summary.iterations as u64,
+        input_tokens: if reported_nothing { None } else { Some(u64::from(usage.input_tokens)) },
+        tool_names: summary
+            .tool_results
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult { tool_name, .. } => Some(tool_name.clone()),
+                _ => None,
+            })
+            .collect(),
+    }
 }
 
 fn collect_tool_uses(summary: &runtime::TurnSummary) -> Vec<serde_json::Value> {

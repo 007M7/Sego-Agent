@@ -13,8 +13,9 @@
 use std::io::{Read, Write};
 
 use runtime::code_review::{
-    build_review_prompt, persist_review_artifact_with_identity, review_diff_hash, ReviewContext,
-    ReviewInvocationIdentity, ReviewPromptOptions, ReviewReport, ReviewScope,
+    build_review_prompt, persist_review_artifact_observed, review_diff_hash,
+    ReviewBudgetDeclaration, ReviewContext, ReviewEgressObservation, ReviewInvocationIdentity,
+    ReviewPromptOptions, ReviewReport, ReviewScope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -252,6 +253,26 @@ pub fn run_sidecar_review_pipeline() -> i32 {
     }
 }
 
+/// Run one review turn and turn its output into a report, keeping what the turn
+/// observed about itself.
+///
+/// The observation is returned rather than discarded because the artifact has to
+/// record where this invocation's data actually went and where it ran — and it may
+/// only get those from the run, never from the provider configuration
+/// (`SEG-ADR-004`).
+fn run_review_turn(
+    cli: &mut crate::LiveCli,
+    context: &ReviewContext,
+) -> Result<(ReviewReport, ReviewEgressObservation), Box<dyn std::error::Error>> {
+    let prompt = build_review_prompt(context, ReviewPromptOptions::default());
+    let (review_text, observation) = cli.run_turn_capture_observed(&prompt, false)?;
+    let report = ReviewReport::from_model_output(review_text);
+    // C20.6-B R2 UX-D: apply evidence gate before persistence so sidecar
+    // artifacts get the same evidence_status annotations as the CLI path.
+    let findings = runtime::code_review::evaluate_evidence_gate(report.findings, &context.target);
+    Ok((ReviewReport { findings, ..report }, observation))
+}
+
 /// Execute a single review and return a structured response.
 ///
 /// Reuses: `collect_review_target`, `build_review_prompt`, `run_turn_capture_text`,
@@ -362,14 +383,10 @@ fn execute_review(
     let mut cli = LiveCli::new(model, true, None, PermissionMode::ReadOnly)?.with_machine_output();
 
     let context = ReviewContext::new(target);
-    let prompt = build_review_prompt(&context, ReviewPromptOptions::default());
-    let review_text = cli.run_turn_capture_text(&prompt, false)?;
-    let report = ReviewReport::from_model_output(review_text);
-    // C20.6-B R2 UX-D: apply evidence gate before persistence so sidecar
-    // artifacts get the same evidence_status annotations as the CLI path.
-    let findings = runtime::code_review::evaluate_evidence_gate(report.findings, &context.target);
-    let report = ReviewReport { findings, ..report };
-    let artifact = persist_review_artifact_with_identity(
+    let (report, observation) = run_review_turn(&mut cli, &context)?;
+    // No caller declares a ceiling yet, so the artifact carries no `budget` object at
+    // all - see `build_budget` for why half of one is not written instead.
+    let artifact = persist_review_artifact_observed(
         &cwd,
         &context.target,
         &report,
@@ -379,6 +396,8 @@ fn execute_review(
             resolved_endpoint: resolved_endpoint.clone(),
             invocation_id: invocation_id.clone(),
         },
+        &observation,
+        &ReviewBudgetDeclaration::default(),
     )?;
 
     Ok(SidecarReviewResponse {

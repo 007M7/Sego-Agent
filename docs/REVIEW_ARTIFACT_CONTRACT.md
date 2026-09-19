@@ -66,6 +66,7 @@ Agents should use JSON for machine-readable data and link to the Markdown report
 | `reviewer`, `engine_version`, `review_mode` | stable-additive | Added in C21; absent in older artifacts. They are local trust metadata, not signatures. |
 | `parse_error`, `parse_repair` | stable-additive | Optional parser diagnostics. |
 | `evidence_status` | stable-additive | Optional per-finding deterministic evidence status. |
+| `data_egress_class`, `compute_boundary`, `budget` | **stable-additive, declared at revision 3** | Where the data went, where the work ran, and what budget it ran under. **Absent means `unknown`, not `none`** — see below. The engine is the only writer of the observed values. |
 | `raw_text` | stable but human-oriented | Useful for debugging; agents should not rely on its prose format. |
 | `status.jsonl` | experimental | Finding lifecycle/disposition updates may evolve. |
 | Markdown report formatting | human-readable, not machine contract | Do not parse the Markdown table as the primary API. |
@@ -152,6 +153,69 @@ critical, high, medium, low, info
 These identify the local review engine and mode that produced the artifact. They are useful for attribution and debugging.
 
 They are **not** a cryptographic signature, provenance attestation, or certification. Future releases may add signing/provenance separately.
+
+### `data_egress_class`, `compute_boundary`, `budget`
+
+Declared at contract revision 3, from `SEG-ADR-004` (数据外发类别、算力边界与预算). Sego's public
+positioning is local-first, while a review has to send the diff to a model provider to reach a
+conclusion. Both can be true, but only once it is said clearly what leaves the machine. That is what
+these three fields are for.
+
+| field | values | meaning |
+|---|---|---|
+| `data_egress_class` | `none` / `provider` / `provider_and_fetch` / `unknown` | where the reviewed content or fetched results **actually went** |
+| `compute_boundary` | `local` / `remote` / `unknown` | where the work **actually ran** |
+| `budget` | object | `declared` = what the caller permitted; `actual` = what the engine observed |
+
+**They are two orthogonal axes, not one enum.** Local inference that fetched a page is `local`
+compute with `provider_and_fetch` egress, and no single enum expresses that combination.
+
+**The values are observed, never read from configuration.** A config that names a local model while
+the call went to a remote provider must not be recorded as `none`. Filling these from configuration
+would be fabricating evidence.
+
+**Absent is `unknown`, and `unknown` is not `none`.** This is the hard requirement of the decision,
+because treating the two as the same is how "local-first" gets over-claimed: a consumer that reads an
+`unknown` artifact as "reviewed locally" has made a claim Sego did not make. A consumer must
+therefore treat a missing field as `unknown` and decide for itself whether to refuse, degrade, or ask
+for more evidence.
+
+**The consumer's decision, recorded.** The Verification Authority — the only consumer of this
+contract today — chose to **refuse**: any value outside `{none, provider, provider_and_fetch}` ×
+`{local, remote}`, *including an explicit `unknown`*, and a missing field, all fail as
+`InconsistentArtifact` and the whole artifact is rejected. Its stated reason is that a governance
+consumer cannot accept an unattributable egress claim, and that a missing field means the producing
+path did not observe at all. Two consequences follow, both intended:
+
+- **An artifact written by the plain CLI path is not consumable.** That path does not observe a run,
+  so it omits the fields, so this consumer refuses it. Only the governed `sego sidecar review` path
+  produces artifacts this consumer accepts. This is the fail-closed direction working, not a defect —
+  but a second consumer that wants the findings without the egress claim must decide differently
+  rather than inherit this behaviour by accident.
+- **An artifact whose endpoint Sego cannot name is refused too.** Today all four providers have
+  base-URL accessors, so `unknown` is unreachable in practice; if that changes, the review runs and
+  persists but will not be accepted downstream, and that will be visible rather than silent.
+
+**The engine is the only writer of the observed values.** A caller may declare an intent ceiling;
+it cannot declare what actually happened. When the two disagree, the observed value is what goes
+into the artifact **and the disagreement is recorded** — that is the event worth seeing, not one to
+smooth over.
+
+**What is emitted today, and what is not.** The governed sidecar path
+(`sego sidecar review`) writes `data_egress_class` and `compute_boundary`, both derived from the turn
+that ran: the request count is the conversation loop's own iteration count, the fetch count is the
+tool calls that actually returned, and the endpoint is the one this invocation resolved. An endpoint
+Sego cannot name is written as `unknown` rather than left out, so a consumer never has to infer an
+observation gap from a missing field.
+
+`budget` is **declared but not produced**: the object requires a declared ceiling and an observed
+usage together, and no caller of the governed path declares a ceiling yet. Writing the observed half
+alone is what the ADR rules out, so the artifact carries no budget object and reads as `unknown` —
+the truthful answer to "was this review limited?", which is that nobody said.
+
+The plain CLI review path (`sego review`) does not observe a run and omits all three. That is the
+distinction the field's absence carries: absent means the writing path does not observe, `unknown`
+means it observed and could not determine. A consumer reads both as unknown, and neither as `none`.
 
 ### Review Card confidence (`Green` / `Yellow` / `Red`)
 
@@ -269,7 +333,9 @@ Two consequences a consumer should act on rather than discover:
 
 Filling the **absent** entries is a contract change: it needs a revision bump
 here and a coordinated update on the consuming side, not a field added quietly in
-the implementation.
+the implementation. **Revision 3 did exactly that for a capability rather than a
+missing entry**: `data_egress_class`, `compute_boundary` and `budget` were declared, and
+the twelve properties above are unchanged by it.
 
 ### Revision bumps, migration windows and retirement
 

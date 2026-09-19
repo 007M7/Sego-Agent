@@ -684,6 +684,20 @@ struct SegoReviewArtifact {
     /// the caller does not supply one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     invocation_id: Option<String>,
+    /// Contract revision 3 (`SEG-ADR-004`): the class of destination the reviewed
+    /// content actually reached. Written only by a path that observed the run; a
+    /// missing field means the writing path does not observe at all, and reads as
+    /// `unknown` - never as `none`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data_egress_class: Option<String>,
+    /// Contract revision 3 (`SEG-ADR-004`): where the inference actually ran.
+    /// Orthogonal to `data_egress_class`, and observed the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compute_boundary: Option<String>,
+    /// Contract revision 3 (`SEG-ADR-004`): the declared ceiling and the observed
+    /// usage, both or neither. See [`build_budget`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<ReviewBudget>,
     scope: String,
     diff_hash: String,
     finding_count: usize,
@@ -794,6 +808,266 @@ pub const IDENTITY_EVIDENCE_SELF_REPORTED: &str = "self_reported_resolution";
 /// explicitly rather than omitted.
 pub const IDENTITY_GAP_NO_ENDPOINT_ACCESSOR: &str = "no_endpoint_accessor_for_provider";
 
+// ---------------------------------------------------------------------------
+// Contract revision 3 (`SEG-ADR-004`): where the data went, where the work ran,
+// and under what budget.
+//
+// The two axes are orthogonal on purpose. Local inference that fetched a page is
+// `local` compute with `provider_and_fetch` egress, and no single enum expresses
+// that combination - which is why they are two fields and not one.
+// ---------------------------------------------------------------------------
+
+/// Nothing left this machine: either nothing was sent at all, or the provider that
+/// received the content runs on this machine.
+pub const DATA_EGRESS_NONE: &str = "none";
+/// The reviewed content reached a model provider over a network.
+pub const DATA_EGRESS_PROVIDER: &str = "provider";
+/// A model provider was reached, and a web fetch left this machine as well.
+pub const DATA_EGRESS_PROVIDER_AND_FETCH: &str = "provider_and_fetch";
+/// The invocation was observed, but the destination could not be determined.
+///
+/// **Not** a synonym for [`DATA_EGRESS_NONE`]. The distinction is the hard
+/// requirement of `SEG-ADR-004` section 3.4: reading `unknown` as `none` is how
+/// "local-first" gets claimed for a review that never established it.
+pub const DATA_EGRESS_UNKNOWN: &str = "unknown";
+
+/// Inference ran on this machine.
+pub const COMPUTE_BOUNDARY_LOCAL: &str = "local";
+/// Inference ran at the provider.
+pub const COMPUTE_BOUNDARY_REMOTE: &str = "remote";
+/// The invocation was observed, but where the inference ran could not be
+/// determined.
+///
+/// The contract deliberately has no `local_and_remote`. An earlier draft of
+/// revision 3 declared one for a shape where part of the work runs on each side,
+/// and it was removed before publication: nothing produced it, and the consuming
+/// side refuses any value outside `local` / `remote`. A declared value with no
+/// producer is the same over-claim the field pair exists to prevent, and adding
+/// one later is a contract change rather than a quiet widening.
+pub const COMPUTE_BOUNDARY_UNKNOWN: &str = "unknown";
+
+/// Every `data_egress_class` label. Kept next to the constants so the contract
+/// conformance suite can pin them against the schema enum **in both directions**,
+/// the way the older enums already are: one side drifting alone is the failure
+/// that check exists to catch.
+pub const DATA_EGRESS_ALL_LABELS: [&str; 4] =
+    [DATA_EGRESS_NONE, DATA_EGRESS_PROVIDER, DATA_EGRESS_PROVIDER_AND_FETCH, DATA_EGRESS_UNKNOWN];
+
+/// Every `compute_boundary` label. Same pinning as [`DATA_EGRESS_ALL_LABELS`].
+pub const COMPUTE_BOUNDARY_ALL_LABELS: [&str; 3] =
+    [COMPUTE_BOUNDARY_LOCAL, COMPUTE_BOUNDARY_REMOTE, COMPUTE_BOUNDARY_UNKNOWN];
+
+/// Tool name whose use means data left this machine for a third-party host.
+///
+/// The name lives in the `tools` crate, which this one does not depend on, so the
+/// two are pinned from the outside by
+/// `the_tool_name_the_artifact_classifies_by_is_a_registered_tool`. A rename on
+/// either side would otherwise make the fetch count silently zero, which is the
+/// direction that under-reports egress.
+pub const WEB_FETCH_TOOL_NAME: &str = "WebFetch";
+
+/// What one review invocation **observed about its own behaviour**.
+///
+/// `SEG-ADR-004` section 3.2 is the reason this is an input rather than a read of
+/// the provider configuration: the values have to come from what the invocation
+/// actually did. A config that names a local model while the request went to a
+/// remote provider must not be recorded as `none`, and taking the values from the
+/// run is the only way to guarantee that.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewEgressObservation {
+    /// Model-provider requests this invocation actually opened.
+    ///
+    /// The conversation loop increments its iteration counter once per request,
+    /// so this counts requests made, not requests intended.
+    pub provider_calls: u64,
+    /// Input tokens the provider reported, or `None` when it reported none. A
+    /// zero here would be a claim; the contract has a value for the gap.
+    pub input_tokens: Option<u64>,
+    /// Names of the tools that returned during the invocation, in call order.
+    /// Only the fetch classification reads this, and it is never persisted.
+    pub tool_names: Vec<String>,
+}
+
+impl ReviewEgressObservation {
+    /// Web fetches this invocation performed.
+    ///
+    /// A call that *failed* counts too. A failed fetch may still have reached the
+    /// third-party host, and under-reporting egress is the direction that lets
+    /// "local-first" be over-claimed, so the classification errs towards the wider
+    /// class rather than towards the comfortable one.
+    #[must_use]
+    pub fn fetch_count(&self) -> usize {
+        self.tool_names.iter().filter(|name| name.as_str() == WEB_FETCH_TOOL_NAME).count()
+    }
+}
+
+/// Whether an endpoint a request was sent to is on this machine.
+///
+/// Deliberately strict: only a loopback IP literal or `localhost` counts. A name
+/// such as `127.0.0.1.example.com` resolves wherever its owner says, and reading
+/// it as loopback would under-report egress - the exact failure this
+/// classification exists to prevent.
+#[must_use]
+fn endpoint_is_loopback(endpoint: &str) -> bool {
+    let after_scheme = endpoint.split_once("://").map_or(endpoint, |(_, rest)| rest);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        match rest.split_once(']') {
+            // A bracketed address has to be the whole host. `[::1].example.com` is a
+            // name whose first label merely looks like the literal, and reading it as
+            // loopback is the under-reporting this function exists to avoid.
+            Some((literal, tail)) if tail.is_empty() || tail.starts_with(':') => literal,
+            _ => "",
+        }
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    match host.parse::<std::net::IpAddr>() {
+        Ok(address) => address.is_loopback(),
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// Classify where the reviewed content actually went (`SEG-ADR-004` section 3.3).
+///
+/// Orthogonal to [`compute_boundary_for`]: this answers "where did the data go",
+/// that one answers "where did the work run".
+#[must_use]
+pub fn data_egress_class_for(
+    observation: &ReviewEgressObservation,
+    endpoint: Option<&str>,
+) -> &'static str {
+    if observation.fetch_count() > 0 {
+        // A fetch leaves this machine by definition, and the model that decided to
+        // make it was reached first.
+        return DATA_EGRESS_PROVIDER_AND_FETCH;
+    }
+    if observation.provider_calls == 0 {
+        // Nothing was sent anywhere. This is the one case where `none` is known
+        // rather than assumed.
+        return DATA_EGRESS_NONE;
+    }
+    match endpoint {
+        Some(endpoint) if endpoint_is_loopback(endpoint) => DATA_EGRESS_NONE,
+        Some(_) => DATA_EGRESS_PROVIDER,
+        // The destination is not observable. `unknown` is the value the ADR sets
+        // aside for this, and it is defined to be read as anything but `none`.
+        None => DATA_EGRESS_UNKNOWN,
+    }
+}
+
+/// Classify where the inference actually ran (`SEG-ADR-004` section 3.3).
+///
+/// Orthogonal to [`data_egress_class_for`]. Both return `unknown` rather than a
+/// definite value when the endpoint is unobservable. The destination is not
+/// widened to `provider` here: `unknown` already carries the "not none" reading
+/// the ADR requires, and asserting `provider` would claim something unobserved.
+#[must_use]
+pub fn compute_boundary_for(
+    observation: &ReviewEgressObservation,
+    endpoint: Option<&str>,
+) -> &'static str {
+    if observation.provider_calls == 0 {
+        return COMPUTE_BOUNDARY_LOCAL;
+    }
+    match endpoint {
+        Some(endpoint) if endpoint_is_loopback(endpoint) => COMPUTE_BOUNDARY_LOCAL,
+        Some(_) => COMPUTE_BOUNDARY_REMOTE,
+        None => COMPUTE_BOUNDARY_UNKNOWN,
+    }
+}
+
+/// The ceiling a caller declared for one review.
+///
+/// A caller may declare an intent ceiling. It may not declare an actual: the
+/// engine is the only writer of what happened (`SEG-ADR-004` section 3.5).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewBudgetDeclaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_provider_calls: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fetches: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+}
+
+impl ReviewBudgetDeclaration {
+    /// Whether the caller declared a ceiling on any dimension.
+    ///
+    /// A declaration with no dimension is not a budget, and is treated as no
+    /// declaration at all rather than as a ceiling of zero.
+    #[must_use]
+    pub fn declares_nothing(&self) -> bool {
+        self.max_provider_calls.is_none()
+            && self.max_fetches.is_none()
+            && self.max_input_tokens.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReviewBudgetActual {
+    provider_calls: u64,
+    fetches: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<u64>,
+    limit_reached: bool,
+    aborted: bool,
+}
+
+/// The `budget` object written into an artifact: a declared ceiling and the
+/// observed usage, **both or neither**.
+///
+/// `SEG-ADR-004` section 3.3 requires both halves. A ceiling alone reads as "did
+/// not exceed it", and an actual alone invites the question "was it ever limited?"
+/// while giving the reader nothing to answer it with. A review under no declared
+/// ceiling therefore carries no budget object and reads as unknown - which is the
+/// truthful answer to that question: nobody said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReviewBudget {
+    declared: ReviewBudgetDeclaration,
+    actual: ReviewBudgetActual,
+}
+
+/// Whether the observed usage reached any dimension the caller declared.
+#[must_use]
+fn budget_limit_reached(
+    declared: &ReviewBudgetDeclaration,
+    observation: &ReviewEgressObservation,
+) -> bool {
+    let reached = |limit: Option<u64>, actual: u64| limit.is_some_and(|limit| actual >= limit);
+    reached(declared.max_provider_calls, observation.provider_calls)
+        || reached(declared.max_fetches, observation.fetch_count() as u64)
+        || declared
+            .max_input_tokens
+            .zip(observation.input_tokens)
+            .is_some_and(|(limit, actual)| actual >= limit)
+}
+
+/// Build the budget object, or nothing when the caller declared no ceiling.
+///
+/// `aborted` is false because nothing enforces a ceiling yet: a run cannot have
+/// been stopped by a limit that no code applies. It is not a default standing in
+/// for an unknown - it is what happened.
+fn build_budget(
+    declared: &ReviewBudgetDeclaration,
+    observation: &ReviewEgressObservation,
+) -> Option<ReviewBudget> {
+    if declared.declares_nothing() {
+        return None;
+    }
+    Some(ReviewBudget {
+        declared: declared.clone(),
+        actual: ReviewBudgetActual {
+            provider_calls: observation.provider_calls,
+            fetches: observation.fetch_count() as u64,
+            input_tokens: observation.input_tokens,
+            limit_reached: budget_limit_reached(declared, observation),
+            aborted: false,
+        },
+    })
+}
+
 /// Runtime identity of one invocation, recorded by the governed plugin path.
 ///
 /// Distinct from `reviewer` / `engine_version` / `review_mode`, which identify the
@@ -841,6 +1115,40 @@ pub fn persist_review_artifact_with_identity(
     report: &ReviewReport,
     identity: &ReviewInvocationIdentity,
 ) -> std::io::Result<PersistedReviewArtifact> {
+    persist_review_artifact_inner(workspace_root, target, report, identity, None)
+}
+
+/// Persist a review artifact from a run whose behaviour was observed.
+///
+/// The egress class and the compute boundary are derived from `observation` - the
+/// run itself - and never from configuration (`SEG-ADR-004` section 3.2), which is
+/// the whole point of the field pair. A caller that has no observation to pass
+/// should use [`persist_review_artifact_with_identity`] instead: the fields are
+/// then absent, which a consumer reads as `unknown` rather than as `none`.
+pub fn persist_review_artifact_observed(
+    workspace_root: &Path,
+    target: &ReviewTarget,
+    report: &ReviewReport,
+    identity: &ReviewInvocationIdentity,
+    observation: &ReviewEgressObservation,
+    declared_budget: &ReviewBudgetDeclaration,
+) -> std::io::Result<PersistedReviewArtifact> {
+    persist_review_artifact_inner(
+        workspace_root,
+        target,
+        report,
+        identity,
+        Some((observation, declared_budget)),
+    )
+}
+
+fn persist_review_artifact_inner(
+    workspace_root: &Path,
+    target: &ReviewTarget,
+    report: &ReviewReport,
+    identity: &ReviewInvocationIdentity,
+    observed: Option<(&ReviewEgressObservation, &ReviewBudgetDeclaration)>,
+) -> std::io::Result<PersistedReviewArtifact> {
     let reviews_dir = workspace_root.join(".sego").join("reviews");
     fs::create_dir_all(&reviews_dir)?;
 
@@ -883,6 +1191,17 @@ pub fn persist_review_artifact_with_identity(
         findings: report.findings.clone(),
         raw_text: report.raw_text.clone(),
         evidence_coverage: Some(build_evidence_coverage(target)),
+        // The endpoint is the one this invocation resolved, which is the address
+        // the client dialled - not a preference read back from configuration. An
+        // `unknown` here is the observation gap, written rather than omitted so a
+        // consumer never has to infer it from a missing field.
+        data_egress_class: observed.map(|(observation, _)| {
+            data_egress_class_for(observation, identity.resolved_endpoint.as_deref()).to_string()
+        }),
+        compute_boundary: observed.map(|(observation, _)| {
+            compute_boundary_for(observation, identity.resolved_endpoint.as_deref()).to_string()
+        }),
+        budget: observed.and_then(|(observation, declared)| build_budget(declared, observation)),
     };
 
     let json_path = reviews_dir.join(format!("{id}.json"));
@@ -1359,12 +1678,16 @@ fn short_hash(hash: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_evidence_coverage, evaluate_evidence_gate, latest_review_finding_statuses,
-        load_review_finding_statuses, load_review_index, persist_review_artifact,
+        build_budget, build_evidence_coverage, compute_boundary_for, data_egress_class_for,
+        evaluate_evidence_gate, latest_review_finding_statuses, load_review_finding_statuses,
+        load_review_index, persist_review_artifact, persist_review_artifact_observed,
         persist_review_artifact_with_identity, record_review_finding_status, review_diff_hash,
-        EvidenceStatus, ReviewContentStatus, ReviewEvidenceScopeKind, ReviewFinding,
-        ReviewFindingStatus, ReviewFindingStatusEntry, ReviewIndexEntry, ReviewInvocationIdentity,
-        ReviewParseStatus, ReviewReport, SegoReviewArtifact, IDENTITY_EVIDENCE_SELF_REPORTED,
+        EvidenceStatus, ReviewBudgetDeclaration, ReviewContentStatus, ReviewEgressObservation,
+        ReviewEvidenceScopeKind, ReviewFinding, ReviewFindingStatus, ReviewFindingStatusEntry,
+        ReviewIndexEntry, ReviewInvocationIdentity, ReviewParseStatus, ReviewReport,
+        SegoReviewArtifact, COMPUTE_BOUNDARY_LOCAL, COMPUTE_BOUNDARY_REMOTE,
+        COMPUTE_BOUNDARY_UNKNOWN, DATA_EGRESS_NONE, DATA_EGRESS_PROVIDER,
+        DATA_EGRESS_PROVIDER_AND_FETCH, DATA_EGRESS_UNKNOWN, IDENTITY_EVIDENCE_SELF_REPORTED,
         IDENTITY_GAP_NO_ENDPOINT_ACCESSOR,
     };
     use crate::code_review::{ReviewScope, ReviewSeverity, ReviewTarget};
@@ -1424,6 +1747,11 @@ mod tests {
             identity_evidence: Some(IDENTITY_EVIDENCE_SELF_REPORTED.to_string()),
             identity_evidence_gap: None,
             invocation_id: Some("inv-test-001".to_string()),
+            // Revision 3 fields carried through the golden round-trip too, so a
+            // later rename of a JSON key is caught here rather than by a consumer.
+            data_egress_class: Some(DATA_EGRESS_PROVIDER.to_string()),
+            compute_boundary: Some(COMPUTE_BOUNDARY_REMOTE.to_string()),
+            budget: None,
             scope: "staged".to_string(),
             diff_hash: "sha256:abc123".to_string(),
             finding_count: 1,
@@ -1504,6 +1832,11 @@ mod tests {
             identity_evidence: None,
             identity_evidence_gap: None,
             invocation_id: None,
+            // The writing path that does not observe at all: all three are absent,
+            // which is the case a consumer must read as `unknown`, not as `none`.
+            data_egress_class: None,
+            compute_boundary: None,
+            budget: None,
             scope: "workspace".to_string(),
             diff_hash: "sha256:none".to_string(),
             finding_count: 0,
@@ -2409,6 +2742,301 @@ mod tests {
         let h_diff = review_diff_hash(&diff);
 
         assert_ne!(h_full, h_diff, "FullRepo hash should differ from diff-based hash");
+    }
+
+    // -----------------------------------------------------------------
+    // Contract revision 3 (`SEG-ADR-004`): the egress, compute and budget
+    // fields. The five fail-closed directions of that ADR section 3.4 each have
+    // a case here, plus the misclassification cases that would make a wrong
+    // answer look right.
+    // -----------------------------------------------------------------
+
+    fn observation(provider_calls: u64, tools: &[&str]) -> ReviewEgressObservation {
+        ReviewEgressObservation {
+            provider_calls,
+            input_tokens: Some(1234),
+            tool_names: tools.iter().map(|name| (*name).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_review_that_sent_nothing_is_the_only_case_that_reports_none() {
+        // Fail-closed direction 2 and 5: `none` is a claim, and it is made only
+        // where the run supports it. A run that opened no request and fetched
+        // nothing sent nothing - whatever the configuration says the provider is.
+        let idle = observation(0, &[]);
+        assert_eq!(
+            data_egress_class_for(&idle, Some("https://api.deepseek.com")),
+            DATA_EGRESS_NONE
+        );
+        assert_eq!(
+            compute_boundary_for(&idle, Some("https://api.deepseek.com")),
+            COMPUTE_BOUNDARY_LOCAL
+        );
+    }
+
+    #[test]
+    fn a_remote_provider_is_provider_egress_and_remote_compute() {
+        let call = observation(1, &[]);
+        assert_eq!(
+            data_egress_class_for(&call, Some("https://api.deepseek.com")),
+            DATA_EGRESS_PROVIDER
+        );
+        assert_eq!(
+            compute_boundary_for(&call, Some("https://api.deepseek.com")),
+            COMPUTE_BOUNDARY_REMOTE
+        );
+    }
+
+    #[test]
+    fn a_locally_served_provider_is_none_egress_and_local_compute() {
+        // `SEG-ADR-004` section 3.1: a model served on this machine is local compute
+        // with no egress. The two axes move independently, which is why a review can
+        // be `none` here and `provider_and_fetch` two cases down.
+        let call = observation(1, &[]);
+        assert_eq!(
+            data_egress_class_for(&call, Some("http://127.0.0.1:11434/v1")),
+            DATA_EGRESS_NONE
+        );
+        assert_eq!(
+            compute_boundary_for(&call, Some("http://127.0.0.1:11434/v1")),
+            COMPUTE_BOUNDARY_LOCAL
+        );
+        assert_eq!(data_egress_class_for(&call, Some("http://[::1]:8080")), DATA_EGRESS_NONE);
+        assert_eq!(data_egress_class_for(&call, Some("http://localhost:11434")), DATA_EGRESS_NONE);
+    }
+
+    #[test]
+    fn an_unobservable_endpoint_is_unknown_and_never_none() {
+        // Fail-closed directions 1 and 5, and the hard requirement of the ADR: a
+        // review that reached a provider over an endpoint Sego cannot name is
+        // `unknown`. Reading it as `none` is the exact move that lets "local-first"
+        // be claimed for a review that never established it.
+        let call = observation(1, &[]);
+        let egress = data_egress_class_for(&call, None);
+        assert_eq!(egress, DATA_EGRESS_UNKNOWN);
+        assert_ne!(egress, DATA_EGRESS_NONE, "unknown must never collapse into none");
+        assert_eq!(compute_boundary_for(&call, None), COMPUTE_BOUNDARY_UNKNOWN);
+    }
+
+    #[test]
+    fn a_hostname_that_only_looks_like_loopback_is_not_read_as_one() {
+        // The dangerous misclassification: a dotted name that begins with a loopback
+        // address resolves wherever its owner points it. Treating it as loopback
+        // would under-report egress, which is the direction that matters.
+        let call = observation(1, &[]);
+        assert_eq!(
+            data_egress_class_for(&call, Some("https://127.0.0.1.example.com/v1")),
+            DATA_EGRESS_PROVIDER
+        );
+        assert_eq!(
+            compute_boundary_for(&call, Some("https://127.0.0.1.example.com/v1")),
+            COMPUTE_BOUNDARY_REMOTE
+        );
+        // And an IPv6-embedded name is not an IPv6 literal.
+        assert_eq!(
+            data_egress_class_for(&call, Some("https://[::1].example.com/v1")),
+            DATA_EGRESS_PROVIDER
+        );
+    }
+
+    #[test]
+    fn a_fetch_widens_the_egress_class_even_when_the_model_ran_locally() {
+        // The combination the single-enum design could not express: local inference
+        // that went and fetched a page. The fetch left this machine regardless of
+        // where the model ran, so the egress class widens and the compute boundary
+        // does not.
+        let fetched = observation(1, &["WebFetch"]);
+        assert_eq!(
+            data_egress_class_for(&fetched, Some("http://127.0.0.1:11434")),
+            DATA_EGRESS_PROVIDER_AND_FETCH
+        );
+        assert_eq!(
+            compute_boundary_for(&fetched, Some("http://127.0.0.1:11434")),
+            COMPUTE_BOUNDARY_LOCAL
+        );
+        // The other web tool is not a fetch and must not widen anything.
+        let searched = observation(1, &["WebSearch"]);
+        assert_eq!(
+            data_egress_class_for(&searched, Some("https://api.deepseek.com")),
+            DATA_EGRESS_PROVIDER
+        );
+    }
+
+    #[test]
+    fn half_a_budget_is_never_written() {
+        // `SEG-ADR-004` section 3.3: both halves or neither. A review whose usage was
+        // observed but whose caller declared no ceiling carries no budget object at
+        // all, so the artifact reads as unknown rather than inviting "was it ever
+        // limited?" with an answer it cannot support.
+        let call = observation(3, &[]);
+        assert!(
+            build_budget(&ReviewBudgetDeclaration::default(), &call).is_none(),
+            "an observed actual with no declared ceiling must not be written"
+        );
+
+        let declared = ReviewBudgetDeclaration {
+            max_provider_calls: Some(5),
+            max_fetches: None,
+            max_input_tokens: None,
+        };
+        let budget = build_budget(&declared, &call).expect("both halves are present here");
+        assert_eq!(budget.declared.max_provider_calls, Some(5));
+        assert_eq!(budget.actual.provider_calls, 3);
+        assert_eq!(budget.actual.fetches, 0);
+        assert!(!budget.actual.limit_reached);
+        assert!(!budget.actual.aborted);
+    }
+
+    #[test]
+    fn a_reached_ceiling_is_recorded_in_the_budget_object() {
+        // Fail-closed direction 4: touching the ceiling is visible rather than
+        // silently degraded into "finished".
+        let call = observation(3, &["WebFetch"]);
+        let declared = ReviewBudgetDeclaration {
+            max_provider_calls: Some(3),
+            max_fetches: None,
+            max_input_tokens: None,
+        };
+        let budget = build_budget(&declared, &call).expect("both halves are present here");
+        assert!(budget.actual.limit_reached, "3 calls against a ceiling of 3 reached it");
+
+        // A ceiling on a dimension the run never touched is not reached.
+        let untouched = ReviewBudgetDeclaration {
+            max_provider_calls: Some(9),
+            max_fetches: None,
+            max_input_tokens: Some(10_000),
+        };
+        let budget = build_budget(&untouched, &call).expect("both halves are present here");
+        assert!(!budget.actual.limit_reached);
+    }
+
+    #[test]
+    fn a_missing_usage_reading_is_a_gap_not_a_zero() {
+        // The actual half reports what was observed. When the provider reported no
+        // usage, the field is absent - `0` would be a claim about a review that
+        // certainly consumed the prompt at least.
+        let call =
+            ReviewEgressObservation { provider_calls: 1, input_tokens: None, tool_names: vec![] };
+        let declared = ReviewBudgetDeclaration {
+            max_provider_calls: None,
+            max_fetches: None,
+            max_input_tokens: Some(10),
+        };
+        let budget = build_budget(&declared, &call).expect("both halves are present here");
+        assert_eq!(budget.actual.input_tokens, None);
+        assert!(
+            !budget.actual.limit_reached,
+            "an unmeasured dimension cannot be reported as having reached its ceiling"
+        );
+    }
+
+    #[test]
+    fn the_observed_path_writes_the_fields_and_the_plain_path_omits_them() {
+        // The distinction the contract draws: an absent field means the writing path
+        // does not observe, an explicit `unknown` means it observed but could not
+        // determine. Both read as unknown to a consumer, and neither is `none`.
+        let report = ReviewReport::from_model_output("{\"findings\": []}");
+        let root_plain = temp_path("sec12-plain");
+        let root_observed = temp_path("sec12-observed");
+        let root_blind = temp_path("sec12-blind");
+        for root in [&root_plain, &root_observed, &root_blind] {
+            let _ = std::fs::create_dir_all(root);
+        }
+        let target = target_with_diff("diff --git a/src/lib.rs b/src/lib.rs\n");
+
+        let read = |path: &std::path::Path| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(path).expect("artifact json"))
+                .expect("artifact is JSON")
+        };
+
+        let plain = persist_review_artifact(&root_plain, &target, &report).expect("persist plain");
+        let plain_json = read(&plain.json_path);
+        assert!(plain_json.get("data_egress_class").is_none());
+        assert!(plain_json.get("compute_boundary").is_none());
+        assert!(plain_json.get("budget").is_none());
+
+        let identity = ReviewInvocationIdentity {
+            provider: Some("deepseek".to_string()),
+            model: Some("deepseek-chat".to_string()),
+            resolved_endpoint: Some("https://api.deepseek.com".to_string()),
+            invocation_id: None,
+        };
+        let observed = persist_review_artifact_observed(
+            &root_observed,
+            &target,
+            &report,
+            &identity,
+            &observation(2, &["WebFetch"]),
+            &ReviewBudgetDeclaration::default(),
+        )
+        .expect("persist observed");
+        let observed_json = read(&observed.json_path);
+        assert_eq!(
+            observed_json.get("data_egress_class").and_then(serde_json::Value::as_str),
+            Some(DATA_EGRESS_PROVIDER_AND_FETCH)
+        );
+        assert_eq!(
+            observed_json.get("compute_boundary").and_then(serde_json::Value::as_str),
+            Some(COMPUTE_BOUNDARY_REMOTE)
+        );
+        assert!(
+            observed_json.get("budget").is_none(),
+            "the caller declared no ceiling, so no budget object is written"
+        );
+
+        // Observed, but the endpoint could not be named: the value is written
+        // explicitly as `unknown` rather than left for the reader to infer.
+        let blind_identity = ReviewInvocationIdentity {
+            provider: Some("openai".to_string()),
+            model: Some("gpt-4o".to_string()),
+            resolved_endpoint: None,
+            invocation_id: None,
+        };
+        let blind = persist_review_artifact_observed(
+            &root_blind,
+            &target,
+            &report,
+            &blind_identity,
+            &observation(1, &[]),
+            &ReviewBudgetDeclaration::default(),
+        )
+        .expect("persist blind");
+        let blind_json = read(&blind.json_path);
+        assert_eq!(
+            blind_json.get("data_egress_class").and_then(serde_json::Value::as_str),
+            Some(DATA_EGRESS_UNKNOWN)
+        );
+        assert_ne!(
+            blind_json.get("data_egress_class").and_then(serde_json::Value::as_str),
+            Some(DATA_EGRESS_NONE)
+        );
+    }
+
+    #[test]
+    fn an_unobserved_artifact_reads_as_unknown_not_as_local() {
+        // The consumer-side consequence written into `SEG-ADR-004` section 3.6: an
+        // artifact with no egress fields must not be usable as evidence that the
+        // review was local. The schema makes all three optional for exactly this
+        // reason, so the field must be absent rather than defaulted to `none`.
+        let draft = serde_json::json!({
+            "schema_version": 1,
+            "id": "review-legacy",
+            "created_at_epoch_seconds": 1,
+            "scope": "staged",
+            "diff_hash": "sha256:legacy",
+            "finding_count": 0,
+            "highest_severity": null,
+            "parse_status": "structured",
+            "git_status": "",
+            "findings": [],
+            "raw_text": "",
+        });
+        let parsed: SegoReviewArtifact =
+            serde_json::from_value(draft).expect("a pre-revision-3 artifact must still parse");
+        assert_eq!(parsed.data_egress_class, None);
+        assert_eq!(parsed.compute_boundary, None);
+        assert!(parsed.budget.is_none());
     }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
