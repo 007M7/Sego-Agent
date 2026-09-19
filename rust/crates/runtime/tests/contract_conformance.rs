@@ -102,8 +102,12 @@ fn temp_root(name: &str) -> PathBuf {
 
 #[test]
 fn contract_metadata_matches_the_recorded_identity() {
+    // `review-artifact` moved to revision 3 when `data_egress_class`,
+    // `compute_boundary` and `budget` were declared (SEG-ADR-004). The revision
+    // is pinned here on purpose: a bump is a contract change, and this line is
+    // where that change becomes deliberate rather than incidental.
     let cases = [
-        ("review-artifact", "sego.review.artifact/v1", 2),
+        ("review-artifact", "sego.review.artifact/v1", 3),
         ("review-index-entry", "sego.review.index-entry", 1),
         ("sidecar-request-response", "sego.sidecar.envelope", 1),
     ];
