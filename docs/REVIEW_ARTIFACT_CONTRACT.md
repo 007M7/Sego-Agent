@@ -164,7 +164,7 @@ these three fields are for.
 | field | values | meaning |
 |---|---|---|
 | `data_egress_class` | `none` / `provider` / `provider_and_fetch` / `unknown` | where the reviewed content or fetched results **actually went** |
-| `compute_boundary` | `local` / `local_and_remote` / `remote` / `unknown` | where the work **actually ran** |
+| `compute_boundary` | `local` / `remote` / `unknown` | where the work **actually ran** |
 | `budget` | object | `declared` = what the caller permitted; `actual` = what the engine observed |
 
 **They are two orthogonal axes, not one enum.** Local inference that fetched a page is `local`
@@ -179,6 +179,22 @@ because treating the two as the same is how "local-first" gets over-claimed: a c
 `unknown` artifact as "reviewed locally" has made a claim Sego did not make. A consumer must
 therefore treat a missing field as `unknown` and decide for itself whether to refuse, degrade, or ask
 for more evidence.
+
+**The consumer's decision, recorded.** The Verification Authority — the only consumer of this
+contract today — chose to **refuse**: any value outside `{none, provider, provider_and_fetch}` ×
+`{local, remote}`, *including an explicit `unknown`*, and a missing field, all fail as
+`InconsistentArtifact` and the whole artifact is rejected. Its stated reason is that a governance
+consumer cannot accept an unattributable egress claim, and that a missing field means the producing
+path did not observe at all. Two consequences follow, both intended:
+
+- **An artifact written by the plain CLI path is not consumable.** That path does not observe a run,
+  so it omits the fields, so this consumer refuses it. Only the governed `sego sidecar review` path
+  produces artifacts this consumer accepts. This is the fail-closed direction working, not a defect —
+  but a second consumer that wants the findings without the egress claim must decide differently
+  rather than inherit this behaviour by accident.
+- **An artifact whose endpoint Sego cannot name is refused too.** Today all four providers have
+  base-URL accessors, so `unknown` is unreachable in practice; if that changes, the review runs and
+  persists but will not be accepted downstream, and that will be visible rather than silent.
 
 **The engine is the only writer of the observed values.** A caller may declare an intent ceiling;
 it cannot declare what actually happened. When the two disagree, the observed value is what goes

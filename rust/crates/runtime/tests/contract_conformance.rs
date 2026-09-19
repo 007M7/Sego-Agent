@@ -29,6 +29,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use runtime::code_review::{COMPUTE_BOUNDARY_ALL_LABELS, DATA_EGRESS_ALL_LABELS};
 use runtime::{
     persist_review_artifact, EvidenceStatus, ReviewFindingStatus, ReviewParseStatus, ReviewReport,
     ReviewScope, ReviewSeverity, ReviewTarget,
@@ -299,6 +300,28 @@ fn rust_enums_equal_the_schema_enums_in_both_directions() {
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
         "finding_status: schema and implementation disagree"
+    );
+
+    // Revision 3's two enums, pinned the same way. They were declared without
+    // this check, which meant either side could have drifted alone and nothing
+    // would have said so.
+    let egress: BTreeSet<&str> = DATA_EGRESS_ALL_LABELS.iter().copied().collect();
+    assert_eq!(
+        egress,
+        enum_of(&artifact_schema, "data_egress_class")
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "data_egress_class: schema and implementation disagree"
+    );
+    let compute: BTreeSet<&str> = COMPUTE_BOUNDARY_ALL_LABELS.iter().copied().collect();
+    assert_eq!(
+        compute,
+        enum_of(&artifact_schema, "compute_boundary")
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "compute_boundary: schema and implementation disagree"
     );
 
     // The envelope owns exactly one extra parse_status value.

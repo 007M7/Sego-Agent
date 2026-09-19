@@ -838,11 +838,24 @@ pub const COMPUTE_BOUNDARY_REMOTE: &str = "remote";
 /// The invocation was observed, but where the inference ran could not be
 /// determined.
 ///
-/// The contract also declares `local_and_remote`, for a shape where part of the
-/// work genuinely runs on each side. Nothing produces that value yet, and
-/// synthesising one here would be the fabrication `SEG-ADR-004` section 3.2
-/// forbids.
+/// The contract deliberately has no `local_and_remote`. An earlier draft of
+/// revision 3 declared one for a shape where part of the work runs on each side,
+/// and it was removed before publication: nothing produced it, and the consuming
+/// side refuses any value outside `local` / `remote`. A declared value with no
+/// producer is the same over-claim the field pair exists to prevent, and adding
+/// one later is a contract change rather than a quiet widening.
 pub const COMPUTE_BOUNDARY_UNKNOWN: &str = "unknown";
+
+/// Every `data_egress_class` label. Kept next to the constants so the contract
+/// conformance suite can pin them against the schema enum **in both directions**,
+/// the way the older enums already are: one side drifting alone is the failure
+/// that check exists to catch.
+pub const DATA_EGRESS_ALL_LABELS: [&str; 4] =
+    [DATA_EGRESS_NONE, DATA_EGRESS_PROVIDER, DATA_EGRESS_PROVIDER_AND_FETCH, DATA_EGRESS_UNKNOWN];
+
+/// Every `compute_boundary` label. Same pinning as [`DATA_EGRESS_ALL_LABELS`].
+pub const COMPUTE_BOUNDARY_ALL_LABELS: [&str; 3] =
+    [COMPUTE_BOUNDARY_LOCAL, COMPUTE_BOUNDARY_REMOTE, COMPUTE_BOUNDARY_UNKNOWN];
 
 /// Tool name whose use means data left this machine for a third-party host.
 ///

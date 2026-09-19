@@ -68,14 +68,10 @@
       "description": "Git status snapshot at review time (e.g. '## main...origin/main')."
     },
     "data_egress_class": {
-      "type": "string",
-      "enum": ["none", "provider", "provider_and_fetch", "unknown"],
-      "description": "Where the reviewed content or fetched results actually went during this review. Observed by the engine, never read from configuration: a config that names a local model while the call went to a remote provider must not be recorded as 'none'. 'unknown' is not 'none' - unknown means the engine could not determine it, and a consumer that treats the two as the same has made a claim Sego did not make. Absent means unknown too, not none. See SEG-ADR-004."
+      "$ref": "#/$defs/data_egress_class"
     },
     "compute_boundary": {
-      "type": "string",
-      "enum": ["local", "local_and_remote", "remote", "unknown"],
-      "description": "Where this review was actually computed. Orthogonal to data_egress_class: local inference that fetched a page is 'local' compute with 'provider_and_fetch' egress, and no single enum expresses both. Same observation rule and same 'unknown' caveat as data_egress_class. See SEG-ADR-004."
+      "$ref": "#/$defs/compute_boundary"
     },
     "budget": {
       "type": "object",
@@ -214,6 +210,17 @@
         "parse_attempted_but_failed"
       ]
     },
+    "data_egress_class": {
+      "type": "string",
+      "description": "Where the reviewed content or fetched results actually went during this review. Observed by the engine, never read from configuration: a config that names a local model while the call went to a remote provider must not be recorded as 'none'. 'unknown' is not 'none' - unknown means the engine could not determine it, and a consumer that treats the two as the same has made a claim Sego did not make. Absent means unknown too, not none. See SEG-ADR-004.",
+      "enum": ["none", "provider", "provider_and_fetch", "unknown"]
+    },
+    "compute_boundary": {
+      "type": "string",
+      "description": "Where this review was actually computed. Orthogonal to data_egress_class: local inference that fetched a page is 'local' compute with 'provider_and_fetch' egress, and no single enum expresses both. Same observation rule and same 'unknown' caveat as data_egress_class. See SEG-ADR-004.",
+      "enum": ["local", "remote", "unknown"]
+    },
+
     "finding": {
       "type": "object",
       "description": "A single structured review finding (aligned with Rust ReviewFinding).",
