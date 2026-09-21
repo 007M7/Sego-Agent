@@ -16,12 +16,12 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
+    agent_permission_policy, allowed_domains, allowed_tools_for_subagent, classify_lane_failure,
     execute_agent_with_spawn, execute_tool, execute_web_fetch_with, final_assistant_text,
-    mvp_tool_specs, normalize_fetch_url_with, permission_mode_from_plugin,
-    persist_agent_terminal_state, push_output_block, run_task_packet, AgentInput, AgentJob,
-    GlobalToolRegistry, LaneEventName, LaneFailureClass, SubagentToolExecutor, WebFetchInput,
-    UNTRUSTED_FETCH_NOTICE, UNTRUSTED_FETCH_TRUST,
+    host_is_allowed, mvp_tool_specs, normalize_fetch_url_with, permission_mode_from_plugin,
+    persist_agent_terminal_state, push_output_block, refuse_uncapped_host, run_task_packet,
+    set_allowed_domains, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
+    SubagentToolExecutor, WebFetchInput, UNTRUSTED_FETCH_NOTICE, UNTRUSTED_FETCH_TRUST,
 };
 use api::OutputContentBlock;
 use runtime::{
@@ -117,6 +117,107 @@ fn permission_policy_for_mode(mode: PermissionMode) -> PermissionPolicy {
     mvp_tool_specs().into_iter().fold(PermissionPolicy::new(mode), |policy, spec| {
         policy.with_tool_requirement(spec.name, spec.required_permission)
     })
+}
+
+// ---------------------------------------------------------------------------
+// DEV-SEC-03: the WebFetch domain ceiling.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_empty_ceiling_leaves_the_tool_unrestricted() {
+    // Absent configuration is not "nothing is allowed". Reading it the other way
+    // would turn a missing setting into a broken tool.
+    assert!(host_is_allowed("example.com", &[]));
+    assert!(refuse_uncapped_host("example.com", None).is_ok());
+    assert!(refuse_uncapped_host("example.com", Some(&[])).is_ok());
+}
+
+#[test]
+fn a_bare_entry_matches_that_host_and_no_other() {
+    let allowed = vec!["example.com".to_string()];
+    assert!(refuse_uncapped_host("example.com", Some(&allowed)).is_ok());
+    assert!(
+        refuse_uncapped_host("evil.example.com", Some(&allowed)).is_err(),
+        "a bare entry must not silently cover subdomains"
+    );
+    assert!(refuse_uncapped_host("example.com.evil.test", Some(&allowed)).is_err());
+    assert!(refuse_uncapped_host("notexample.com", Some(&allowed)).is_err());
+}
+
+#[test]
+fn a_dotted_entry_covers_the_host_and_its_subdomains() {
+    let allowed = vec![".example.com".to_string()];
+    assert!(refuse_uncapped_host("example.com", Some(&allowed)).is_ok());
+    assert!(refuse_uncapped_host("api.example.com", Some(&allowed)).is_ok());
+    assert!(refuse_uncapped_host("a.b.example.com", Some(&allowed)).is_ok());
+    assert!(
+        refuse_uncapped_host("example.com.evil.test", Some(&allowed)).is_err(),
+        "a suffix must not match in the middle of a name"
+    );
+    assert!(refuse_uncapped_host("notexample.com", Some(&allowed)).is_err());
+}
+
+#[test]
+fn matching_ignores_case_and_a_trailing_dot_but_not_the_host_it_names() {
+    let allowed = vec!["Example.COM".to_string()];
+    assert!(refuse_uncapped_host("example.com", Some(&allowed)).is_ok());
+    assert!(refuse_uncapped_host("EXAMPLE.com", Some(&allowed)).is_ok());
+    assert!(refuse_uncapped_host("example.com.", Some(&allowed)).is_ok());
+}
+
+#[test]
+fn a_malformed_entry_narrows_rather_than_widens() {
+    // Every one of these is a configuration that cannot be compared to a host. The
+    // safe direction is to allow nothing, not everything.
+    let allowed = vec![".".to_string(), String::new()];
+    assert!(refuse_uncapped_host("example.com", Some(&allowed)).is_err());
+    assert!(refuse_uncapped_host("", Some(&allowed)).is_err());
+    assert!(
+        refuse_uncapped_host("example.com", Some(&[String::new()])).is_err(),
+        "an empty entry must not act as a wildcard"
+    );
+}
+
+#[test]
+fn a_star_entry_is_how_an_unrestricted_ceiling_is_written_down() {
+    let allowed = vec!["*".to_string()];
+    assert!(refuse_uncapped_host("example.com", Some(&allowed)).is_ok());
+    assert!(refuse_uncapped_host("anything.at.all", Some(&allowed)).is_ok());
+}
+
+#[test]
+fn the_process_ceiling_round_trips_and_an_empty_list_clears_it() {
+    // The only test that touches the global, and it holds the same lock the other
+    // process-state tests hold. A test that pokes a shared global without taking
+    // that lock is how a suite becomes intermittently red.
+    let _guard = env_lock();
+    assert_eq!(allowed_domains(), None, "the suite must start unrestricted");
+
+    set_allowed_domains(Some(vec!["example.com".to_string()]));
+    assert_eq!(allowed_domains(), Some(vec!["example.com".to_string()]));
+
+    set_allowed_domains(Some(Vec::new()));
+    assert_eq!(allowed_domains(), None, "an empty list means unrestricted, not `allow nothing`");
+
+    set_allowed_domains(None);
+    assert_eq!(allowed_domains(), None);
+}
+
+#[test]
+fn the_configured_ceiling_stops_a_url_before_any_request_is_made() {
+    // The check sits inside `normalize_fetch_url_with`, which is the one entry the
+    // initial URL and every redirect hop go through, so this also covers a redirect
+    // that lands outside the ceiling: a refusing check that ran only on the first
+    // URL would leave the hop unguarded.
+    let _guard = env_lock();
+    set_allowed_domains(Some(vec!["example.com".to_string()]));
+    let refused = normalize_fetch_url_with("https://not-allowed.test/x", false);
+    let permitted = normalize_fetch_url_with("https://example.com/x", false);
+    set_allowed_domains(None);
+
+    let message = refused.expect_err("a host outside the ceiling must be refused");
+    assert!(message.contains("not-allowed.test"), "the refusal must name the host: {message}");
+    assert!(permitted.is_ok(), "a host inside the ceiling must pass: {permitted:?}");
 }
 
 #[test]

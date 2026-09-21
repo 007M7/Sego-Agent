@@ -50,12 +50,38 @@ pub struct RuntimePluginConfig {
     bundled_root: Option<String>,
 }
 
+/// Which hosts `WebFetch` may reach, when the user has narrowed it.
+///
+/// Empty means unrestricted, which is the behaviour this tool has always had; the
+/// policy is a ceiling a user opts into, not a default. Sego's own network policy
+/// for a tool it owns lives in Sego's own configuration - a consumer that wants to
+/// constrain an invocation it triggers can ask for a per-invocation override, but
+/// the capability must not depend on that conversation happening.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeWebFetchConfig {
+    allowed_domains: Vec<String>,
+}
+
+impl RuntimeWebFetchConfig {
+    #[must_use]
+    pub fn new(allowed_domains: Vec<String>) -> Self {
+        Self { allowed_domains }
+    }
+
+    /// The configured hosts. Empty means no restriction.
+    #[must_use]
+    pub fn allowed_domains(&self) -> &[String] {
+        &self.allowed_domains
+    }
+}
+
 /// Structured feature configuration consumed by runtime subsystems.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
     hooks: RuntimeHookConfig,
     plugins: RuntimePluginConfig,
     mcp: McpConfigCollection,
+    web_fetch: RuntimeWebFetchConfig,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
@@ -272,6 +298,7 @@ impl ConfigLoader {
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
+            web_fetch: parse_optional_web_fetch_config(&merged_value)?,
         };
 
         Ok(RuntimeConfig { merged, loaded_entries, feature_config })
@@ -355,6 +382,11 @@ impl RuntimeConfig {
 }
 
 impl RuntimeFeatureConfig {
+    #[must_use]
+    pub fn web_fetch(&self) -> &RuntimeWebFetchConfig {
+        &self.web_fetch
+    }
+
     #[must_use]
     pub fn with_hooks(mut self, hooks: RuntimeHookConfig) -> Self {
         self.hooks = hooks;
@@ -716,6 +748,19 @@ fn parse_permission_mode_label(
         "dontAsk" | "danger-full-access" => Ok(ResolvedPermissionMode::DangerFullAccess),
         other => Err(ConfigError::Parse(format!("{context}: unsupported permission mode {other}"))),
     }
+}
+
+fn parse_optional_web_fetch_config(root: &JsonValue) -> Result<RuntimeWebFetchConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeWebFetchConfig::default());
+    };
+    let Some(web_fetch_value) = object.get("webFetch") else {
+        return Ok(RuntimeWebFetchConfig::default());
+    };
+    let web_fetch = expect_object(web_fetch_value, "merged settings.webFetch")?;
+    let allowed = optional_string_array(web_fetch, "allowedDomains", "merged settings.webFetch")?
+        .unwrap_or_default();
+    Ok(RuntimeWebFetchConfig::new(allowed))
 }
 
 fn parse_optional_sandbox_config(root: &JsonValue) -> Result<SandboxConfig, ConfigError> {
