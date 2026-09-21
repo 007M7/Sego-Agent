@@ -356,7 +356,9 @@ fn write_credentials_root(path: &PathBuf, root: &Map<String, Value>) -> io::Resu
     let temp_path = path.with_extension("json.tmp");
     write_private_file(&temp_path, format!("{rendered}\n").as_bytes())?;
     fs::rename(temp_path, path)?;
-    restrict_file_permissions(path);
+    // The result is the platform declaration, not an error: on a platform that can
+    // only rely on directory ACLs there is nothing further for this path to do.
+    let _ = restrict_file_permissions(path);
     Ok(())
 }
 
@@ -387,15 +389,51 @@ pub(crate) fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> io::Re
     }
 }
 
-pub(crate) fn restrict_file_permissions(path: &std::path::Path) {
+/// How far this platform can restrict a private file to its owner.
+///
+/// Declared unconditionally, and taking the conservative value off Unix, for the
+/// reason `DEV-SEC-11` established for platform isolation: a capability that is
+/// only implied by the absence of a warning gets read as present. A caller here can
+/// ask, instead of having to know that one branch of `restrict_file_permissions` is
+/// `let _ = path;`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilePrivacy {
+    /// A restriction is applied when the file is created and re-applied to files
+    /// that already exist.
+    OwnerOnly,
+    /// This process applies no restriction; the file relies on the ACLs of the
+    /// directory that contains it. `std` exposes no DACL API and this workspace
+    /// forbids `unsafe`, so a native implementation is a decision, not an oversight.
+    DirectoryAclsOnly,
+}
+
+/// What [`restrict_file_permissions`] can actually do here.
+#[must_use]
+pub const fn file_privacy() -> FilePrivacy {
+    #[cfg(unix)]
+    {
+        FilePrivacy::OwnerOnly
+    }
+    #[cfg(not(unix))]
+    {
+        FilePrivacy::DirectoryAclsOnly
+    }
+}
+
+/// Restrict `path` to its owner, as far as this platform allows, and report which
+/// of the two it was. Callers that surface a capability to a user should report the
+/// returned value rather than assuming the restriction landed.
+pub(crate) fn restrict_file_permissions(path: &std::path::Path) -> FilePrivacy {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        FilePrivacy::OwnerOnly
     }
     #[cfg(not(unix))]
     {
         let _ = path;
+        FilePrivacy::DirectoryAclsOnly
     }
 }
 
@@ -497,10 +535,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-        generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
-        OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
+        clear_oauth_credentials, code_challenge_s256, credentials_path, file_privacy,
+        generate_pkce_pair, generate_state, load_oauth_credentials, loopback_redirect_uri,
+        parse_oauth_callback_query, parse_oauth_callback_request_target, restrict_file_permissions,
+        save_oauth_credentials, FilePrivacy, OAuthAuthorizationRequest, OAuthConfig,
+        OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -516,6 +555,37 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_env_lock()
+    }
+
+    #[test]
+    fn the_declared_file_privacy_matches_what_the_function_actually_does() {
+        // Two-sided on purpose: one assertion alone would pass on a platform where
+        // the declaration and the implementation had drifted apart in the same
+        // direction. This compares what the function reports against what the
+        // capability declaration claims, on whichever platform is running.
+        let root = std::env::temp_dir().join(format!("sego-file-privacy-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let path = root.join("probe");
+        std::fs::write(&path, b"probe").expect("write probe");
+
+        assert_eq!(
+            restrict_file_permissions(&path),
+            file_privacy(),
+            "the returned value and the capability declaration disagree"
+        );
+
+        // And the declaration is the platform's honest answer, not a hopeful one.
+        #[cfg(unix)]
+        assert_eq!(file_privacy(), FilePrivacy::OwnerOnly);
+        #[cfg(not(unix))]
+        assert_eq!(
+            file_privacy(),
+            FilePrivacy::DirectoryAclsOnly,
+            "`std` exposes no DACL API and this workspace forbids `unsafe`, so off Unix the \
+             honest declaration is that the file relies on its directory's ACLs"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn temp_config_home() -> std::path::PathBuf {
