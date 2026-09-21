@@ -50,6 +50,57 @@ pub struct RuntimePluginConfig {
     bundled_root: Option<String>,
 }
 
+/// The ceiling a caller declared for a review, if the configuration declares one.
+///
+/// `budget` in the artifact needs both halves - what was permitted and what was used -
+/// and the observed half alone is the reading the ADR rules out, which is why the field
+/// stayed unproduced. This is the missing half, and it is Sego's own setting rather
+/// than a per-invocation request, so a standalone user gets it too.
+// The `max_` prefix is the artifact's own vocabulary for these three fields, so
+// renaming them here would put the in-memory names out of step with the wire ones.
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeBudgetConfig {
+    max_provider_calls: Option<u64>,
+    max_fetches: Option<u64>,
+    max_input_tokens: Option<u64>,
+}
+
+impl RuntimeBudgetConfig {
+    #[must_use]
+    pub fn new(
+        max_provider_calls: Option<u64>,
+        max_fetches: Option<u64>,
+        max_input_tokens: Option<u64>,
+    ) -> Self {
+        Self { max_provider_calls, max_fetches, max_input_tokens }
+    }
+
+    #[must_use]
+    pub fn max_provider_calls(&self) -> Option<u64> {
+        self.max_provider_calls
+    }
+
+    #[must_use]
+    pub fn max_fetches(&self) -> Option<u64> {
+        self.max_fetches
+    }
+
+    #[must_use]
+    pub fn max_input_tokens(&self) -> Option<u64> {
+        self.max_input_tokens
+    }
+
+    /// Whether the configuration declared a ceiling on any dimension. A declaration
+    /// with no dimension is not a budget.
+    #[must_use]
+    pub fn declares_nothing(&self) -> bool {
+        self.max_provider_calls.is_none()
+            && self.max_fetches.is_none()
+            && self.max_input_tokens.is_none()
+    }
+}
+
 /// Which hosts `WebFetch` may reach, when the user has narrowed it.
 ///
 /// Empty means unrestricted, which is the behaviour this tool has always had; the
@@ -82,6 +133,7 @@ pub struct RuntimeFeatureConfig {
     plugins: RuntimePluginConfig,
     mcp: McpConfigCollection,
     web_fetch: RuntimeWebFetchConfig,
+    budget: RuntimeBudgetConfig,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
@@ -299,6 +351,7 @@ impl ConfigLoader {
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             web_fetch: parse_optional_web_fetch_config(&merged_value)?,
+            budget: parse_optional_budget_config(&merged_value)?,
         };
 
         Ok(RuntimeConfig { merged, loaded_entries, feature_config })
@@ -385,6 +438,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn web_fetch(&self) -> &RuntimeWebFetchConfig {
         &self.web_fetch
+    }
+
+    #[must_use]
+    pub fn budget(&self) -> &RuntimeBudgetConfig {
+        &self.budget
     }
 
     #[must_use]
@@ -750,6 +808,21 @@ fn parse_permission_mode_label(
     }
 }
 
+fn parse_optional_budget_config(root: &JsonValue) -> Result<RuntimeBudgetConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeBudgetConfig::default());
+    };
+    let Some(budget_value) = object.get("budget") else {
+        return Ok(RuntimeBudgetConfig::default());
+    };
+    let budget = expect_object(budget_value, "merged settings.budget")?;
+    Ok(RuntimeBudgetConfig::new(
+        optional_u64(budget, "maxProviderCalls", "merged settings.budget")?,
+        optional_u64(budget, "maxFetches", "merged settings.budget")?,
+        optional_u64(budget, "maxInputTokens", "merged settings.budget")?,
+    ))
+}
+
 fn parse_optional_web_fetch_config(root: &JsonValue) -> Result<RuntimeWebFetchConfig, ConfigError> {
     let Some(object) = root.as_object() else {
         return Ok(RuntimeWebFetchConfig::default());
@@ -1084,9 +1157,9 @@ fn push_unique(target: &mut Vec<String>, value: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        deep_merge_objects, parse_permission_mode_label, ConfigLoader, ConfigSource,
-        McpServerConfig, McpTransport, ResolvedPermissionMode, RuntimeHookConfig,
-        RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
+        deep_merge_objects, parse_optional_budget_config, parse_permission_mode_label,
+        ConfigLoader, ConfigSource, McpServerConfig, McpTransport, ResolvedPermissionMode,
+        RuntimeHookConfig, RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
     };
     use crate::json::JsonValue;
     use crate::sandbox::FilesystemIsolationMode;
@@ -1189,6 +1262,29 @@ mod tests {
         // Cleanup must never manufacture a failure: a leftover temp dir is untidy,
         // but a panic here reads as a broken test rather than a broken cleanup.
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_a_declared_review_budget() {
+        // The declaration is what makes `budget` producible at all: the object needs a
+        // ceiling and an observed usage, and without a ceiling the engine writes none.
+        let root = JsonValue::parse(r#"{"budget":{"maxInputTokens":500000,"maxProviderCalls":3}}"#)
+            .expect("json parses");
+        let budget = parse_optional_budget_config(&root).expect("parses");
+        assert_eq!(budget.max_input_tokens(), Some(500_000));
+        assert_eq!(budget.max_provider_calls(), Some(3));
+        assert_eq!(budget.max_fetches(), None);
+        assert!(!budget.declares_nothing());
+
+        // No section, and a section with no dimension, both mean "no ceiling declared"
+        // rather than "a ceiling of zero".
+        let absent =
+            parse_optional_budget_config(&JsonValue::parse("{}").expect("json")).expect("parses");
+        assert!(absent.declares_nothing());
+        let empty =
+            parse_optional_budget_config(&JsonValue::parse(r#"{"budget":{}}"#).expect("json"))
+                .expect("parses");
+        assert!(empty.declares_nothing());
     }
 
     #[test]

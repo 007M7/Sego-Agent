@@ -253,6 +253,28 @@ pub fn run_sidecar_review_pipeline() -> i32 {
     }
 }
 
+/// The review ceiling this machine's configuration declares, or nothing.
+///
+/// Read from Sego's own configuration rather than from the request: the ceiling is
+/// something the operator sets, and a consumer that wants to cap an invocation it
+/// triggers can ask for that separately. An unreadable configuration is treated as
+/// "no ceiling declared" rather than failing the review - the artifact then carries no
+/// `budget` object at all, which is exactly what it did before this existed.
+fn declared_budget_for(cwd: &std::path::Path) -> ReviewBudgetDeclaration {
+    let Ok(config) = crate::ConfigLoader::default_for(cwd).load() else {
+        return ReviewBudgetDeclaration::default();
+    };
+    let budget = config.feature_config().budget();
+    if budget.declares_nothing() {
+        return ReviewBudgetDeclaration::default();
+    }
+    ReviewBudgetDeclaration {
+        max_provider_calls: budget.max_provider_calls(),
+        max_fetches: budget.max_fetches(),
+        max_input_tokens: budget.max_input_tokens(),
+    }
+}
+
 /// Run one review turn and turn its output into a report, keeping what the turn
 /// observed about itself.
 ///
@@ -383,9 +405,11 @@ fn execute_review(
     let mut cli = LiveCli::new(model, true, None, PermissionMode::ReadOnly)?.with_machine_output();
 
     let context = ReviewContext::new(target);
+    let declared_budget = declared_budget_for(&cwd);
     let (report, observation) = run_review_turn(&mut cli, &context)?;
-    // No caller declares a ceiling yet, so the artifact carries no `budget` object at
-    // all - see `build_budget` for why half of one is not written instead.
+    // `build_budget` writes nothing when the configuration declares no ceiling, which
+    // is the deliberate behaviour: an observed usage with no declared ceiling reads as
+    // "was it limited?" with no answer, and half a budget is not written instead.
     let artifact = persist_review_artifact_observed(
         &cwd,
         &context.target,
@@ -397,7 +421,7 @@ fn execute_review(
             invocation_id: invocation_id.clone(),
         },
         &observation,
-        &ReviewBudgetDeclaration::default(),
+        &declared_budget,
     )?;
 
     Ok(SidecarReviewResponse {
