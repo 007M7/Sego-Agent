@@ -244,6 +244,12 @@ pub fn run_sidecar_review_pipeline() -> i32 {
                     Some(io_error) if io_error.kind() == std::io::ErrorKind::AlreadyExists => {
                         ("artifact_id_conflict", io_error.to_string())
                     }
+                    // A budget stop gets its own stable code: a consumer has to tell
+                    // "it stopped because it reached its declared ceiling" from "it
+                    // failed", and the message alone is not machine-readable.
+                    _ if error.to_string().starts_with(runtime::BUDGET_STOP_PREFIX) => {
+                        ("budget_exceeded", error.to_string())
+                    }
                     _ => ("review_failed", error.to_string()),
                 },
             };

@@ -162,6 +162,14 @@ pub struct ConversationRuntime<C, T> {
     session_tracer: Option<SessionTracer>,
 }
 
+/// Prefix of the error a run returns when a declared budget stopped it.
+///
+/// A consumer has to tell "stopped because it reached its own declared ceiling" from
+/// "failed", and a mapper that reads only structured output cannot do that from free
+/// text - it classifies unrecognised text as untrusted output. Naming the prefix once,
+/// here, is what keeps both sides from drifting apart over a reworded message.
+pub const BUDGET_STOP_PREFIX: &str = "review stopped: the declared budget";
+
 /// The run ceiling an operator declared, as the conversation loop sees it.
 ///
 /// The `max_` prefix is the artifact's own vocabulary for these dimensions, so renaming
@@ -184,17 +192,17 @@ impl DeclaredBudget {
     fn exceeded(&self, provider_calls: u64, input_tokens: u64, fetches: u64) -> Option<String> {
         if let Some(limit) = self.max_provider_calls {
             if provider_calls >= limit {
-                return Some(format!("the declared budget of {limit} provider calls was reached"));
+                return Some(format!("of {limit} provider calls was reached"));
             }
         }
         if let Some(limit) = self.max_input_tokens {
             if input_tokens >= limit {
-                return Some(format!("the declared budget of {limit} input tokens was reached"));
+                return Some(format!("of {limit} input tokens was reached"));
             }
         }
         if let Some(limit) = self.max_fetches {
             if fetches >= limit {
-                return Some(format!("the declared budget of {limit} web fetches was reached"));
+                return Some(format!("of {limit} web fetches was reached"));
             }
         }
         None
@@ -441,7 +449,7 @@ where
                 u64::from(usage.input_tokens),
                 self.fetches_so_far(),
             ) {
-                let error = RuntimeError::new(format!("review stopped: {reason}"));
+                let error = RuntimeError::new(format!("{BUDGET_STOP_PREFIX} {reason}"));
                 self.record_turn_failed(iterations, &error);
                 return Err(error);
             }
