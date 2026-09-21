@@ -3106,6 +3106,10 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
                     "sandbox_supported": sandbox.supported,
                     "sandbox_active": sandbox.active,
                     "in_container": sandbox.in_container,
+                    "credential_file_privacy": match runtime::file_privacy() {
+                        runtime::FilePrivacy::OwnerOnly => "owner_only",
+                        runtime::FilePrivacy::DirectoryAclsOnly => "directory_acls_only",
+                    },
                     "config_files_loaded": runtime_config.loaded_entries().len(),
                     "sego_version": VERSION,
                     "model": default_model(),
@@ -3124,6 +3128,17 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
             println!("    Supported:      {}", sandbox.supported);
             println!("    Active:         {}", sandbox.active);
             println!("    In container:   {}", sandbox.in_container);
+            println!();
+            println!("  File privacy:");
+            println!(
+                "    Credentials:    {}",
+                match runtime::file_privacy() {
+                    runtime::FilePrivacy::OwnerOnly =>
+                        "owner-only; the mode is applied when the file is created",
+                    runtime::FilePrivacy::DirectoryAclsOnly =>
+                        "directory ACLs only; this process applies no restriction",
+                }
+            );
             println!();
             println!("  Config files:     {} loaded", runtime_config.loaded_entries().len());
             if let Ok(status) = status_context(None) {

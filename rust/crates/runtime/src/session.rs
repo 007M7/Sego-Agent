@@ -386,7 +386,7 @@ impl Session {
         writeln!(file, "{}", message_record(message).render())?;
         // Heal a transcript created before this was owner-only, rather than
         // leaving it readable for the rest of its life.
-        crate::oauth::restrict_file_permissions(path);
+        let _ = crate::oauth::restrict_file_permissions(path);
         Ok(())
     }
 
@@ -919,7 +919,7 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), SessionError> {
     // the default mode would leave it readable by every other account.
     crate::oauth::write_private_file(&temp_path, contents.as_bytes())?;
     fs::rename(&temp_path, path)?;
-    crate::oauth::restrict_file_permissions(path);
+    let _ = crate::oauth::restrict_file_permissions(path);
     Ok(())
 }
 
