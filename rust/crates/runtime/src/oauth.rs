@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -407,17 +411,69 @@ pub enum FilePrivacy {
     DirectoryAclsOnly,
 }
 
-/// What [`restrict_file_permissions`] can actually do here.
+/// Whether this platform can restrict a file to its owner, probed rather than assumed.
+///
+/// On Windows the restriction is applied by `icacls`, so the honest answer depends on
+/// whether that tool is actually present. Assuming it is would restore exactly the defect
+/// the capability declaration was added to remove: a report of "owner-only" on a machine
+/// where nothing was applied. The answer is cached - it cannot change within a process.
+#[cfg(windows)]
+fn acls_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("icacls")
+            .arg("/?")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+    })
+}
+
+/// What this process can actually do here.
 #[must_use]
-pub const fn file_privacy() -> FilePrivacy {
+pub fn file_privacy() -> FilePrivacy {
     #[cfg(unix)]
     {
         FilePrivacy::OwnerOnly
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if acls_available() {
+            FilePrivacy::OwnerOnly
+        } else {
+            FilePrivacy::DirectoryAclsOnly
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         FilePrivacy::DirectoryAclsOnly
     }
+}
+
+/// Grant the current user and nobody else, using the tool Windows provides for it.
+///
+/// `/inheritance:r` drops inherited entries so a permissive parent directory cannot hand
+/// the file to anyone else, and `/grant:r` replaces rather than adds. The exit status is
+/// the only signal, so it is the signal used.
+#[cfg(windows)]
+fn restrict_with_icacls(path: &std::path::Path) -> bool {
+    let Ok(user) = std::env::var("USERNAME") else {
+        return false;
+    };
+    if user.trim().is_empty() {
+        return false;
+    }
+    Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .args(["/grant:r", &format!("{user}:F")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Restrict `path` to its owner, as far as this platform allows, and report which
@@ -430,7 +486,15 @@ pub(crate) fn restrict_file_permissions(path: &std::path::Path) -> FilePrivacy {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
         FilePrivacy::OwnerOnly
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if acls_available() && restrict_with_icacls(path) {
+            FilePrivacy::OwnerOnly
+        } else {
+            FilePrivacy::DirectoryAclsOnly
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         FilePrivacy::DirectoryAclsOnly
@@ -574,15 +638,20 @@ mod tests {
             "the returned value and the capability declaration disagree"
         );
 
-        // And the declaration is the platform's honest answer, not a hopeful one.
-        #[cfg(unix)]
-        assert_eq!(file_privacy(), FilePrivacy::OwnerOnly);
-        #[cfg(not(unix))]
+        // And the declaration reflects a probe, not a hope. Both supported platforms have
+        // the tool this needs, so the honest answer there is owner-only; a platform without
+        // it must answer conservatively instead of claiming a restriction it cannot apply.
+        #[cfg(any(unix, windows))]
+        assert_eq!(
+            file_privacy(),
+            FilePrivacy::OwnerOnly,
+            "the restriction is available here, so the declaration must not understate it"
+        );
+        #[cfg(not(any(unix, windows)))]
         assert_eq!(
             file_privacy(),
             FilePrivacy::DirectoryAclsOnly,
-            "`std` exposes no DACL API and this workspace forbids `unsafe`, so off Unix the \
-             honest declaration is that the file relies on its directory's ACLs"
+            "this platform cannot restrict the file, so the declaration must say so"
         );
 
         let _ = std::fs::remove_dir_all(&root);

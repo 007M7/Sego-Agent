@@ -3168,10 +3168,13 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
             println!(
                 "    Credentials:    {}",
                 match runtime::file_privacy() {
+                    // Platform-neutral on purpose: the mechanism differs (a creation mode on
+                    // Unix, an ACL grant on Windows) and naming only one of them made the
+                    // line wrong on the other.
                     runtime::FilePrivacy::OwnerOnly =>
-                        "owner-only; the mode is applied when the file is created",
+                        "owner-only; this process restricts the file to the current user",
                     runtime::FilePrivacy::DirectoryAclsOnly =>
-                        "directory ACLs only; this process applies no restriction",
+                        "directory ACLs only; this process cannot restrict the file itself",
                 }
             );
             println!();
