@@ -175,6 +175,27 @@ Run `sego --help` for usage."
     }
 }
 
+/// Apply Sego's own `WebFetch` ceiling, once per process.
+///
+/// This is a Sego-local policy for a tool Sego owns, so it is read from Sego's own
+/// configuration and needs nothing from any other project. `sego sidecar review`
+/// serves exactly one invocation per process, so "once per process" is also "once
+/// per invocation" on the governed path.
+fn apply_web_fetch_policy() {
+    let Ok(cwd) = env::current_dir() else {
+        return;
+    };
+    let loader = ConfigLoader::default_for(&cwd);
+    let allowed = match loader.load() {
+        Ok(config) => config.feature_config().web_fetch().allowed_domains().to_vec(),
+        // An unreadable configuration leaves the tool unrestricted rather than
+        // silently narrowed to nothing: a broken config must not turn into a
+        // working directory that cannot fetch anything.
+        Err(_) => return,
+    };
+    tools::set_allowed_domains(if allowed.is_empty() { None } else { Some(allowed) });
+}
+
 fn is_turn_cancelled_message(message: &str) -> bool {
     message.contains(TURN_CANCELLED_MESSAGE)
 }
@@ -200,6 +221,7 @@ fn maybe_pause_after_error() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let action = parse_args(&args)?;
+    apply_web_fetch_policy();
 
     // A2 启动提示层：只对会创建/恢复可持久化 session 且可能执行模型/工具的动作触发。
     // 只读 recovery JSON，不写、不扫描、不调模型（Codex 审查两层架构第 1 层）。
@@ -3106,6 +3128,11 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
                     "sandbox_supported": sandbox.supported,
                     "sandbox_active": sandbox.active,
                     "in_container": sandbox.in_container,
+                    // Read from the tool that enforces it rather than from the file,
+                    // so this reports what the process will actually do. Reporting the
+                    // configured value instead would keep saying the right thing even
+                    // if nothing ever applied it.
+                    "web_fetch_allowed_domains": tools::allowed_domains(),
                     "credential_file_privacy": match runtime::file_privacy() {
                         runtime::FilePrivacy::OwnerOnly => "owner_only",
                         runtime::FilePrivacy::DirectoryAclsOnly => "directory_acls_only",
@@ -3128,6 +3155,14 @@ fn print_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error
             println!("    Supported:      {}", sandbox.supported);
             println!("    Active:         {}", sandbox.active);
             println!("    In container:   {}", sandbox.in_container);
+            println!();
+            println!(
+                "  WebFetch ceiling: {}",
+                match tools::allowed_domains() {
+                    Some(allowed) => allowed.join(", "),
+                    None => "unrestricted (webFetch.allowedDomains is not set)".to_string(),
+                }
+            );
             println!();
             println!("  File privacy:");
             println!(

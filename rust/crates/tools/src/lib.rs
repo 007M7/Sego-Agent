@@ -4437,12 +4437,17 @@ mod web_fetch;
 // from `crate::registries`.
 
 use web_fetch::{run_web_fetch, WebFetchInput};
+// The WebFetch ceiling is set once per process by the CLI from Sego's own
+// configuration, so this one name is a genuine library consumer rather than a
+// re-export kept alive for tests.
+pub use web_fetch::{allowed_domains, set_allowed_domains};
 // The rest of the WebFetch surface is exercised directly by the tests, which
 // reach it through `super::`; naming it here only under `cfg(test)` keeps the
 // re-export honest instead of carrying names the library itself never uses.
 #[cfg(test)]
 use web_fetch::{
-    execute_web_fetch_with, normalize_fetch_url_with, UNTRUSTED_FETCH_NOTICE, UNTRUSTED_FETCH_TRUST,
+    execute_web_fetch_with, host_is_allowed, normalize_fetch_url_with, refuse_uncapped_host,
+    UNTRUSTED_FETCH_NOTICE, UNTRUSTED_FETCH_TRUST,
 };
 
 #[cfg(test)]
