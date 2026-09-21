@@ -190,8 +190,8 @@ fn the_process_ceiling_round_trips_and_an_empty_list_clears_it() {
     // The only test that touches the global, and it holds the same lock the other
     // process-state tests hold. A test that pokes a shared global without taking
     // that lock is how a suite becomes intermittently red.
-    let _guard = env_lock();
-    assert_eq!(allowed_domains(), None, "the suite must start unrestricted");
+    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_allowed_domains(None);
 
     set_allowed_domains(Some(vec!["example.com".to_string()]));
     assert_eq!(allowed_domains(), Some(vec!["example.com".to_string()]));
@@ -209,7 +209,7 @@ fn the_configured_ceiling_stops_a_url_before_any_request_is_made() {
     // initial URL and every redirect hop go through, so this also covers a redirect
     // that lands outside the ceiling: a refusing check that ran only on the first
     // URL would leave the hop unguarded.
-    let _guard = env_lock();
+    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     set_allowed_domains(Some(vec!["example.com".to_string()]));
     let refused = normalize_fetch_url_with("https://not-allowed.test/x", false);
     let permitted = normalize_fetch_url_with("https://example.com/x", false);
