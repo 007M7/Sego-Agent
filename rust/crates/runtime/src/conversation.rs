@@ -149,6 +149,10 @@ pub struct ConversationRuntime<C, T> {
     permission_policy: PermissionPolicy,
     system_prompt: Vec<String>,
     max_iterations: usize,
+    /// The operator's declared ceiling for this run, when the configuration declares
+    /// one. Reaching a dimension stops the turn with a message naming it, rather than
+    /// recording the overshoot and carrying on.
+    budget: DeclaredBudget,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
     auto_compaction_input_tokens_threshold: u32,
@@ -156,6 +160,55 @@ pub struct ConversationRuntime<C, T> {
     turn_abort_signal: TurnAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
+}
+
+/// The run ceiling an operator declared, as the conversation loop sees it.
+///
+/// The `max_` prefix is the artifact's own vocabulary for these dimensions, so renaming
+/// them here would put the in-memory names out of step with the wire ones.
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeclaredBudget {
+    pub max_provider_calls: Option<u64>,
+    pub max_input_tokens: Option<u64>,
+    pub max_fetches: Option<u64>,
+}
+
+impl DeclaredBudget {
+    /// The first dimension this run has reached, named so the stop can say why.
+    ///
+    /// `>=` rather than `>`: the check runs *before* the next request, so a ceiling of
+    /// N has to stop at "N already made" to permit exactly N calls. Comparing with `>`
+    /// permitted N+1.
+    #[must_use]
+    fn exceeded(&self, provider_calls: u64, input_tokens: u64, fetches: u64) -> Option<String> {
+        if let Some(limit) = self.max_provider_calls {
+            if provider_calls >= limit {
+                return Some(format!("the declared budget of {limit} provider calls was reached"));
+            }
+        }
+        if let Some(limit) = self.max_input_tokens {
+            if input_tokens >= limit {
+                return Some(format!("the declared budget of {limit} input tokens was reached"));
+            }
+        }
+        if let Some(limit) = self.max_fetches {
+            if fetches >= limit {
+                return Some(format!("the declared budget of {limit} web fetches was reached"));
+            }
+        }
+        None
+    }
+}
+
+/// The ceiling the configuration declared, as the loop sees it.
+fn declared_budget(feature_config: &RuntimeFeatureConfig) -> DeclaredBudget {
+    let budget = feature_config.budget();
+    DeclaredBudget {
+        max_provider_calls: budget.max_provider_calls(),
+        max_input_tokens: budget.max_input_tokens(),
+        max_fetches: budget.max_fetches(),
+    }
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -199,6 +252,7 @@ where
             permission_policy,
             system_prompt,
             max_iterations: usize::MAX,
+            budget: declared_budget(feature_config),
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(feature_config),
             auto_compaction_input_tokens_threshold: auto_compaction_threshold_from_env(),
@@ -207,6 +261,32 @@ where
             hook_progress_reporter: None,
             session_tracer: None,
         }
+    }
+
+    /// Web fetches this session has performed, counted from the tool results the
+    /// conversation actually recorded. Counts a failed fetch too: it may still have
+    /// reached the host, and under-counting is the direction that lets a declared
+    /// fetch ceiling be exceeded unnoticed.
+    #[must_use]
+    fn fetches_so_far(&self) -> u64 {
+        self.session
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .filter(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { tool_name, .. }
+                        if tool_name == crate::code_review::WEB_FETCH_TOOL_NAME
+                )
+            })
+            .count() as u64
+    }
+
+    #[must_use]
+    pub fn with_budget(mut self, budget: DeclaredBudget) -> Self {
+        self.budget = budget;
+        self
     }
 
     #[must_use]
@@ -348,6 +428,20 @@ where
                 let error = RuntimeError::new(
                     "conversation loop exceeded the maximum number of iterations",
                 );
+                self.record_turn_failed(iterations, &error);
+                return Err(error);
+            }
+
+            // The declared ceiling stops the run. Checking it before the request is
+            // what makes it a ceiling rather than a note: the previous behaviour let a
+            // review exceed a declared limit and finish anyway.
+            let usage = self.usage_tracker.cumulative_usage();
+            if let Some(reason) = self.budget.exceeded(
+                iterations.saturating_sub(1) as u64,
+                u64::from(usage.input_tokens),
+                self.fetches_so_far(),
+            ) {
+                let error = RuntimeError::new(format!("review stopped: {reason}"));
                 self.record_turn_failed(iterations, &error);
                 return Err(error);
             }
@@ -833,8 +927,8 @@ impl ToolExecutor for StaticToolExecutor {
 mod tests {
     use super::{
         build_assistant_message, parse_auto_compaction_threshold, ApiClient, ApiRequest,
-        AssistantEvent, AutoCompactionEvent, ConversationRuntime, PromptCacheEvent, RuntimeError,
-        StaticToolExecutor, ToolExecutor, TurnAbortSignal,
+        AssistantEvent, AutoCompactionEvent, ConversationRuntime, DeclaredBudget, PromptCacheEvent,
+        RuntimeError, StaticToolExecutor, ToolExecutor, TurnAbortSignal,
         DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
     };
     use crate::compact::CompactionConfig;
@@ -1626,6 +1720,60 @@ mod tests {
         assert!(error
             .to_string()
             .contains("conversation loop exceeded the maximum number of iterations"));
+    }
+
+    #[test]
+    fn run_turn_stops_at_the_declared_provider_call_budget() {
+        // The client answers with a tool use every time, so without a ceiling the loop
+        // would keep going. Counting the calls is what makes this test discriminate:
+        // it fails both when nothing stops the run and when the ceiling is off by one.
+        struct CountingApi {
+            calls: std::rc::Rc<std::cell::Cell<usize>>,
+        }
+
+        impl ApiClient for CountingApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                self.calls.set(self.calls.get() + 1);
+                Ok(vec![
+                    AssistantEvent::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "echo".to_string(),
+                        input: "payload".to_string(),
+                    },
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            CountingApi { calls: calls.clone() },
+            StaticToolExecutor::new().register("echo", |input| Ok(input.to_string())),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        )
+        .with_budget(DeclaredBudget {
+            max_provider_calls: Some(2),
+            max_input_tokens: None,
+            max_fetches: None,
+        });
+
+        let error =
+            runtime.run_turn("loop", None).expect_err("the declared ceiling should stop the run");
+
+        assert!(
+            error.to_string().contains("the declared budget of 2 provider calls was reached"),
+            "the stop must name the ceiling that stopped it: {error}"
+        );
+        assert_eq!(
+            calls.get(),
+            2,
+            "a ceiling of 2 must permit exactly 2 requests, not fewer and not one more"
+        );
     }
 
     #[test]
