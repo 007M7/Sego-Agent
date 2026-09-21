@@ -1,5 +1,4 @@
 mod command_runner;
-mod hooks;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -12,8 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use command_runner::{is_literal_command, plugin_command};
-
-pub use hooks::{HookEvent, HookRunResult, HookRunner};
 
 const EXTERNAL_MARKETPLACE: &str = "external";
 const BUILTIN_MARKETPLACE: &str = "builtin";
@@ -2047,6 +2044,30 @@ fn ensure_object<'a>(root: &'a mut Map<String, Value>, key: &str) -> &'a mut Map
 mod tests {
     use super::*;
 
+    /// Assert that a hook list resolves to exactly these files.
+    ///
+    /// Both sides are canonicalized before comparing: the value keeps the `./`
+    /// segment the manifest was written with, and on Windows canonicalizing also
+    /// brings `%TEMP%` and the joined path to the same spelling. What is being
+    /// pinned is "this points at the plugin's own file", not how it is spelled -
+    /// which is the part that decides whether the hook runs at all.
+    fn assert_resolved_to(actual: &[String], expected: &[&Path]) {
+        assert_eq!(actual.len(), expected.len(), "hook count differs: {actual:?} vs {expected:?}");
+        for (actual, expected) in actual.iter().zip(expected) {
+            let actual = Path::new(actual);
+            assert!(
+                actual.is_absolute(),
+                "a resolved hook entry must be absolute, got {}",
+                actual.display()
+            );
+            assert_eq!(
+                actual.canonicalize().expect("the resolved entry exists"),
+                expected.canonicalize().expect("the declared file exists"),
+                "the resolved entry is not the file the manifest named"
+            );
+        }
+    }
+
     fn temp_dir(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2981,6 +3002,77 @@ mod tests {
 
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(bundled_root);
+    }
+
+    #[test]
+    fn a_plugin_hook_entry_is_resolved_against_the_plugins_own_root() {
+        // The hook runner executes the command string it is handed, from the
+        // process working directory, and has no idea which plugin declared it. So
+        // a manifest entry like `./hooks/pre.sh` has to become an absolute path at
+        // load time. Unresolved, it would name a file relative to wherever Sego
+        // was started - normally nothing at all, and on an unlucky directory
+        // somebody else's script.
+        let root = temp_dir("hook-root-resolution");
+        let plugin_root = root.join("plugin");
+        write_external_plugin(&plugin_root, "hook-rooted", "1.0.0");
+
+        let definition = load_plugin_definition(
+            &plugin_root,
+            PluginKind::External,
+            "test-source".to_string(),
+            EXTERNAL_MARKETPLACE,
+        )
+        .expect("the plugin loads");
+
+        let declared_pre = plugin_root.join("hooks").join("pre.sh");
+        assert_resolved_to(&definition.hooks().pre_tool_use, &[&declared_pre]);
+        assert_resolved_to(
+            &definition.hooks().post_tool_use,
+            &[&plugin_root.join("hooks").join("post.sh")],
+        );
+    }
+
+    #[test]
+    fn aggregated_hooks_hand_over_absolute_commands_and_skip_disabled_plugins() {
+        // What this aggregation returns is what the live hook runner is given
+        // verbatim, so an absolute command here is the difference between the
+        // plugin's hook running and nothing running.
+        let root = temp_dir("aggregate-hooks");
+        let enabled_root = root.join("enabled");
+        let off_root = root.join("off");
+        write_external_plugin(&enabled_root, "enabled-one", "1.0.0");
+        write_external_plugin(&off_root, "disabled-one", "1.0.0");
+
+        let registry = PluginRegistry::new(vec![
+            RegisteredPlugin::new(
+                load_plugin_definition(
+                    &enabled_root,
+                    PluginKind::External,
+                    "test-source".to_string(),
+                    EXTERNAL_MARKETPLACE,
+                )
+                .expect("the enabled plugin loads"),
+                true,
+            ),
+            RegisteredPlugin::new(
+                load_plugin_definition(
+                    &off_root,
+                    PluginKind::External,
+                    "test-source".to_string(),
+                    EXTERNAL_MARKETPLACE,
+                )
+                .expect("the disabled plugin loads"),
+                false,
+            ),
+        ]);
+
+        let hooks = registry.aggregated_hooks().expect("aggregation succeeds");
+        // Compare against the enabled plugin's own files exactly. A "does not
+        // mention the disabled plugin" assertion would also pass if the
+        // aggregation had returned nothing at all.
+        assert_resolved_to(&hooks.pre_tool_use, &[&enabled_root.join("hooks").join("pre.sh")]);
+        assert_resolved_to(&hooks.post_tool_use, &[&enabled_root.join("hooks").join("post.sh")]);
+        assert!(hooks.post_tool_use_failure.is_empty());
     }
 
     #[test]
