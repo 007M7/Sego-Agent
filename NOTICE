@@ -1,0 +1,47 @@
+Sego
+Copyright (c) 2026 Sego contributors
+
+This product includes software developed as part of the claw-code project.
+
+--------------------------------------------------------------------------------
+Upstream attribution
+--------------------------------------------------------------------------------
+
+Parts of this repository derive from claw-code, which is distributed under the
+MIT licence:
+
+    Copyright (c) 2026 claw contributors
+
+The original copyright notice is retained in full in the LICENSE file. The MIT
+licence permits use, modification and redistribution provided that the copyright
+notice and permission notice accompany substantial portions of the software; that
+is why LICENSE carries both the original and the current copyright line rather
+than either one alone.
+
+The Rust workspace under `rust/` is a reimplementation and is the primary, maintained
+implementation; see PARITY.md for what the earlier parity material was for and
+what its current status is.
+
+--------------------------------------------------------------------------------
+What is deliberately not in this repository
+--------------------------------------------------------------------------------
+
+An archived TypeScript snapshot of the upstream code was used, at an earlier stage,
+as a read-only reference for parity comparison. It is not distributed here, was
+never committed to this repository, and is git-ignored. See PARITY.md and
+docs/LEGACY_SOURCE_BOUNDARY.md.
+
+The Python material under `src/` and `tests/` is parity bookkeeping. It is not the
+supported implementation, is not built, and is not covered by CI.
+
+--------------------------------------------------------------------------------
+Third-party dependencies
+--------------------------------------------------------------------------------
+
+Sego links against third-party crates from crates.io. Their licences are checked in
+CI by `cargo deny check` against the allowlist and source policy in
+`rust/deny.toml`; a crate whose licence is not on that allowlist fails the build
+rather than being vendored silently.
+
+This file records attribution for the source this project is derived from. It is
+not a substitute for the dependency licence inventory that `cargo deny` maintains.

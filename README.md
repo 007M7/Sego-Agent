@@ -339,6 +339,22 @@ See [AGENTS.md](AGENTS.md) for the contribution flow (fork → topic branch → 
 - Security: follow [SECURITY.md](SECURITY.md) — do not file publicly
 - Free / private review service: see [docs/LAUNCH.md](docs/LAUNCH.md)
 
+## Provenance and acknowledgements
+
+Sego includes software developed as part of the claw-code project (MIT). The
+original copyright notice is retained in [LICENSE](LICENSE) alongside the current
+one; [NOTICE](NOTICE) records what derives from where, and what is deliberately not
+distributed here.
+
+The Rust workspace is the primary implementation. An archived TypeScript snapshot of
+the upstream code was used at an earlier stage as a read-only parity reference: it is
+not in this repository, was never committed, and is git-ignored. [PARITY.md](PARITY.md)
+describes the parity material and its status;
+[docs/LEGACY_SOURCE_BOUNDARY.md](docs/LEGACY_SOURCE_BOUNDARY.md) states the boundary.
+
+Third-party dependency licences are enforced in CI by `cargo deny check` against
+[`rust/deny.toml`](rust/deny.toml).
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Copyright (c) 2026 claw contributors and Sego contributors.
