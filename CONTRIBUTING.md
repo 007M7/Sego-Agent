@@ -58,6 +58,34 @@ The runtime is organized into focused modules:
 - **Documentation:** Improving docs is always welcome
 - **Tool implementations:** See `tools/src/lib.rs` for the tool registry
 
+## Contributor licence agreement (CLA)
+
+Outside contributions need a signed CLA before they can merge. It is a one-time,
+per-account action, recorded automatically by
+[`.github/workflows/cla.yml`](.github/workflows/cla.yml):
+
+1. Open your pull request. The `CLA` check fails once and posts a comment linking
+   [`CLA.md`](CLA.md).
+2. Read it, then comment exactly this sentence:
+
+   ```
+   I have read the CLA Document and I hereby sign the CLA
+   ```
+
+3. The workflow records the signature on the `cla-signatures` branch and the check
+   turns green. You do not repeat this for later pull requests.
+
+The maintainer (`@007M7`) and dependency bots are on the allowlist and do not sign.
+
+**Maintainer setup (once per repository).** The workflow enforces nothing until
+both of these exist. It fails rather than silently skipping, so the gap stays
+visible instead of looking enforced:
+
+- a branch named `cla-signatures`, holding only `signatures/version1/cla.json`;
+- a repository secret `CLA_PERSONAL_ACCESS_TOKEN` — a fine-grained token with
+  `contents: write` on this repository. The default `GITHUB_TOKEN` cannot push to
+  another branch from a `pull_request_target` run.
+
 ## Questions?
 
 Open an issue or start a discussion.
